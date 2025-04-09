@@ -1,0 +1,82 @@
+[
+    {
+        "detected_patterns": [
+            "vmirror"
+        ],
+        "matched_operations": [
+            "vmirror"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "hmirror"
+        ],
+        "matched_operations": [
+            "hmirror"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "dmirror"
+        ],
+        "matched_operations": [
+            "dmirror"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "rot180"
+        ],
+        "matched_operations": [
+            "rot180"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "upscale"
+        ],
+        "matched_operations": [
+            "upscale"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "hconcat"
+        ],
+        "matched_operations": [
+            "hconcat"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "replace"
+        ],
+        "matched_operations": [
+            "replace"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "crop"
+        ],
+        "matched_operations": [
+            "crop"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "switch"
+        ],
+        "matched_operations": [
+            "switch"
+        ]
+    },
+    {
+        "detected_patterns": [
+            "rot270"
+        ],
+        "matched_operations": [
+            "rot270"
+        ]
+    }
+]

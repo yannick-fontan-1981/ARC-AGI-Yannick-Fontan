@@ -1,0 +1,701 @@
+{
+    "3c9b0459.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": true,
+            "all_outputs_same_size": true,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot180"
+                        ],
+                        "matched_operations": [
+                            "rot180"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot180"
+                        ],
+                        "matched_operations": [
+                            "rot180"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot180"
+                        ],
+                        "matched_operations": [
+                            "rot180"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot180"
+                        ],
+                        "matched_operations": [
+                            "rot180"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "6150a2bd.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": true,
+            "all_outputs_same_size": true,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot180"
+                        ],
+                        "matched_operations": [
+                            "rot180"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot180"
+                        ],
+                        "matched_operations": [
+                            "rot180"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "67a3c6ac.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "vmirror"
+                        ],
+                        "matched_operations": [
+                            "vmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "vmirror"
+                        ],
+                        "matched_operations": [
+                            "vmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "vmirror"
+                        ],
+                        "matched_operations": [
+                            "vmirror"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "68b16354.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "hmirror"
+                        ],
+                        "matched_operations": [
+                            "hmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "hmirror"
+                        ],
+                        "matched_operations": [
+                            "hmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "hmirror"
+                        ],
+                        "matched_operations": [
+                            "hmirror"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "74dd1130.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": true,
+            "all_outputs_same_size": true,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "9172f3a0.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": true,
+            "all_outputs_same_size": true,
+            "inputs_outputs_equal": false,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "upscale"
+                        ],
+                        "matched_operations": [
+                            "upscale"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "upscale"
+                        ],
+                        "matched_operations": [
+                            "upscale"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "9dfd6313.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "dmirror"
+                        ],
+                        "matched_operations": [
+                            "dmirror"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "a416b8f3.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": false,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "hconcat"
+                        ],
+                        "matched_operations": [
+                            "hconcat"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "hconcat"
+                        ],
+                        "matched_operations": [
+                            "hconcat"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "hconcat"
+                        ],
+                        "matched_operations": [
+                            "hconcat"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "b1948b0a.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "replace"
+                        ],
+                        "matched_operations": [
+                            "replace"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "replace"
+                        ],
+                        "matched_operations": [
+                            "replace"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "replace"
+                        ],
+                        "matched_operations": [
+                            "replace"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "c59eb873.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": false,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "upscale"
+                        ],
+                        "matched_operations": [
+                            "upscale"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "upscale"
+                        ],
+                        "matched_operations": [
+                            "upscale"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "upscale"
+                        ],
+                        "matched_operations": [
+                            "upscale"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "c8f0f002.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "replace"
+                        ],
+                        "matched_operations": [
+                            "replace"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "replace"
+                        ],
+                        "matched_operations": [
+                            "replace"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "replace"
+                        ],
+                        "matched_operations": [
+                            "replace"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "d10ecb37.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": true,
+            "inputs_outputs_equal": false,
+            "consistent_proportion": false
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "crop"
+                        ],
+                        "matched_operations": [
+                            "crop"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "crop"
+                        ],
+                        "matched_operations": [
+                            "crop"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "crop"
+                        ],
+                        "matched_operations": [
+                            "crop"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "d511f180.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": false,
+            "all_outputs_same_size": false,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "switch"
+                        ],
+                        "matched_operations": [
+                            "switch"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "switch"
+                        ],
+                        "matched_operations": [
+                            "switch"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "switch"
+                        ],
+                        "matched_operations": [
+                            "switch"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "ed36ccf7.json": {
+        "canvas_analysis": {
+            "all_inputs_same_size": true,
+            "all_outputs_same_size": true,
+            "inputs_outputs_equal": true,
+            "consistent_proportion": true
+        },
+        "trainings": [
+            {
+                "id": 0,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot270"
+                        ],
+                        "matched_operations": [
+                            "rot270"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 1,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot270"
+                        ],
+                        "matched_operations": [
+                            "rot270"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot270"
+                        ],
+                        "matched_operations": [
+                            "rot270"
+                        ]
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "patterns": [
+                    {
+                        "detected_patterns": [
+                            "rot270"
+                        ],
+                        "matched_operations": [
+                            "rot270"
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -1,0 +1,49 @@
+[project]
+name = "constelize"
+version = "0.1.0"
+description = "A symbolic reasoning engine with procedural and composable logic."
+authors = [{ name = "Yannick Fontan" }]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    # Add core dependencies here
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+    "mypy"
+]
+
+[project.scripts]
+constelize-registry = "constelize.tools.registry_cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["constelize"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.py$'
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+select = ["E", "F", "B", "I"]  # Errors, formatting, bug risks, imports
+ignore = ["E501"]             # Ignore long lines if using black
+exclude = ["build", "dist", ".venv"]
+
+[tool.mypy]
+python_version = 3.9
+ignore_missing_imports = true
+strict_optional = true

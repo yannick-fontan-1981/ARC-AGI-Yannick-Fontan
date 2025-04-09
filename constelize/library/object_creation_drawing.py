@@ -1,0 +1,67 @@
+from constelize.core.action import Action
+from constelize.core.binding import ArgumentBinding, BindingStatus
+from constelize.core.categories import ActionCategory
+
+def canvas(value: int, dimensions: tuple) -> tuple:
+    return tuple(tuple(value for _ in range(dimensions[1])) for _ in range(dimensions[0]))
+
+def box(patch) -> frozenset:
+    if not patch:
+        return frozenset()
+    rows = [i for _, (i, j) in patch]
+    cols = [j for _, (i, j) in patch]
+    si, ei = min(rows), max(rows)
+    sj, ej = min(cols), max(cols)
+    return frozenset(
+        (i, j)
+        for i in range(si, ei + 1)
+        for j in range(sj, ej + 1)
+        if i in {si, ei} or j in {sj, ej}
+    )
+
+def fill(grid: tuple, value: int, patch) -> tuple:
+    h, w = len(grid), len(grid[0])
+    filled = [list(row) for row in grid]
+    for i, j in patch:
+        if 0 <= i < h and 0 <= j < w:
+            filled[i][j] = value
+    return tuple(tuple(row) for row in filled)
+
+ACTIONS = [
+    Action(
+        id="canvas#object_creation",
+        name="canvas",
+        description="Create a new grid with given dimensions and fill value",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="value", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="dimensions", type="IntegerTuple", binding=BindingStatus.UNRESOLVED)
+        ],
+        output_type="Grid",
+        function=canvas
+    ),
+    Action(
+        id="box#object_creation",
+        name="box",
+        description="Return the bounding box outline of a patch or object",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED)
+        ],
+        output_type="Indices",
+        function=box
+    ),
+    Action(
+        id="fill#object_creation",
+        name="fill",
+        description="Fill a grid at given indices with a value",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="value", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED)
+        ],
+        output_type="Grid",
+        function=fill
+    )
+]

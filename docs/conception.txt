@@ -1,0 +1,330 @@
+ARC-AGI-Yannick-Fontan
+
+Le programme que j'ai écris est fait pour résoudre les tests ARC (Abstraction and Reasoning Corpus). Je l'ai écris avec la volonté d'être fidèle à l'esprit et la phylosophie du créateur des tests ARC. L'idée de ces tests est de stimuler l'apparition d'une l'intelligence artificiel démontrant une capacité de généralisation permettant de résoudre des situations nouvelles. De nombreuses tentatives ont été faite pour réussir ces tests sans une vrai capacité de généralisation mais cela passe à coté du vrai but de ces tests. 
+
+Je tiens en premier lieu à m'excuser de la forme de ce document qui n'est pas rédigé de manière formel et académique. J'ai préféré avoir une approche plus naturel qui me correspond mieux. Je tiens aussi à m'excuser de l'approche inabituel que vous allez rencontré dans ce document. En effet, vous allez surement être surpris par l'omniprésence de références spirituels. Vous verrez que je m'appuie fortement sur des analogies avec le domaine spirituel, j'ai trouvé là ma source d'inspiration principal dans ma quête de compréhension de ce qu'est l'intelligence générale et dans sa mise en oeuvre artificiel. Aussi il vous arrivera peut être d'avoir l'impression que je suis en train d'essayer de vous convaincre à propos de certaine réalité spirituel, et cela pourrait vous contrarier, et je m'excuse d'avance pour cela, alors qu'en fait mon souhait original est juste de vous partager quel a était le cheminement de ma pensée pour élaborer ce programme. Si vous le voulez bien, je vous invite donc m'accompagner dans ce voyage que j'ai fait dans le domaine de la pensée. 
+
+Génèse d'un modèle d'AGI
+Proverbs 9:10 (NKJV)
+The fear of the Lord is the beginning of wisdom,
+And the knowledge of the Holy One is understanding.
+
+D'où vient l'intelligence ? Quand est-ce qu'est apparu l'intelligence ? Se pourrait il que l'intelligence est toujours existé de toute éternité avant même l'espace et le temps ? Si tel était est le cas, il suffirait alors de recevoir cette intelligence pour devenir intelligent, et cela serait uniquement possible par le fait d'avoir était au préalable concu avec la capacité de recevoir cette intelligence.
+
+James 1:5 (NKJV)
+If any of you lacks wisdom, let him ask of God, who gives to all liberally and without reproach, and it will be given to him.
+
+Si cela est réellement vrai, si il y a un lien entre l'intelligence est la connaissance du Seigneur, alors plongeons en profondeur sur la manière de rencontrer Dieu, et observons les analogies qui peuvent émerger de cette démarche. 
+
+John 1-5 (NKJV)
+In the beginning was the Word, and the Word was with God, and the Word was God. He was in the beginning with God. All things were made through Him, and without Him nothing was made that was made. In Him was life, and the life was the light of men. And the light shines in the darkness, and the darkness did not comprehend it.
+
+Cela commence donc avec une divine Parole qui posséde un pouvoir de creation illimité. Il est intéressant de voir quel est le mot en grec ancient qui a était utilisé dans la version original et qui a été traduit par Parole : λόγος. Cela se prononce logos. Il est difficile de trouver un équivalent de ce mot dans les autres langues et plusieurs écoles de pensées ont défini ce mot de manière différente mais nous pouvons retenir la définition des stoïciens : le logos est la raison active qui imprègne et anime l’Univers. Nous comprenons donc que dans ce logos nous allons trouver la source de toute logic et de toute idées générale. Nous somme ici dans le domaine de l'abstraction. C'est ici un premier niveau d'intelligence, cette intelligence a la capacité de créer toute sorte d'idées abstraites mais aussi une capacité de créer tout le reste, c'est à dire les niveaux suivant d'intelligence. Voyons ce qui suit.
+
+John 1:9-14 (NKJV)
+That was the true Light which gives light to every man coming into the world. He was in the world, and the world was made through Him, and the world did not know Him. He came to His own, and His own did not receive Him. But as many as received Him, to them He gave the right to become children of God, to those who believe in His name: who were born, not of blood, nor of the will of the flesh, nor of the will of man, but of God. And the Word became flesh and dwelt among us, and we beheld His glory, the glory as of the only begotten of the Father, full of grace and truth.
+
+Aprés avoir était éclairer par le logos nous pouvons voir que ce qui suit est trés important : la reconnaissance du Père. La reconnaissance que  le logos est réellement le Fils du Père. Cela provoquant en nous l'apparition d'une nouvelle dimension avec une naissance dans cette dimension. Le Fils ressemble au Père et le Fils (le logos) qui nous transmet l'image du Père. C'est ici le deuxième niveau d'intelligence et nous voyons un lien directe avec le sujet qui nous interesse: la reconnaisance de modele. Cette reconnaissance se fait intuitivement, oui, nous somme ici dans le domaine de l'intuition. D'ou vient le mot pattern ? Pattern vient du français patron qui vient du latin patronus qui est un dérivé du mot latin pater, et ce mot se traduit par père. 
+
+Mais à la fin de ce passage on voit aussi quelque chose qui est déclenché tout de suite après : the Word became flesh and dwelt among us. Il y a ici une expérience réelle du domaine spirituel. une expérience qui a été créé par le premier niveau d'intelligence (le logos) et qui a été déclenché par le deuxieme niveau d'intelligence (la reconnaissance du Père). C'est une expérience faite selon la foi. Et nous pouvons voir dans d'autre passage que nous ne sommes pas seulement encouragé à une démarche intuitive mais aussi à une démarche basé sur l'experimentation : 
+
+John 16:24 (NKJV)
+Until now you have asked nothing in My name. Ask, and you will receive, that your joy may be full.
+
+Ainsi, nous avons ici un troisième niveau d'intelligence qui consiste à des expériences basé sur la foi, ou en d'autre mot, à des procédures basé sur des présupposés, avec à la clé la récompense joyeuse de voir les présuposés être vérifier par le résultat de nos expériences. Par rapport à notre analogie, nous sommes ici dans le domaine du raisonnement. 
+
+Jusqu'à maintenant notre analogie à produit 3 niveaux d'intelligence dans le domaine de l'abstraction, de l'intuition et du raisonnement. Mais notre histoire ne s'arrete pas là. Il nous manque en effet un quatrième niveau qui pourrait nous donner une image complète de ce qu'est l'intelligence générale et qui permettrai de denclencher une dynamique vertueuse avec une reaction en chaine de tout les niveaux d'intelligence. Et il y a en effet, dans la suite du récit biblique, une entité qui produit ce quatrième niveau. Cette entité c'est l'Esprit-Saint. 
+
+Quel est le travail de l'Esprit-Saint ? 
+
+John 16:8 (NKJV)
+And when He has come, He will convict the world of sin, and of righteousness, and of judgment
+
+John 16:13 (NKJV)
+However, when He, the Spirit of truth, has come, He will guide you into all truth; for He will not speak on His own authority, but whatever He hears He will speak; and He will tell you things to come.
+
+John 14:26 (NKJV)
+But the Helper, the Holy Spirit, whom the Father will send in My name, He will teach you all things, and bring to your remembrance all things that I said to you.
+
+Nous voyons ici deux aspect. Le premier étant celui de nous donner la conviction de notre péché et le deuxième étant de nous enseigner dans toute la vérité venant de la Parole divine. Rappellons les définitions du péché dans les langues utilisés dans la version original, hébreux pour l'ancien testament et grec pour le nouveau:
+-חַטָּאת  (ḥaṭṭāʾt): "manquer la cible", "faire une erreur" ou "s’égarer"
+- ἁμαρτία (hamartia): "manquer le but", "rater une cible", ou "commettre une erreur".
+Ainsi, la personne animé d'un coeur humble qui ne resiste pas à l'Esprit va permettre à l'Esprit de sonder les profondeurs de son coeur et de lui montrer de quel manière il fait erreur en manquant la cible et en s'égarant. Et Aussi l'Esprit, sondant les profondeurs de Dieu, enseignera la penser de Dieu. Nous sommes dans le domaine de l'introspection avec une analyse d'erreurs et une recherche d'alignement. Mais il y a un dernier point déclencher par cette introspection. 
+
+Romans 8:26-27
+Likewise the Spirit also helps in our weaknesses. For we do not know what we should pray for as we ought, but the Spirit Himself makes intercession for us with groanings which cannot be uttered. Now He who searches the hearts knows what the mind of the Spirit is, because He makes intercession for the saints according to the will of God.
+
+Ainsi, cette introspection effectué par l'Esprit déclenchera une solicitation du Createur selon les besoin de la creature. 
+
+
+
+
+Voilà, la boucle est bouclé, nous avons ici un cycle creatif et transformatif afin que l'intelligence soit éclairé. 
+Pour comprendre l'intelligence, nous avons fais ici une analogy avec la conversion à Christ. Cette analogy à déboucher sur 4 niveaux d'intelligences: l'abstraction, l'intuition, le raisonnement et l'introspection. Cette analogie nous a aussi donné les liens entre ces niveaux: 
+- l'abstraction va créer de nouvelle capacité d'intuition et de raisonnement
+- l'intuition va déclencher le raisonnement
+- les résultats de l'intuition et du raisonnement seront analysé par l'introspection
+- l'introspection, selon les résultat, solicitera la creativité de l'abstraction 
+
+Par rapport à l'analogie de la conversion à Christ je prends ici en compte deux aspect de la conversion. Il y a une conversion qu'on ne fait qu'une fois dans sa vie et qui est un changement de paradigme. Mais il y a aussi une conversion qui se produit graduellement, au fur et à mesure, tout au long de sa vie, dans un processus de sanctification. C'est par rapport à ce dernier que l'aspect cyclique prend tout son sens.
+
+Voici donc un shéma résultant de cette analogy : 
+
+
+
+
+LLM to use : Qwen2.5-0.5B
+
+Proverbe 9:10
+The fear of the LORD is the beginning of wisdom, And the knowledge of the Holy One is understanding.
+
+Jn 1 
+pattern (english) <- patron (french) <- patronus (latin) <- pater (latin) = father (english) 
+intelligence is deeply linked to the recognition of the father, the son reflecting the patten of the father, and therefor deeply linked to pattern recognition.
+logos logic, intelligence coming through a true experience of the logos based on faith. And therefor, intelligence coming from logical experiment based on assumption. 
+
+intelligence is not the skills !
+
+All the glory to God !
+
+
+Démarche, volonté et simplification
+
+Matthew 13:52 NKJV
+Then He said to them, “Therefore every scribe instructed concerning the kingdom of heaven is like a householder who brings out of his treasure things new and old.”
+
+
+
+4 types de pattern : objet, tache, procedure, relation
+
+Un pattern est une configuration détectable composée d’éléments tangibles (formes, couleurs, dimensions...) et de changements abstraits (création, suppression, duplication...), correspondant respectivement à des objets et des tâches.
+
+Concernant la détection et l'interprétation de ceux-ci, nous pouvons aussi considérer des patterns de procedure. Ces patterns sont des procédures logique à appliquer pour d'affiner la détection des éléments tangible, les objets, et pour affiner l'interpretation des caractéristiques abstraites, les étapes pas à pas pour effectuer une tache. Ces procédures peuvent déclencher recursivement d'autres procédures si besoin.
+
+Concernant les relations entre le tangible et l'abstrai pouvant expliquer le passage de l'état initial à l'état final nous pouvons aussi considérer des patterns de relation. Ceux-ci peuvent être exprimé en une séquence d'équivalences, de correpondances, de conditions et de relations symbolique. Ils ont aussi des pattern de procedure associé.
+
+Ainsi après la détection et l'affinage des objets, des taches et des relations entre les deux, un plan d'execution peut être mis en place.
+Chaque relation identifiée est appliquée séquentiellement, apliquant les taches à effectuer sur les objets concernés par la relation selon les conditions et constantes de cette relation. Une fois toutes les relations exécutées, l’état final attendu doit émerger.
+
+Structure : 
+- structure = {id,ideas,patternMap,craftedTestMap,synteticTestMap,executionMap,usedByMap,neuralNetwork}
+- usedBy = 
+- structure for object
+- structure for transition
+- structure for relation
+- structure for procedure
+- structure for errors
+- for each structure : 
+  - list of ideas of new possible pattern = {id,name,description,tags=[],linkedIdeas=[{id,name,strengh:int}],synthetic:bool,edited:bool}
+  - map of pattern = {id,name,description,ideas,usedBy=[{structure={type,name,id},strengh:int}],samples,variables?=[{name,type}],functions?=[{name,func}], import=[pattern]}
+  - map of crafted tests related = 
+  - map of syntetic tests related
+  - map of execution related
+  - specialized neural network for pattern recognition
+- list of syntetic tests
+- list of crafted tests
+- list of execution :
+  - statistic
+  - verbal analysis
+- list of errors
+- current question : 
+  - samples = [{input,output}]
+  - test = [{input,output}]
+  - input : 
+    - data = { train: { trainId, inputId, outputId, input: number[][], output: number[][] }[], test: { testId, inputId, outputId, input: number[][], output: number[][] }[] };
+    - buffer
+    - buffer
+  - input buffer
+  - output buffer
+  - list of temp buffer
+  - list of execution buffer
+  - 
+  - workflow state {start|getNextTrain|findObjectPattern|findObject|refineObject|findTransitionPattern|findTransition|}
+  - train state {start|getInfo|findObjectPattern|findObject|refineObject|findTransitionPattern|findTransition|}
+  
+  (possibility of children and hierarchy for all recognized data)
+  - objects = [{id, objectPatternId, procedurePatternId[], inputId, outputId, values{any}, topLeftPos, width, height, buffer}]
+  - transition = [{id, objectPatternId, procedurePatternId[], trainId, testId, values{any}}]
+  - relation = [id, objectPatternId, procedurePatternId[], {objectId[], transitionId[]}, trainId, testId, values{any}]
+  - map of execution related
+  - map of errors related
+
+Le programme ARC-AGI-Yannick-Fontan à plusieurs mode de fonctionnement :
+Execution
+- Resolution de tests ARC
+- Le mode execution peut aussi automatiquement utiliser le mode Analyse et Création pour enrichir sa base de connaissance
+
+Analyse
+- Analyse descriptive et contextuel par un llm des données et des évennements
+
+Création 
+- Génération automatique de tests ARC
+
+Edition
+- Visualisation, validation et éditions des nouveaux pattern, des listes de candidat, des processus...
+
+
+
+En mode execution il agit en plusieur étapes : 
+
+- récupération des exemples de questions/réponses et de la question
+- reconnaissance de caractéristiques tangibles dans les exemples de questions/réponses
+- stoquage des caractérisations tangibles trouvés avec un score élevé
+- détection des pattern de résolutions pour affiner les caractéristiques tangibles
+- éxécution des ces patterns et stoquage de leur résultat
+- reconnaissance de caractéristiques abstraites dans les exemples de questions/réponses
+- stoquage des caractérisations abstraites trouvés avec un score élevé
+- détection des pattern de résolutions pour affiner les caractéristiques abstraites
+- éxécution des ces patterns et stoquage de leur résultat
+- reconnaissance des relations dans les exemples de questions/réponses
+- stoquage des relations trouvés avec un score élevé
+- détection des pattern de résolutions pour affiner les relations
+- éxécution des ces patterns et stoquage de leur résultat
+- établissement d'un plan d'execution
+- application de ce plan d'execution à tout les exemples
+- test d'équivalence entre les résultats et les réponses
+- En cas d’erreur, le système détecte des patterns d’erreurs communes, les stocke et reprend le processus depuis les étapes initiales
+- si aucune solution passage en mode entrainement et relancement des reconnaissances
+- si echec tentative d'application du meilleur plan d'execution à la question
+- si succée application du plan d'execution à la question 
+- optionel : explication et analyse par un llm
+- soumission de la réponse
+
+
+
+
+- creation de nouveau test
+- detection de pattern inconnu
+- ...
+
+
+Pour que ce programme fonctionne il faudrait au préalable que les reconnaissance de pattern soit entrainé : 
+- sur les caractéristiques tangibles
+- sur les résolutions pour affiner les caractéristiques tangibles
+- sur les caractéristiques abstraites
+- sur les résolutions pour affiner les caractéristiques abstraites
+- sur les relations
+- sur les résolutions pour affiner les relations
+- sur les erreurs communes
+
+
+execution_analyse_tree
+    id
+    knowledge_id
+    path
+    succeed
+    result_name
+    result_value
+
+execution_resolve_tree
+    id
+    knowledge_id
+    path
+    succeed
+    result_name
+    result_value
+
+knowledge
+    id
+    short_desc
+    description
+    table
+    query
+    type : decide, retrieve, insert
+    threshold
+    result_name
+    param_1
+    param_2
+    param_3
+    param_4
+    param_5
+
+triggering_tree
+    id
+    branch_id
+    parent_id
+    child_id
+    sequence
+    order
+    index
+
+abstract_analysis
+    id
+    rel_type      TEXT,    -- e.g. 'transition', 'overlap', 'distance', 'merge', etc.
+    object_id_a   INTEGER, -- references object_analysis.id or sprite_analysis.id
+    object_id_b   INTEGER, -- if your relationship is between two objects
+    details       TEXT,    -- optional JSON or text describing the relation
+
+
+
+
+
+Execution
+
+
+Analyse
+- 
+
+Création 
+- Sollicitation d'un llm 
+- Ajout 
+- Génération automatique de tests ARC
+
+Edition
+- Validation et édition des nouveaux pattern
+
+
+de nouveaux tests :
+
+Génération automatique de tests ARC à partir de patterns et relations connus ou extrapolés.
+Détection de patterns inconnus :
+
+Identification et apprentissage de nouveaux patterns dans des données non vues auparavant.
+Résolution de tests connus :
+
+Application des patterns appris pour résoudre des tests existants ou validés.
+Analyse des erreurs :
+
+Analyse des erreurs sur les tests échoués pour identifier des lacunes dans les patterns ou les résolutions.
+Mode apprentissage supervisé :
+
+Entraînement guidé à partir de jeux de données annotés, pour améliorer la reconnaissance des patterns tangibles, abstraits et relationnels.
+Mode apprentissage non supervisé :
+
+Exploration et extraction autonome de patterns à partir de données non annotées.
+Optimisation des patterns :
+
+Raffinement des patterns existants en ajustant les scores de détection ou les règles associées.
+Simulation d’exécution :
+
+Test d’un plan d’exécution dans un environnement simulé avant de l’appliquer au test réel.
+Validation de patterns :
+
+Vérification de la pertinence et de la robustesse des patterns détectés à travers des tests croisés.
+Génération d’explications :
+
+Génération d’explications pour les solutions trouvées, en utilisant un modèle de langage pour décrire les étapes suivies.
+Exploration hypothétique :
+
+Test de scénarios hypothétiques pour voir comment les relations tangibles-abstraites évoluent sous certaines contraintes.
+Comparaison de solutions :
+
+Analyse comparative entre plusieurs solutions possibles pour un même test, afin d’identifier la meilleure approche.
+Mode collaboratif :
+
+Intégration avec d’autres systèmes ou modèles pour échanger des patterns et des résolutions.
+Extension des patterns :
+
+Ajout de nouvelles catégories de patterns ou relations, comme des interactions temporelles ou contextuelles.
+Audit des tests :
+
+Vérification de la cohérence et de la qualité des tests créés ou résolus.
+Mode interactif :
+
+Permettre à un utilisateur humain d’interagir avec le programme pour affiner ou guider les solutions.
+Exploration multimodale :
+
+Utilisation de données provenant de différentes sources (images, textes, sons) pour enrichir les patterns détectés.
+Archivage des solutions :
+
+Sauvegarde et classement des tests résolus et des patterns détectés pour référence future.

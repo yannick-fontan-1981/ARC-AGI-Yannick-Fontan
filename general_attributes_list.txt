@@ -1,0 +1,371 @@
+
+
+
+# Attributes related to Object Counts
+1. numberOfObjectsInput
+2. numberOfObjectsOutput
+3. numberOfObjectsInputOutputRatio
+4. numberOfObjectsInputConsistency
+5. numberOfSpriteInput (multicolored objects)
+6. numberOfSpriteOutput
+7. numberOfUniqueObjectsInput
+8. numberOfUniqueObjectsOutput
+9. numberOfObjectTypesInput
+10. numberOfObjectTypesOutput
+
+# Attributes related to Grid Size and Dimensions
+11. inputHeight
+12. inputWidth
+13. outputHeight
+14. outputWidth
+15. inputAreaSize (inputHeight * inputWidth)
+16. outputAreaSize (outputHeight * outputWidth)
+17. inputs_outputs_equal (inputAreaSize == outputAreaSize)
+18. inputHeightWidthRatio
+19. outputHeightWidthRatio
+20. inputOutputAreaRatio
+21. inputSizeConsistency (same size across training data)
+22. outputSizeConsistency
+23. isInputHeightOdd
+24. isInputHeightEven
+25. isInputWidthOdd
+26. isInputWidthEven
+27. isOutputHeightOdd
+28. isOutputHeightEven
+29. isOutputWidthOdd
+30. isOutputWidthEven
+
+# Attributes related to Object Area
+31. areaSizeInput (sum of all object areas in input)
+32. areaSizeOutput (sum of all object areas in output)
+33. objectsAreaRatioInput (numberOfObjectsInput / areaSizeInput)
+34. objectsAreaRatioOutput (numberOfObjectsOutput / areaSizeOutput)
+35. averageObjectAreaInput
+36. averageObjectAreaOutput
+37. maxObjectAreaInput
+38. maxObjectAreaOutput
+39. minObjectAreaInput
+40. minObjectAreaOutput
+41. numberOfObjectsResized (objects resized between input and output)
+42. hasResizedObjects
+
+# Attributes related to Colors
+43. numberOfColorsInput
+44. numberOfColorsOutput
+45. numberOfColorsInputOutputRatio
+46. hasSameInputOutputColors
+47. colorsInputConsistency (colors consistency across inputs)
+48. colorsOutputConsistency
+49. mostFrequentColorInput
+50. mostFrequentColorOutput
+51. leastFrequentColorInput
+52. leastFrequentColorOutput
+53. backgroundColorInput
+54. backgroundColorOutput
+55. spliterColorInput
+56. spliterColorOutput
+57. gridColorInput
+58. gridColorOutput
+59. numberOfBlackPixelsInput
+60. numberOfBlackPixelsOutput
+61. numberOfRedPixelsInput
+62. numberOfRedPixelsOutput
+63. numberOfBluePixelsInput
+64. numberOfBluePixelsOutput
+65. numberOfGreenPixelsInput
+66. numberOfGreenPixelsOutput
+67. hasBlackPixelsInput
+68. hasBlackPixelsOutput
+69. hasRedPixelsInput
+70. hasRedPixelsOutput
+71. colorDistributionInput (percentage of each color in input)
+72. colorDistributionOutput
+
+# Attributes related to Pixel Counts
+73. numberOfPixelsInput (total non-background pixels)
+74. numberOfPixelsOutput
+75. blackPixelRatioInput (numberOfBlackPixelsInput / inputAreaSize)
+76. blackPixelRatioOutput
+77. colorPixelRatioInput
+78. colorPixelRatioOutput
+79. pixelDensityInput (numberOfPixelsInput / inputAreaSize)
+80. pixelDensityOutput
+81. pixelSymmetryInput (symmetry of pixel positions in input grid)
+82. pixelSymmetryOutput
+83. numberOfAdjacentObjectInput (adjacent objects in input)
+84. numberOfAdjacentObjectOutput
+85. adjacentObjectsConsistency (input vs output)
+
+# Attributes related to Symmetry and Reflection
+86. isInputSymmetricalHorizontally
+87. isInputSymmetricalVertically
+88. isInputSymmetricalDiagonally
+89. isOutputSymmetricalHorizontally
+90. isOutputSymmetricalVertically
+91. isOutputSymmetricalDiagonally
+92. inputOutputSymmetryMatch (whether symmetry is preserved from input to output)
+93. inputSymmetryConsistency
+94. outputSymmetryConsistency
+
+# Attributes related to Sprites and Shapes
+95. numberOfSquaresInput
+96. numberOfSquaresOutput
+97. numberOfRectanglesInput
+98. numberOfRectanglesOutput
+99. numberOfLinesInput
+100. numberOfLinesOutput
+101. numberOfDiagonalLinesInput
+102. numberOfDiagonalLinesOutput
+103. hasInputGrid
+104. hasOutputGrid
+105. hasInputSpliters (lines or separators in input grid)
+106. hasOutputSpliters
+107. inputContainsCompleteShape (closed shapes in input)
+108. outputContainsCompleteShape
+109. numberOfSpritesInput (multicolored objects)
+110. numberOfSpritesOutput
+111. spriteColorRatioInput
+112. spriteColorRatioOutput
+113. hasSpriteMovement (movement of sprites between input and output)
+114. numberOfSpriteMovement
+
+# Attributes related to Color Distribution
+115. dominantColorInput
+116. dominantColorOutput
+117. uniqueColorPairsInput (unique pairs of adjacent colors in input)
+118. uniqueColorPairsOutput
+119. averageColorChangePerObject
+120. percentageOfObjectsWithColorChange
+
+# Attributes related to Adjacency
+121. numberOfAdjacentSameColorCellsInput
+122. numberOfAdjacentSameColorCellsOutput
+123. adjacentColorConsistency (input vs output)
+
+# Attributes related to Containment
+124. numberOfContainedObjectsInput (objects fully contained in others in input)
+125. numberOfContainedObjectsOutput
+126. numberOfBoundingBoxesInput (bounding box count around objects in input)
+127. numberOfBoundingBoxesOutput
+128. averageBoundingBoxAreaInput
+129. averageBoundingBoxAreaOutput
+130. largestBoundingBoxInput
+131. largestBoundingBoxOutput
+
+# Attributes related to Connectivity
+132. numberOfConnectedComponentsInput
+133. numberOfConnectedComponentsOutput
+134. numberOfDisconnectedObjectsInput
+135. numberOfDisconnectedObjectsOutput
+136. numberOfConnectionsInputOutputRatio
+137. numberOfMergedObjects
+138. numberOfSplitObjects
+139. hasMergedObjects
+140. hasSplitObjects
+
+# Attributes related to Grids
+141. hasUniformGridSpacingInput
+142. hasUniformGridSpacingOutput
+143. numberOfGridCellsInput
+144. numberOfGridCellsOutput
+145. gridCellSizeInput
+146. gridCellSizeOutput
+147. uniformGridSizeInputOutputRatio
+148. gridLinesInput (number of grid lines in input)
+149. gridLinesOutput
+150. gridLineConsistency
+
+# Attributes related to Relationships between Input and Output
+151. inputOutputObjectOverlap (percentage overlap of objects between input and output)
+152. numberOfObjectsAddedOutput (objects present only in output)
+153. numberOfObjectsRemovedInput (objects removed in output)
+154. hasObjectRelocation (objects moved from input to output)
+155. hasObjectResizing (objects resized between input and output)
+156. hasColorChange (objects changed color between input and output)
+157. numberOfColorChangedObjects
+158. numberOfObjectTypeChanges
+159. inputOutputSpriteOverlap
+160. inputOutputColorOverlap
+161. inputOutputSymmetryChanges
+162. averageShapeDifference
+163. inputOutputDiagonalLinesMatch
+164. inputOutputLineContinuity
+165. inputOutputBoundingBoxMatch
+166. numberOfBoundingBoxChanges
+167. hasBoundingBoxShrinking
+168. hasBoundingBoxExpansion
+169. boundingBoxChangeConsistency
+
+# Additional Comparison Attributes
+170. hasInputOutputColorInversion
+171. inputOutputPixelDensityRatio
+172. inputOutputPixelSymmetryRatio
+173. inputOutputSpriteRatio
+174. inputOutputBlackPixelRatio
+175. inputOutputGridLineMatch
+176. inputOutputSplitterLineMatch
+177. inputOutputBoundingBoxOverlap
+178. hasInputOutputProportionalScaling
+179. averagePixelShiftPerObject
+
+# Extend with Detailed Spatial, Relational, and Dynamic Comparisons
+180. objectShiftVectorAverage
+181. objectShiftVectorConsistency
+182. spriteAreaChangeRatio
+183. spriteColorChangeConsistency
+184. largestSpriteMovementVector
+185. numberOfBackgroundObjects
+186. hasBackgroundObjectOverlap
+187. backgroundObjectSizeRatio
+188. backgroundObjectColorMatch
+189. inputOutputColorGradientMatch
+190. inputOutputTextureMatch
+
+# Continue with logical extensions, ensuring robust comparative analysis, focusing on specific object, grid, and color dynamics (extend to 500)...
+
+
+FOR OBJECTS :
+
+id – Unique identifier for the object
+filename - Name of the file
+trainId - with a value of -1 if it is a test
+testId - with a value of -1 if it is a train
+isInsideInput – Boolean indicating if it's inside input
+isInsideOutput – Boolean indicating if it's inside Output
+isInsideTrain – Boolean indicating if it's inside Train
+isInsideTest – Boolean indicating if it's inside Test
+isBlock – Boolean indicating if it's a block
+isZone – Boolean indicating if it's a zone
+
+height – Number of rows in the object
+width – Number of columns in the object
+ratioWidthHeight – Ratio of width to height
+area – (height × width)
+pixelCount – Number of pixels in the object
+hasOddPixelCount – Boolean if total pixels are odd
+hasEvenPixelCount – Boolean if total pixels are even
+areaPerimeter – Perimeter of the area (2 × (height + width))
+pixelPerimeter – Perimeter of the object's pixels
+ratioPixelsArea - Number of pixels in the object / (height × width)
+
+isSquare – Boolean indicating if width == height and all pixel filled in the area
+isRectangle – Boolean indicating if width != height and all pixel filled in the area
+isLine – Boolean indicating if pixelCount>1 & (width=1 or height=1) and all pixel filled in the area
+isHorizontal – Boolean indicating if width > height
+isVertical – Boolean indicating if height > width
+diagonalLength – Hypotenuse of the bounding box
+
+orthoNeighborPixelCount - Number of neighbors pixels orthogonally
+diagNeighborPixelCount - Number of neighbors pixels diagonnaly
+neighborPixelCount - Number of neighbors pixels orthogonally & diagonnaly
+orthoAdjacentObjectsCount – Number of neighboring objects orthogonally
+diagAdjacentObjectsCount – Number of neighboring objects diagonnaly
+adjacentObjectsCount – Number of neighboring objects orthogonally & diagonnaly.
+
+color – Primary color of the object
+orthoNeighborColorCount - number of colors among orthogonal neighbors pixels
+orthoNeighborColorList - colors separated by comma
+diagNeighborColorCount - number of colors among diagonnal neighbors pixels
+diagNeighborColorList - colors separated by comma
+neighborColorCount - number of colors among diagonnal & orthogonal neighbors pixels
+neighborColorList - colors separated by comma
+diffGridColorObjectColor - number of pixels of the same color than the object in the grid minus the number of pixel in the object
+sameColorBlocksCount - total number of blocks of the same color than the object in the grid
+sameColorZonesCount - total number of zones of the same color than the object in the grid
+
+distanceFromTopBorder – Distance from the top of the grid
+distanceFromBottomBorder – Distance from the bottom of the grid
+distanceFromLeftBorder – Distance from the left of the grid
+distanceFromRightBorder – Distance from the right of the grid
+minRow - minimum index of row in the grid where the object is present
+minCol - minimum index of column in the grid where the object is present
+maxRow - maximum index of row in the grid where the object is present
+maxCol - maximum index of column in the grid where the object is present
+boundingBox – [(minRow, minCol), (maxRow, maxCol)]
+
+areaCenterX – X coordinate of the center of area
+areaCenterY – Y coordinate of the center of area
+massCenterX – X coordinate of the center of mass
+massCenterY – Y coordinate of the center of mass
+isHorizontallyCentered - the areaCenterX of the object is the same as center x of the grid
+isVerticallyCentered - the areaCenterY of the object is the same as center y of the grid
+isCentered - the areaCenterX and areaCenterY of the object is the same as center x and y of the grid
+
+isTouchingTop – Boolean indicating if it touches the top
+isTouchingBottom – Boolean indicating if it touches the bottom
+isTouchingLeft – Boolean indicating if it touches the left
+isTouchingRight – Boolean indicating if it touches the right
+isTouchingTopRight – Boolean indicating if it touches the top right corner
+isTouchingBottomRight – Boolean indicating if it touches the bottom right corner
+isTouchingTopLeft – Boolean indicating if it touches the top left corner
+isTouchingBottomLeft – Boolean indicating if it touches the bottom left corner
+
+holeCountWithoutBorder - number of holes inside the object without any consideration for the border
+holeCountWithBorder - number of holes inside the shape of the object and the border of the grid
+blockCountInsideHolesWithoutBorder - number of blocks inside the holes without any consideration for the border
+blockCountInsideHolesWithBorder - number of blocks inside the conjunction of holes and border
+zoneCountInsideHolesWithoutBorder - number of blocks inside the holes without any consideration for the border
+zoneCountInsideHolesWithBorder - number of blocks inside the conjunction of holes and border
+
+countExactlyAlignHorizontally - count objects with the same minRow and maxRow
+countExactlyAlignVertically - count objects with the same minCol and maxCol
+countExactlyAlignDiagonally - count objects with (minRow, minCol) and (maxRow, maxCol) Diagonally align
+countExactlyAlignCounterDiagonally - count objects with (minRow, maxCol) and (maxRow, minCol) Diagonally align
+countPartiallyAlignHorizontally - count objects having overlapping values between minRow and maxRow
+countPartiallyAlignVertically - count objects having overlapping values between minCol and maxCol
+
+isObjectRepeatedHorizontally – Boolean if object repeats along X
+isObjectRepeatedVertically – Boolean if object repeats along Y
+isObjectRepeatedDiagonally – Boolean if object repeats along diagonal
+isObjectRepeatedCounterDiagonally – Boolean if object repeats along counter diagonal
+
+hasHorizontalSymmetry - Boolean indicating if the object has a Horizontal Symmetry
+hasVerticalSymmetry - Boolean indicating if the object has a Vertical Symmetry
+hasDiagonalSymmetry - Boolean indicating if the object has a Vertical Symmetry
+hasCounterDiagonalSymmetry - Boolean indicating if the object has a Vertical Symmetry
+hasRotationalSymmetry - Boolean indicating if the object has a Rotational Symmetry
+isEncapsulatedAndAlone – Boolean if object is entirely inside another and alone
+
+isPath - boolean, true if contains more than 1 pixel and don't contain any square inside
+isTree - boolean, true if this is a path with one or more junctions
+
+
+
+table shape :
+id	INTEGER PRIMARY KEY	Unique id for shape.
+filename 	TEXT name of the file
+height 		INTEGER
+width 		INTEGER
+pixel_count	INTEGER	Number of pixels forming the shape
+data 		TEXT Serialized array representing the shape (e.g., JSON)
+
+
+table shape_transformation
+id				INTEGER PRIMARY KEY	Unique id for shape transformation
+shape_id		INTEGER	FOREIGN KEY Unique ID for a shape
+color 			INTEGER	The primary color of the shape
+rotated_90		BOOLEAN	TRUE if rotated 90°
+rotated_180		BOOLEAN	TRUE if rotated 180°
+rotated_270		BOOLEAN	TRUE if rotated 270°
+flipped_vert	BOOLEAN	TRUE if flipped vertically
+flipped_horiz	BOOLEAN	TRUE if flipped horizontally
+inverted		BOOLEAN	TRUE if colors are inverted with the background
+half_top_cut	BOOLEAN	TRUE if the top half part is cut
+half_right_cut	BOOLEAN	TRUE if the top right part is cut
+half_bottom_cut	BOOLEAN	TRUE if the top bottom part is cut
+half_left_cut	BOOLEAN	TRUE if the top left part is cut
+
+
+table shape_occurrence
+id							INTEGER PRIMARY KEY	Unique identifier for each shape occurrence.
+shape_id					INTEGER	FOREIGN KEY ID for a shape
+shape_transformation_id 	INTEGER FOREIGN KEY	id for shape transformation.
+isInsideInput				BOOLEAN
+isInsideOutput				BOOLEAN
+isInsideTrain				BOOLEAN
+isInsideTest				BOOLEAN
+trainId						INTEGER -1 if isInsideTest
+testId						INTEGER -1 if isInsideTrain
+object_id					INTEGER FOREIGN KEY, id of object in object_analysis
+minX						INTEGER
+minY						INTEGER
