@@ -11,6 +11,13 @@ from constelize.core.registry import ActionRegistry
 registry = ActionRegistry()
 registry.register_all_actions()
 
+_unique_id = 0;
+
+def getUniqueId():
+    global _unique_id
+    _unique_id += 1
+    return str(_unique_id)
+
 END_OUTPUTS_BY_TRAINID = {}
 
 def load_end_outputs_from_json(json_path: str):
@@ -30,12 +37,14 @@ class FactToActionMapping:
 
 def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_grid") -> ActionInstance:
     return ActionInstance(
-        id=f"get_input_{'train' if isTrain else 'test'}_{id}",
+        id=f"start_input_{'train' if isTrain else 'test'}_{id}#{getUniqueId()}",
         action=registry.get_by_id("get_start_input"),
         bindings={},
         output_var=output_var,
         output_value=grid,
-        trainId=id,
+        trainId=(id if isTrain else -1),
+        testId=(id if isTrain == False else -1),
+        isTrain=isTrain,
         isFromInput=True,
         isToOutput=False
     )
@@ -45,7 +54,8 @@ def test_rotated_180(conn: sqlite3.Connection) -> List[dict]:
     SELECT sprite_transformation.sprite_unique_id, 
            sprite_occurrence.isInsideInput, 
            sprite_occurrence.isInsideOutput, 
-           sprite_occurrence.trainId, 
+           sprite_occurrence.trainId,
+           sprite_occurrence.testId, 
            sprite_unique.data 
     FROM sprite_transformation
     INNER JOIN sprite_unique ON sprite_unique.id = sprite_transformation.sprite_unique_id
@@ -64,19 +74,22 @@ def build_rotated_180(row: dict) -> ActionInstance:
     trainId = row["trainId"]
 
     return ActionInstance(
-        id="rot180_instance_" + str(row["sprite_unique_id"]),
+        id="rot180_instance_" + str(row["sprite_unique_id"]) + "#" + getUniqueId(),
         action=action,
         bindings={
             "grid": ArgumentBinding(
                 name="grid",
                 type="Grid",
-                binding=BindingStatus.CONSTANT,
+                binding=BindingStatus.UNRESOLVED,
                 value=input_grid
             )
         },
         output_var="rotated_grid",
         output_value=output_grid,
+        output_type=action.output_type,
         trainId=trainId,
+        testId=row["testId"],
+        isTrain=trainId > -1,
         isToOutput=row["isInsideOutput"],
         END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
     )
@@ -87,6 +100,7 @@ def test_flipped_horizontal(conn: sqlite3.Connection) -> List[dict]:
            sprite_occurrence.isInsideInput,
            sprite_occurrence.isInsideOutput,
            sprite_occurrence.trainId,
+           sprite_occurrence.testId, 
            sprite_unique.data
     FROM sprite_transformation
     INNER JOIN sprite_unique ON sprite_unique.id = sprite_transformation.sprite_unique_id
@@ -105,19 +119,22 @@ def build_flipped_horizontal(row: dict) -> ActionInstance:
     trainId = row["trainId"]
 
     return ActionInstance(
-        id="hmirror_instance_" + str(row["sprite_unique_id"]),
+        id="hmirror_instance_" + str(row["sprite_unique_id"]) + "#" + getUniqueId(),
         action=action,
         bindings={
             "grid": ArgumentBinding(
                 name="grid",
                 type="Grid",
-                binding=BindingStatus.CONSTANT,
+                binding=BindingStatus.UNRESOLVED,
                 value=input_grid
             )
         },
         output_var="mirrored_grid",
         output_value=output_grid,
+        output_type=action.output_type,
         trainId=row["trainId"],
+        testId=row["testId"],
+        isTrain=trainId > -1,
         isToOutput=row["isInsideOutput"],
         END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
     )
@@ -129,6 +146,7 @@ def test_flipped_vertical(conn: sqlite3.Connection) -> List[dict]:
            sprite_occurrence.isInsideInput,
            sprite_occurrence.isInsideOutput,
            sprite_occurrence.trainId,
+           sprite_occurrence.testId, 
            sprite_unique.data
     FROM sprite_transformation
     INNER JOIN sprite_unique ON sprite_unique.id = sprite_transformation.sprite_unique_id
@@ -147,19 +165,22 @@ def build_flipped_vertical(row: dict) -> ActionInstance:
     trainId = row["trainId"]
 
     return ActionInstance(
-        id="vmirror_instance_" + str(row["sprite_unique_id"]),
+        id="vmirror_instance_" + str(row["sprite_unique_id"]) + "#" + getUniqueId(),
         action=action,
         bindings={
             "grid": ArgumentBinding(
                 name="grid",
                 type="Grid",
-                binding=BindingStatus.CONSTANT,
+                binding=BindingStatus.UNRESOLVED,
                 value=input_grid
             )
         },
         output_var="mirrored_grid",
         output_value=output_grid,
+        output_type=action.output_type,
         trainId=row["trainId"],
+        testId=row["testId"],
+        isTrain=trainId > -1,
         isToOutput=row["isInsideOutput"],
         END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
     )

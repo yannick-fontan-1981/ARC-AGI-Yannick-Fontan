@@ -1,4 +1,8 @@
-✅ RULES:
+✅ TRAINING RESULTS:
+✅ trainId=0, proc=squeezed_proc_1
+✅ trainId=1, proc=squeezed_proc_1
+✅ trainId=2, proc=squeezed_proc_1
+✅ trainId=3, proc=squeezed_proc_1
 
-✅ EVALUATION:
-Procedure '3c9b0459_procedure' with 0 action(s) evaluated successfully.
+✅ TEST RESULTS:
+✅ testId=0, proc=squeezed_proc_1

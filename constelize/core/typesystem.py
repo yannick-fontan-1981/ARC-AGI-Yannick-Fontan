@@ -33,12 +33,23 @@ TypeHierarchy = {
 
 
 def is_instance_of_type(value: Any, symbolic_type: str) -> bool:
-    """Check if a value matches a symbolic type."""
+    """Check if a value matches a symbolic type, including flexible list/tuple handling."""
     python_type = SymbolicTypes.get(symbolic_type)
     if python_type is None:
         return False
+
+    if symbolic_type == "Grid":
+        # Accepte tuple[tuple[int]] OU list[list[int]]
+        if isinstance(value, (list, tuple)):
+            return all(isinstance(row, (list, tuple)) and all(isinstance(cell, int) for cell in row) for row in value)
+        return False
+
+    if symbolic_type == "FrozenSet":
+        return isinstance(value, (set, frozenset))
+
     if isinstance(python_type, tuple):
         return isinstance(value, python_type)
+
     return isinstance(value, python_type)
 
 

@@ -1,6 +1,9 @@
+# spatial_transformation.py
+
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding
+from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror
 from typing import Tuple, Any
 
 def shift(patch: Any, directions: Tuple[int, int]) -> Any:
@@ -16,20 +19,20 @@ def normalize(patch: Any) -> Any:
     min_j = min(j for _, (i, j) in patch)
     return shift(patch, (-min_i, -min_j))
 
-def rot90(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-    return tuple(zip(*grid[::-1]))
-
-def rot180(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-    return tuple(tuple(row[::-1]) for row in grid[::-1])
-
-def rot270(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-    return tuple(tuple(row[::-1]) for row in zip(*grid[::-1]))[::-1]
-
-def hmirror(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-    return grid[::-1]
-
-def vmirror(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-    return tuple(row[::-1] for row in grid)
+#def rot90(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
+#    return tuple(zip(*grid[::-1]))
+#
+#def rot180(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
+#    return tuple(tuple(row[::-1]) for row in grid[::-1])
+#
+#def rot270(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
+#    return tuple(tuple(row[::-1]) for row in zip(*grid[::-1]))[::-1]
+#
+#def hmirror(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
+#    return grid[::-1]
+#
+#def vmirror(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
+#    return tuple(row[::-1] for row in grid)
 
 ACTIONS = [
     Action(

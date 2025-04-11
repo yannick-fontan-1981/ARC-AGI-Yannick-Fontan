@@ -8,13 +8,16 @@ from constelize.core.binding import BindingStatus, ArgumentBinding
 @dataclass
 class ActionInstance:
     id: str
-    trainId: str
     action: Action
+    trainId: Optional[str] = None
+    testId: Optional[str] = None
+    isTrain: Optional[bool] = None
     bindings: Dict[str, Any] = field(default_factory=dict)
     isFromInput: Optional[bool] = None
     isToOutput: Optional[bool] = None
     output_var: Optional[str] = None
     output_value: Optional[Any] = None
+    output_type: Optional[str] = None
     used_by: Optional[List[str]] = field(default_factory=list)
     comment: Optional[str] = None
     active: bool = True
