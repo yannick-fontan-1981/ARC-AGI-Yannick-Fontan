@@ -3,7 +3,8 @@
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding
-from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror
+from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
+    zoom
 from typing import Tuple, Any
 
 def shift(patch: Any, directions: Tuple[int, int]) -> Any:
@@ -18,21 +19,6 @@ def normalize(patch: Any) -> Any:
     min_i = min(i for _, (i, j) in patch)
     min_j = min(j for _, (i, j) in patch)
     return shift(patch, (-min_i, -min_j))
-
-#def rot90(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-#    return tuple(zip(*grid[::-1]))
-#
-#def rot180(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-#    return tuple(tuple(row[::-1]) for row in grid[::-1])
-#
-#def rot270(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-#    return tuple(tuple(row[::-1]) for row in zip(*grid[::-1]))[::-1]
-#
-#def hmirror(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-#    return grid[::-1]
-#
-#def vmirror(grid: Tuple[Tuple[int]]) -> Tuple[Tuple[int]]:
-#    return tuple(row[::-1] for row in grid)
 
 ACTIONS = [
     Action(
@@ -113,4 +99,39 @@ ACTIONS = [
         output_type="Grid",
         description="Flip grid horizontally (vertical mirror)."
     ),
+    Action(
+        id="flipped_horiz_90",
+        name="Flip Horizontally After 90°",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        function=rot90_then_vmirror,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid")
+        ],
+        output_type="Grid",
+        description="Flip a grid horizontally after a 90-degree rotation."
+    ),
+    Action(
+        id="flipped_vert_90",
+        name="Flip Vertically After 90°",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        function=rot90_then_hmirror,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid")
+        ],
+        output_type="Grid",
+        description="Flip a grid vertically after a 90-degree rotation."
+    ),
+    Action(
+        id="zoom",
+        name="Zoom",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        function=zoom,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid"),
+            ArgumentBinding(name="zoom_x", type="Integer"),
+            ArgumentBinding(name="zoom_y", type="Integer")
+        ],
+        output_type="Grid",
+        description="Zoom in on a grid by repeating each cell zoom_x times horizontally and zoom_y times vertically."
+    )
 ]

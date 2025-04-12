@@ -5,7 +5,7 @@ import json
 
 from typing import Tuple, List, Union
 
-Grid = Tuple[Tuple[int]]
+Grid = tuple[tuple[int, ...], ...]
 
 def rot90(grid: Grid) -> Grid:
     return tuple(tuple(grid[i][j] for i in range(len(grid) - 1, -1, -1)) for j in range(len(grid[0])))
@@ -16,14 +16,40 @@ def rot180(grid: Grid) -> Grid:
 def rot270(grid: Grid) -> Grid:
     return tuple(tuple(grid[i][j] for i in range(len(grid))) for j in range(len(grid[0]) - 1, -1, -1))
 
-
 def hmirror(grid: Grid) -> Grid:
     return grid[::-1]
-
 
 def vmirror(grid: Grid) -> Grid:
     return tuple(tuple(row[::-1]) for row in grid)
 
+def rot90_then_hmirror(grid: Grid) -> Grid:
+    return rot90(hmirror(grid))
+
+def rot90_then_vmirror(grid: Grid) -> Grid:
+    return rot90(vmirror(grid))
+
+def zoom(grid: Grid, zoom_x: int, zoom_y: int) -> Grid:
+    return tuple(
+        tuple(pixel for pixel in row for _ in range(zoom_x))
+        for row in grid
+        for _ in range(zoom_y)
+    )
+
+def unzoom(grid: Grid, zoom_x: int, zoom_y: int) -> Grid:
+    rows = len(grid)
+    cols = len(grid[0])
+    orig_rows = rows // zoom_y
+    orig_cols = cols // zoom_x
+
+    unzoomed = []
+    for y in range(orig_rows):
+        row = []
+        for x in range(orig_cols):
+            # prendre le pixel en haut à gauche du bloc comme représentant
+            val = grid[y * zoom_y][x * zoom_x]
+            row.append(val)
+        unzoomed.append(tuple(row))  # ou list(row) selon format
+    return tuple(unzoomed)
 
 def shift(grid: Grid, di: int, dj: int) -> Grid:
     rows, cols = len(grid), len(grid[0])

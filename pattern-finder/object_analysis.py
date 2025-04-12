@@ -1,6 +1,10 @@
+# object_analysis.py
+
 import os
 import sqlite3
 import json
+import sys
+
 from sympy import false
 from solver.dsl import *
 import time
@@ -387,7 +391,9 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
 
 
 def main(json_filepath):
-    conn = sqlite3.connect("../db/database.db")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
+    conn = sqlite3.connect(db_path)
     with open(json_filepath, "r") as file:
         data = json.load(file)
     process_objects_from_json(os.path.basename(json_filepath), data, conn)
@@ -395,4 +401,7 @@ def main(json_filepath):
 
 
 if __name__ == "__main__":
-    main("./data/training-1/3c9b0459.json")
+    if len(sys.argv) < 2:
+        print("❌ Please provide a path to a JSON file.")
+    else:
+        main(sys.argv[1])

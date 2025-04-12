@@ -122,34 +122,65 @@ def evaluate_draft_procedure(procedure: Procedure, input_grid, expected_output_g
         print(f"❌ Evaluation failed: {e}")
         return False
 
+
 def auto_link_by_value_and_type(action_instances: list):
     """
     Try to auto-link unresolved input bindings in action_instances
     using available producers with matching value and compatible type.
     """
+
+    print("🔗 Auto-linking values and types for all action instances...")
+
     # Step 1: Pre-fill available outputs from all action instances
     available_outputs = {}  # producer.id -> (producer_instance, value, type)
     for producer in action_instances:
         if getattr(producer, "END", False):
-            continue  # Skip END steps
+            print(f"⛔ Skipping END step: {producer.id}")
+            continue
         if producer.output_value is not None:
             output_type = getattr(producer.action, "output_type", "Any")
             available_outputs[producer.id] = (producer, producer.output_value, output_type)
+            print(f"📤 Registered output from {producer.id} (type={output_type})")
 
-
-    #print(f"available_outputs")
-    #print(available_outputs)
+    print(f"📦 Total available outputs: {len(available_outputs)}\n")
 
     # Step 2: Try to resolve unresolved input bindings
     for consumer in action_instances:
+        print(f"🧩 Inspecting consumer: {consumer.id} ({consumer.action.name})")
         for arg_name, binding in consumer.bindings.items():
+            print(f"🔗 Trying to resolve binding for {consumer.id}.{arg_name}")
+            print(f"    ➤ Required type: {binding.type}, Current value: {binding.value}")
+
             if binding.binding != BindingStatus.UNRESOLVED:
+                print(f"    🔒 Already resolved (binding={binding.binding}), skipping.")
                 continue
 
+            matched = False
             for producer_id, (producer, value, out_type) in available_outputs.items():
-                # Match by value and compatible type (never touch binding.value)
+                print(f"    ↪ Checking producer {producer.id} (output_type={out_type})")
+                print(f"      ➤ Output value = {value}")
+
+                if values_equal(value, binding.value, binding.type):
+                    print("      🎯 Value match!")
+                else:
+                    print("      ❌ Value mismatch")
+
+                if can_convert(out_type, binding.type):
+                    print("      🎯 Type is compatible!")
+                else:
+                    print("      ❌ Type incompatible")
+
                 if values_equal(value, binding.value, binding.type) and can_convert(out_type, binding.type):
+                    print(f"    ✅ Linking {producer.id} → {consumer.id}.{arg_name} 🧬")
                     link_producer_to_consumer(binding, producer, consumer)
+                    matched = True
+                    break
+
+            if not matched:
+                print(f"    ❌ No match found for {consumer.id}.{arg_name} ❓")
+        print("")
+
+    print("✅ Auto-linking complete.\n")
 
 def values_equal(v1, v2, type_name):
     if type_name == "Grid":
@@ -178,6 +209,8 @@ def link_producer_to_consumer(binding, producer, consumer):
         # Do NOT change binding.value
         binding.source_procedure_id = producer.id
 
+    print(f"🔁 Link created: {producer.id} → {consumer.id}.{binding.name} | status = {binding.binding}")
+
 def generate_procedures_by_train(action_instances: list) -> dict:
     """
     Crée une procédure par trainId pour les actions issues des données d'entraînement uniquement.
@@ -201,18 +234,29 @@ def test_generic_procs_on_trains(generic_procs, arc_json_data) -> List[dict]:
     Teste chaque procédure générique sur tous les exemples d'entraînement d’un fichier ARC.
     Retourne une liste de résultats avec réussite ou échec.
     """
+    from constelize.dsl.grid_dsl import grids_equal
+    from constelize.tools.pattern_analysis import evaluate_procedure_on_input, clone_procedure
+
     results = []
     train_data = arc_json_data["train"]
 
     for trainId, train in enumerate(train_data):
         input_grid = train["input"]
         expected_output = train["output"]
+        print(f"\n🔍 Testing trainId={trainId}")
 
         for proc in generic_procs:
+            print(f"🚀 Testing procedure {proc.id} on trainId={trainId}")
             cloned = clone_procedure(proc)
             evaluated_output = evaluate_procedure_on_input(cloned, input_grid)
 
             success = grids_equal(evaluated_output, expected_output)
+            status = "✅ SUCCESS" if success else "❌ FAIL"
+            print(f"   ➤ {status} for procedure {proc.id}")
+            if not success:
+                print(f"     🔴 Expected: {expected_output}")
+                print(f"     🔵 Got     : {evaluated_output}")
+
             results.append({
                 "trainId": trainId,
                 "procedure_id": proc.id,
@@ -250,6 +294,10 @@ def evaluate_procedure_on_input(procedure, input_grid) -> any:
 
         print(f"   📦 Final args for step: {args}")
 
+        print(f"\n🧪 Running step: {step.id} ({step.action.name})")
+        print(f"   🔧 Args passed to function:")
+        for k, v in args.items():
+            print(f"     🔸 {k}: {type(v).__name__} = {v}")
         try:
             if step.action.name == "Get Input Grid":
                 result = input_grid
@@ -415,10 +463,13 @@ def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_p
     with open(output_path, "w") as f:
         for r in results:
             if r["success"] is True:
+                print(f"✅ testId={r['testId']}: success\n")
                 f.write(f"✅ testId={r['testId']}: success\n")
             elif r["success"] is False:
+                print(f"❌ testId={r['testId']}: failed, score={r['score']} ({r['percentage']})\n")
                 f.write(f"❌ testId={r['testId']}: failed, score={r['score']} ({r['percentage']})\n")
             else:
+                print(f"⚠️ testId={r['testId']}: {r['reason']}\n")
                 f.write(f"⚠️ testId={r['testId']}: {r['reason']}\n")
 
     print(f"📊 Comparison report written to {output_path}")

@@ -1,3 +1,5 @@
+# utils.py
+
 import sqlite3
 import os
 
@@ -451,6 +453,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         flipped_horiz BOOLEAN NOT NULL DEFAULT 0,
         flipped_vert_90 BOOLEAN NOT NULL DEFAULT 0,
         flipped_horiz_90 BOOLEAN NOT NULL DEFAULT 0,
+        zoom_x INTEGER NOT NULL DEFAULT 1,
+        zoom_y INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY (shape_id) REFERENCES shape(id)
     );
     """)
@@ -602,6 +606,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             flipped_horiz BOOLEAN NOT NULL DEFAULT 0,
             flipped_vert_90 BOOLEAN NOT NULL DEFAULT 0,
             flipped_horiz_90 BOOLEAN NOT NULL DEFAULT 0,
+            zoom_x INTEGER NOT NULL DEFAULT 1,
+            zoom_y INTEGER NOT NULL DEFAULT 1,
             FOREIGN KEY (sprite_unique_id) REFERENCES sprite_unique(id)
         );
         """)

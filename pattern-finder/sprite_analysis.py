@@ -1,7 +1,11 @@
+# sprite_analysis.py
+
 import os
 import sqlite3
 import json
 import math
+import sys
+
 from solver.dsl import (
     safe_divide,
     compute_pixel_perimeter,
@@ -122,41 +126,6 @@ def find_existing_sprite(sprite_grid, global_data):
             return global_data["sprites_map"][canon]
     return None
 
-
-def compute_transformation_flags(sprite_grid):
-    """
-    Compute and return a tuple of eight booleans for the sprite:
-      (inverted, rotated_90, rotated_180, rotated_270,
-       flipped_vert, flipped_horiz, flipped_vert_90, flipped_horiz_90)
-
-    Here, for simplicity, "inverted" could be defined as a sprite that remains the same
-    after inverting its colors (if that makes sense) or you may set it to False if not used.
-    Adjust this logic as needed.
-    """
-    base_obj = safe_asobject(sprite_grid)
-
-    # For the rotations and mirrors, we use our sprite-specific functions
-    r90 = safe_asobject(rot90Sprite(sprite_grid))
-    r180 = safe_asobject(rot180Sprite(sprite_grid))
-    r270 = safe_asobject(rot270Sprite(sprite_grid))
-    fv = safe_asobject(vmirrorSprite(sprite_grid))
-    fh = safe_asobject(hmirrorSprite(sprite_grid))
-    fv90 = safe_asobject(vmirrorSprite(rot90Sprite(sprite_grid)))
-    fh90 = safe_asobject(hmirrorSprite(rot90Sprite(sprite_grid)))
-
-    # Here, we set "inverted" to False (or you can implement your own inversion check)
-    inverted = False
-
-    return (inverted,
-            base_obj == r90,
-            base_obj == r180,
-            base_obj == r270,
-            base_obj == fv,
-            base_obj == fh,
-            base_obj == fv90,
-            base_obj == fh90)
-
-
 def detect_transformations(sprite_data, global_data):
     base_canon = canonical_sprite_representation(sprite_data)
     transformations = [
@@ -252,14 +221,14 @@ def find_existing_sprite_and_flags(sprite_data, global_data):
     fv90_obj = vmirrorSprite(r90_obj)
     fv90_canon = canonical_sprite_representation(fv90_obj)
     transformations_to_test.append((fv90_canon,
-        (inverted, False, False, False, False, False, True, False)
+        (inverted, False, False, False, False, False, False, True)
     ))
 
     # 8) flipped_horiz_90
     fh90_obj = hmirrorSprite(r90_obj)
     fh90_canon = canonical_sprite_representation(fh90_obj)
     transformations_to_test.append((fh90_canon,
-        (inverted, False, False, False, False, False, False, True)
+        (inverted, False, False, False, False, False, True, False)
     ))
 
     # Step B: test each transformation in order
@@ -274,34 +243,26 @@ def find_existing_sprite_and_flags(sprite_data, global_data):
     # is "original" in your final usage.
     return (None, transformations_to_test[0][1])  # i.e., the original's flags
 
-
-
 def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
     """
     Insert a sprite into sprite_unique and sprite_occurrence tables,
     avoiding duplicates. Use a unified function that both detects duplicates
     and computes transformation flags, so we know exactly which transformation matched.
     """
+    from constelize.dsl.grid_dsl import to_concrete_grid
 
-    # 1) Use a unified function that returns (existing_sprite_id, flags),
-    #    e.g. find_existing_sprite_and_flags(sprite_grid, global_data).
-    #    If no existing sprite is found, existing_sprite_id = None, but we still get flags
-    #    for the *original* sprite (or whichever transformation we choose as default).
     existing_sprite_id, flags = find_existing_sprite_and_flags(sprite_grid, global_data)
     (inverted, r90, r180, r270, fv, fh, fv90, fh90) = flags
 
-    # 2) If we found an existing sprite, reuse its ID. Otherwise create a new sprite_unique entry.
     if existing_sprite_id is not None:
         sprite_unique_id = existing_sprite_id
     else:
         sprite_unique_id = global_data["next_sprite_id"]
         global_data["next_sprite_id"] += 1
 
-        # Use canonical representation for the original (or whichever base transform we want).
         canon = canonical_sprite_representation(sprite_grid)
         global_data["sprites_map"][canon] = sprite_unique_id
 
-        # Build sprite_unique record
         h = len(sprite_grid)
         w = len(sprite_grid[0]) if h > 0 else 0
         pixel_count = h * w
@@ -326,17 +287,52 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
         }
         global_data["sprite_unique_records"].append(rec)
 
-    # 3) Manage the sprite_transformation record
     tkey = (sprite_unique_id, inverted, r90, r180, r270, fv, fh, fv90, fh90)
 
     if tkey in global_data["sprite_trans_map"]:
-        # If it’s already recorded, reuse that ID
         sprite_transformation_id = global_data["sprite_trans_map"][tkey]
     else:
-        # Create a new sprite_transformation record
         sprite_transformation_id = global_data["next_sprite_trans_id"]
         global_data["next_sprite_trans_id"] += 1
         global_data["sprite_trans_map"][tkey] = sprite_transformation_id
+
+        zoom_x, zoom_y, is_rotated = (1, 1, False)
+
+        # Try to find a zoom relation to another smaller sprite
+        transformations = {
+            "original": lambda g: g,
+            "rot90": rot90,
+            "rot180": rot180,
+            "rot270": rot270,
+            "hmirror": hmirror,
+            "vmirror": vmirror,
+            "vmirror_rot90": lambda g: vmirror(rot90(g)),
+            "hmirror_rot90": lambda g: hmirror(rot90(g)),
+        }
+
+        for other_rec in global_data["sprite_unique_records"]:
+            other_grid = to_concrete_grid(json.loads(other_rec["data"]))
+
+            for name, transform in transformations.items():
+                transformed = transform(other_grid)
+                zx, zy, rotated = detect_zoom_factors(transformed, sprite_grid)
+                if zx != 1 or zy != 1:
+                    zoomed = [
+                        [transformed[i // zy][j // zx] for j in range(zx * len(transformed[0]))]
+                        for i in range(zy * len(transformed))
+                    ]
+                    #print(f"🔍 Trying zoomed from {name} → zx={zx}, zy={zy}")
+                    #print("🔄 Zoomed:")
+                    #for row in zoomed:
+                    #    print("   ", row)
+                    #print("🆚 Target:")
+                    #for row in sprite_grid:
+                    #    print("   ", row)
+
+                    if zoomed == sprite_grid:
+                        #print(f"🎯 Zoom match confirmed from {name} → zx={zx}, zy={zy}, rotated={rotated}")
+                        zoom_x, zoom_y, is_rotated = zx, zy, rotated
+                        break
 
         trec = {
             "id": sprite_transformation_id,
@@ -348,11 +344,12 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
             "flipped_vert": fv,
             "flipped_horiz": fh,
             "flipped_vert_90": fv90,
-            "flipped_horiz_90": fh90
+            "flipped_horiz_90": fh90,
+            "zoom_x": zoom_x,
+            "zoom_y": zoom_y
         }
         global_data["sprite_trans_records"].append(trec)
 
-    # 4) Build the occurrence record
     occ = {
         "sprite_unique_id": sprite_unique_id,
         "sprite_transformation_id": sprite_transformation_id,
@@ -362,12 +359,11 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
         "isInsideTest":   attr_dict["isInsideTest"],
         "trainId": attr_dict["trainId"] if attr_dict["isInsideTrain"] else -1,
         "testId":  attr_dict["testId"]  if attr_dict["isInsideTest"]  else -1,
-        "sprite_id": attr_dict["id"],  # If linking to some "sprite_analysis" row
+        "sprite_id": attr_dict["id"],
         "minX": attr_dict["minX"],
         "minY": attr_dict["minY"]
     }
     global_data["sprite_occ_records"].append(occ)
-
 
 
 ###############################################
@@ -930,12 +926,12 @@ def compute_splitter_sprite(grid, filename, trainId, testId, isInsideInput):
     return []
 
 def pad_grid(grid, pad_value, pad_width=1):
-    print("----------------------")
-    print("pad_grid")
-    print("grid", grid)
-    print("pad_value", pad_value)
-    print("pad_width", pad_width)
-    print("----------------------")
+    #print("----------------------")
+    #print("pad_grid")
+    #print("grid", grid)
+    #print("pad_value", pad_value)
+    #print("pad_width", pad_width)
+    #print("----------------------")
     """
     Pads a 2D grid (list of lists) with pad_width layers of pad_value on all sides.
     """
@@ -953,12 +949,12 @@ def pad_grid(grid, pad_value, pad_width=1):
     return new_grid
 
 def pad_mask(mask, pad_value=False, pad_width=1):
-    print("----------------------")
-    print("pad_mask")
-    print("mask", mask)
-    print("pad_value", pad_value)
-    print("pad_width", pad_width)
-    print("----------------------")
+    #print("----------------------")
+    #print("pad_mask")
+    #print("mask", mask)
+    #print("pad_value", pad_value)
+    #print("pad_width", pad_width)
+    #print("----------------------")
     """
     Pads a 2D Boolean mask (list of lists) with pad_width layers of pad_value on all sides.
     """
@@ -976,10 +972,10 @@ def pad_mask(mask, pad_value=False, pad_width=1):
     return new_mask
 
 def count_gap_groups(line):
-    print("----------------------")
-    print("count_gap_groups")
-    print("line", line)
-    print("----------------------")
+    #print("----------------------")
+    #print("count_gap_groups")
+    #print("line", line)
+    #print("----------------------")
     """
     Given a list of booleans (True for object, False for gap),
     count the number of contiguous groups of False.
@@ -996,10 +992,10 @@ def count_gap_groups(line):
     return groups
 
 def eligible_border_gap(borders):
-    print("----------------------")
-    print("eligible_border_gap")
-    print("borders", borders)
-    print("----------------------")
+    #print("----------------------")
+    #print("eligible_border_gap")
+    #print("borders", borders)
+    #print("----------------------")
     """
     Decide if an object is border-active.
     If it touches a border, check the total gap groups. If exactly 1, we call it border-active.
@@ -1415,13 +1411,38 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     bulk_insert(conn, "sprite_occurrence", sprite_global_data["sprite_occ_records"])
     conn.commit()
 
+def detect_zoom_factors(from_sprite, to_sprite):
+    h1, w1 = len(from_sprite), len(from_sprite[0])
+    h2, w2 = len(to_sprite), len(to_sprite[0])
+
+    #print(f"🧩 Detecting zoom factors:")
+    #print(f"   → from_sprite size: {h1}x{w1}")
+    #print(f"   → to_sprite size:   {h2}x{w2}")
+
+    # Normal orientation
+    if h2 % h1 == 0 and w2 % w1 == 0:
+        zx, zy = w2 // w1, h2 // h1
+        #print(f"   ✅ Detected zoom (no rotation): x{zx}, y{zy}")
+        return (zx, zy, False)
+
+    # Rotated 90° or 270°
+    if w2 % h1 == 0 and h2 % w1 == 0:
+        zx, zy = h2 // w1, w2 // h1
+        #print(f"   ✅ Detected zoom (rotated): x{zx}, y{zy}")
+        return (zx, zy, True)
+
+    #print(f"   ❌ No valid zoom factor found, returning (1,1)")
+    return (1, 1, False)
+
 
 ###############################################
 # Main function
 ###############################################
 
 def main(json_filepath):
-    conn = sqlite3.connect("../db/database.db")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
+    conn = sqlite3.connect(db_path)
     with open(json_filepath, "r") as file:
         data = json.load(file)
     process_sprites_from_json(os.path.basename(json_filepath), data, conn)
@@ -1429,5 +1450,8 @@ def main(json_filepath):
 
 
 if __name__ == "__main__":
-    main("./data/training-1/3c9b0459.json")
-#   main("./data/tests/test_sprites_1.json")
+    if len(sys.argv) < 2:
+        #print("❌ Please provide a path to a JSON file.")
+        main("D:\\dev\\ARC-AGI\\ARC-AGI-Yannick-Fontan\\pattern-finder\\data\\training-1\\9172f3a0.json")
+    else:
+        main(sys.argv[1])

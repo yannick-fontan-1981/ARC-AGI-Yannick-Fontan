@@ -1,8 +1,1 @@
-✅ TRAINING RESULTS:
-✅ trainId=0, proc=squeezed_proc_1
-✅ trainId=1, proc=squeezed_proc_1
-✅ trainId=2, proc=squeezed_proc_1
-✅ trainId=3, proc=squeezed_proc_1
-
-✅ TEST RESULTS:
-✅ testId=0, proc=squeezed_proc_1
+✅ TRAINING RESULTS:\n✅ trainId=0, proc=squeezed_proc_1\n✅ trainId=1, proc=squeezed_proc_1\n✅ trainId=2, proc=squeezed_proc_1\n✅ trainId=3, proc=squeezed_proc_1\n\n✅ TEST RESULTS:\n✅ testId=0, proc=squeezed_proc_1\n
