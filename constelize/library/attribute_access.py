@@ -21,15 +21,25 @@ def color(obj) -> int:
 def size(container) -> int:
     return len(container)
 
+def get_start_input_fn(**kwargs):
+    # In evaluation, if the grid is injected via a keyword (because its binding is INPUT_GRID),
+    # simply return that value. Otherwise, fall back to the ActionInstance’s output_value.
+    # (You may choose to prefer the externally injected grid over the stored output_value.)
+    return kwargs.get("grid") or kwargs.get("output_value")
+
 ACTIONS = [
     Action(
         id="get_start_input",
         name="Get Input Grid",
-        description="Returns the input grid unchanged (used as starting point)",
-        category=ActionCategory.ATTRIBUTE_ACCESS,
-        input_arguments=[],
+        description="Pass-through action for the input grid.",
+        category=ActionCategory.ATTRIBUTE_ACCESS,  # or another appropriate category
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.INPUT_GRID)
+        ],
         output_type="Grid",
-        function=lambda: None
+        function=get_start_input_fn,
+        deterministic=True,
+        pure=True
     ),
     Action(
         id="get_height",

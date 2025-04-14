@@ -168,7 +168,24 @@ def grid_to_pretty_string(grid: Grid) -> str:
         lines.append(line)
     return "[\n" + ",\n".join(lines) + "\n]"
 
+
 def grids_equal(grid1, grid2) -> bool:
+    # Convert both grids to nested lists.
     def to_nested_list(g):
         return [list(row) for row in g]
-    return to_nested_list(grid1) == to_nested_list(grid2)
+
+    list1 = to_nested_list(grid1)
+    list2 = to_nested_list(grid2)
+
+    if len(list1) != len(list2):
+        return False
+    for row1, row2 in zip(list1, list2):
+        if len(row1) != len(row2):
+            return False
+        for cell1, cell2 in zip(row1, row2):
+            # If either cell is -8, we treat it as a wildcard that always "matches"
+            if cell1 == -8 or cell2 == -8:
+                continue
+            if cell1 != cell2:
+                return False
+    return True

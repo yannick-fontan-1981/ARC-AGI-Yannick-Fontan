@@ -17,7 +17,8 @@ class BindingStatus(Enum):
     CONSTANT = auto()       # Fixed across all training examples
     VARIABLE = auto()       # Needs to be computed by another procedure
     UNRESOLVED = auto()     # Currently unknown; needs to be resolved
-    MULTIPLE = auto()
+    MULTIPLE = auto()       # Must do a cartesian product of all scenario
+    INPUT_GRID = auto()     # Value must be injected from the JSON input
 
 @dataclass
 class ArgumentBinding:

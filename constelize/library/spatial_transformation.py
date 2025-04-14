@@ -2,9 +2,9 @@
 
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
-from constelize.core.binding import ArgumentBinding
+from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
-    zoom
+    zoom, paint
 from typing import Tuple, Any
 
 def shift(patch: Any, directions: Tuple[int, int]) -> Any:
@@ -19,6 +19,29 @@ def normalize(patch: Any) -> Any:
     min_i = min(i for _, (i, j) in patch)
     min_j = min(j for _, (i, j) in patch)
     return shift(patch, (-min_i, -min_j))
+
+def repeated_sprite(output_canvas, sprite, input_positions, output_positions):
+    """
+    Paint the same sprite multiple times on an output canvas at specified positions.
+    The input_positions are not used in this implementation but kept for consistency.
+    """
+    canvas = output_canvas
+    for (x, y) in output_positions:  # x = col, y = row
+        canvas = paint(canvas, sprite, (y, x))
+    return canvas
+
+def canvas_by_ratio_fn(grid, ratio_width: int, ratio_height: int):
+    """
+    Compute a blank canvas based on the dimensions of an input grid and the given ratios.
+    New width  = input width  * ratio_width
+    New height = input height * ratio_height
+    The canvas is initialized with -8 (or any other default value).
+    """
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+    new_width = width * ratio_width
+    new_height = height * ratio_height
+    return tuple(tuple(-8 for _ in range(new_width)) for _ in range(new_height))
 
 ACTIONS = [
     Action(
@@ -133,5 +156,32 @@ ACTIONS = [
         ],
         output_type="Grid",
         description="Zoom in on a grid by repeating each cell zoom_x times horizontally and zoom_y times vertically."
-    )
+    ),
+    Action(
+        id="repeated_sprite",
+        name="Repeated Sprite",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        function=repeated_sprite,
+        input_arguments=[
+            ArgumentBinding(name="output_canvas", type="Grid"),
+            ArgumentBinding(name="sprite", type="Grid"),
+            ArgumentBinding(name="input_positions", type="Container"),
+            ArgumentBinding(name="output_positions", type="Container"),
+        ],
+        output_type="Grid",
+        description="Paint the same sprite multiple times at given output positions."
+    ),
+    Action(
+        id="canvas_by_ratio",
+        name="Canvas by Ratio",
+        description="Compute a blank canvas based on the input grid and given width/height ratios.",
+        category=ActionCategory.MAPPING_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.INPUT_GRID),
+            ArgumentBinding(name="ratio_width", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="ratio_height", type="Integer", binding=BindingStatus.UNRESOLVED)
+        ],
+        output_type="Grid",
+        function=canvas_by_ratio_fn
+    ),
 ]

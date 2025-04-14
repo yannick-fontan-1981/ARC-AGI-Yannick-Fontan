@@ -1,32 +1,54 @@
+# constelize/tools/fact_to_action_mapping.py
+
 import json
 import sqlite3
-from typing import Callable, List, Optional
-from constelize.core.procedure import ActionInstance
+from typing import List, Optional, Dict
+from collections import defaultdict
+from itertools import product
+
+from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom
-from constelize.library.spatial_transformation import zoom as zoom_function
+from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
 
+# Instantiate and register all actions.
 registry = ActionRegistry()
 registry.register_all_actions()
 
-END_OUTPUTS_BY_TRAINID = {}
+# Global unique ID counter for ActionInstances.
 _unique_id = 0
-
-def getUniqueId():
+def getUniqueId() -> str:
     global _unique_id
     _unique_id += 1
     return str(_unique_id)
 
+# Global dictionary for expected outputs (populated from JSON).
+END_OUTPUTS_BY_TRAINID: Dict[int, any] = {}
 def load_end_outputs_from_json(json_path: str):
     global END_OUTPUTS_BY_TRAINID
     with open(json_path, "r") as f:
         data = json.load(f)
     END_OUTPUTS_BY_TRAINID = {
         trainId: train["output"]
-        for trainId, train in enumerate(data["train"])
+        for trainId, train in enumerate(data.get("train", []))
     }
 
+# Global dictionaries for input grids.
+TRAIN_INPUT_GRIDS: Dict[int, any] = {}
+TEST_INPUT_GRIDS: Dict[int, any] = {}
+def load_json_inputs_from_json(json_path: str):
+    global TRAIN_INPUT_GRIDS, TEST_INPUT_GRIDS
+    with open(json_path, "r") as f:
+        data = json.load(f)
+    for trainId, item in enumerate(data.get("train", [])):
+        TRAIN_INPUT_GRIDS[trainId] = item["input"]
+    for testId, item in enumerate(data.get("test", [])):
+        TEST_INPUT_GRIDS[testId] = item["input"]
+
+# =============================================================================
+# Base FactToActionMapping class.
+# =============================================================================
 class FactToActionMapping:
     def __init__(
         self,
@@ -62,7 +84,6 @@ class FactToActionMapping:
         raw_data = json.loads(row["data"])
         input_grid = to_concrete_grid(raw_data)
         output_grid = self.action.function(input_grid)
-
         trainId = row["trainId"]
         return ActionInstance(
             id=f"{self.action_id}_instance_{row['sprite_unique_id']}#{getUniqueId()}",
@@ -71,8 +92,8 @@ class FactToActionMapping:
                 "grid": ArgumentBinding(
                     name="grid",
                     type="Grid",
-                    binding=BindingStatus.UNRESOLVED,
-                    value=input_grid
+                    binding=BindingStatus.INPUT_GRID,  # now use INPUT_GRID
+                    value=None  # value will be injected during evaluation
                 )
             },
             output_var=f"{self.action_id}_grid",
@@ -80,11 +101,14 @@ class FactToActionMapping:
             output_type=self.action.output_type,
             trainId=trainId,
             testId=row["testId"],
-            isTrain=trainId > -1,
+            isTrain=trainId != -1,
             isToOutput=row["isInsideOutput"],
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
+# =============================================================================
+# ZoomFactToAction: mapping for zoom.
+# =============================================================================
 class ZoomFactToAction(FactToActionMapping):
     def __init__(self):
         super().__init__("zoom", "zoom")
@@ -112,7 +136,6 @@ class ZoomFactToAction(FactToActionMapping):
         zoom_x = int(row["zoom_x"])
         zoom_y = int(row["zoom_y"])
         input_grid = unzoom(output_grid, zoom_x, zoom_y)
-
         trainId = row["trainId"]
         return ActionInstance(
             id=f"zoom_instance_{row['sprite_unique_id']}#{getUniqueId()}",
@@ -126,14 +149,14 @@ class ZoomFactToAction(FactToActionMapping):
                 ),
                 "zoom_x": ArgumentBinding(
                     name="zoom_x",
-                    type="int",
-                    binding=BindingStatus.CONSTANT,
+                    type="Integer",
+                    binding=BindingStatus.UNRESOLVED,
                     value=zoom_x
                 ),
                 "zoom_y": ArgumentBinding(
                     name="zoom_y",
-                    type="int",
-                    binding=BindingStatus.CONSTANT,
+                    type="Integer",
+                    binding=BindingStatus.UNRESOLVED,
                     value=zoom_y
                 )
             },
@@ -142,16 +165,224 @@ class ZoomFactToAction(FactToActionMapping):
             output_type=self.action.output_type,
             trainId=trainId,
             testId=row["testId"],
-            isTrain=trainId > -1,
+            isTrain=trainId != -1,
             isToOutput=row["isInsideOutput"],
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
+# =============================================================================
+# RepeatedSpriteFactToAction: mapping for repeated sprite.
+# =============================================================================
+class RepeatedSpriteFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("repeated_sprite", "repeated_sprite")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        query = """
+        SELECT
+            so.sprite_unique_id,
+            so.sprite_transformation_id,
+            so.trainId,
+            so.testId,
+            su.data,
+            COALESCE('[' || GROUP_CONCAT(
+                CASE WHEN so.isInsideInput = 1
+                     THEN '[' || so.minX || ',' || so.minY || ']'
+                END, ','
+            ) || ']', '[]') AS inputCoords,
+            COALESCE('[' || GROUP_CONCAT(
+                CASE WHEN so.isInsideOutput = 1
+                     THEN '[' || so.minX || ',' || so.minY || ']'
+                END, ','
+            ) || ']', '[]') AS outputCoords
+        FROM sprite_occurrence AS so
+        JOIN sprite_unique AS su ON su.id = so.sprite_unique_id
+        WHERE (so.sprite_unique_id, so.sprite_transformation_id) IN (
+            SELECT sprite_unique_id, sprite_transformation_id
+            FROM sprite_occurrence
+            GROUP BY sprite_unique_id, sprite_transformation_id
+            HAVING COUNT(*) > 1
+        )
+        GROUP BY so.sprite_unique_id, so.sprite_transformation_id, so.trainId, so.testId, su.data
+        ORDER BY so.sprite_unique_id, so.trainId, so.testId;
+        """
+        cursor = conn.execute(query)
+        columns = [desc[0] for desc in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        from constelize.dsl.grid_dsl import to_concrete_grid, paint
+        sprite_grid = to_concrete_grid(json.loads(row["data"]))
+        input_coords = json.loads(row["inputCoords"])
+        output_coords = json.loads(row["outputCoords"])
+        action = self.action
+        trainId = row["trainId"]
+        testId = row["testId"]
+        output_grid_raw = END_OUTPUTS_BY_TRAINID.get(trainId)
+        if output_grid_raw is None:
+            raise ValueError(f"❌ Missing output grid for trainId={trainId}")
+        anonymized_canvas = tuple([tuple(-8 for _ in row) for row in output_grid_raw])
+        painted_canvas = anonymized_canvas
+        for (x, y) in output_coords:
+            painted_canvas = paint(painted_canvas, sprite_grid, (y, x))
+        return ActionInstance(
+            id=f"repeated_sprite_{row['sprite_unique_id']}#{getUniqueId()}",
+            action=self.action,
+            bindings={
+                "output_canvas": ArgumentBinding(
+                    name="output_canvas",
+                    type="Grid",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=anonymized_canvas
+                ),
+                "sprite": ArgumentBinding(
+                    name="sprite",
+                    type="Grid",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=sprite_grid
+                ),
+                "input_positions": ArgumentBinding(
+                    name="input_positions",
+                    type="Container",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=input_coords
+                ),
+                "output_positions": ArgumentBinding(
+                    name="output_positions",
+                    type="Container",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=output_coords
+                )
+            },
+            output_var="repeated_grid",
+            output_value=painted_canvas,
+            output_type="Grid",
+            trainId=trainId,
+            testId=testId,
+            isTrain=trainId != -1,
+            isToOutput=True,
+            END=False
+        )
+
+# =============================================================================
+# CanvasByRatioFactToAction: mapping for canvas by ratio.
+# =============================================================================
+class CanvasByRatioFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("canvas_by_ratio", "canvas_by_ratio")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        query = """
+        SELECT
+          input.trainId,
+          input.width  AS input_width,
+          input.height AS input_height,
+          output.width AS output_width,
+          output.height AS output_height,
+          (output.width * 1.0 / input.width)  AS ratio_width,
+          (output.height * 1.0 / input.height) AS ratio_height
+        FROM sprite_analysis AS input
+        JOIN sprite_analysis AS output
+          ON input.trainId = output.trainId
+        WHERE
+          input.isInsideInput = 1 AND input.isGrid = 1
+          AND output.isInsideOutput = 1 AND output.isGrid = 1
+        """
+        cursor = conn.execute(query)
+        rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        all_rows = [dict(zip(columns, row)) for row in rows]
+        if not all_rows:
+            return []
+        first = all_rows[0]
+        rw = first["ratio_width"]
+        rh = first["ratio_height"]
+        # Ensure all ratios are identical and integer-valued.
+        for row in all_rows:
+            if row["ratio_width"] != rw or row["ratio_height"] != rh:
+                return []
+            if not rw.is_integer() or not rh.is_integer():
+                return []
+        return all_rows
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        from constelize.library.spatial_transformation import canvas_by_ratio_fn
+        ratio_w = int(row["ratio_width"])
+        ratio_h = int(row["ratio_height"])
+        action = self.action
+        # Retrieve the trainId; a valid training fact has trainId != -1.
+        trainId = row.get("trainId", -1)
+        if trainId != -1:
+            print("TRAIN_INPUT_GRIDS")
+            print(TRAIN_INPUT_GRIDS)
+            if trainId in TRAIN_INPUT_GRIDS:
+                input_grid = TRAIN_INPUT_GRIDS[trainId]
+                print(f"[CanvasByRatio] Using TRAIN_INPUT_GRIDS for trainId {trainId}: {input_grid}")
+            else:
+                raise ValueError(f"No input grid found in TRAIN_INPUT_GRIDS for trainId {trainId}")
+        else:
+            print("TEST_INPUT_GRIDS")
+            print(TEST_INPUT_GRIDS)
+            testId = row.get("testId", -1)
+            if testId in TEST_INPUT_GRIDS:
+                input_grid = TEST_INPUT_GRIDS[testId]
+                print(f"[CanvasByRatio] Using TEST_INPUT_GRIDS for testId {testId}: {input_grid}")
+            else:
+                raise ValueError(f"No input grid found in TEST_INPUT_GRIDS for testId {testId}")
+        output_grid = canvas_by_ratio_fn(input_grid, ratio_w, ratio_h)
+        print(f"[CanvasByRatio] For id {trainId if trainId != -1 else row.get('testId', -1)}, using ratio=({ratio_w}, {ratio_h}), computed canvas: {output_grid}")
+        return ActionInstance(
+            id=f"canvas_by_ratio#{getUniqueId()}",
+            action=action,
+            bindings={
+                "grid": ArgumentBinding(
+                    name="grid",
+                    type="Grid",
+                    binding=BindingStatus.INPUT_GRID,  # Mark with INPUT_GRID status so evaluation engine injects the grid.
+                    value=None
+                ),
+                "ratio_width": ArgumentBinding(
+                    name="ratio_width",
+                    type="Integer",
+                    binding=BindingStatus.CONSTANT,
+                    value=ratio_w
+                ),
+                "ratio_height": ArgumentBinding(
+                    name="ratio_height",
+                    type="Integer",
+                    binding=BindingStatus.CONSTANT,
+                    value=ratio_h
+                )
+            },
+            output_var="canvas_grid",
+            output_value=output_grid,
+            output_type="Grid",
+            trainId=trainId,
+            testId=row.get("testId", -1),
+            isTrain=(trainId != -1),
+            isToOutput=True,
+            END=False
+        )
+
+# =============================================================================
+# build_start_input: Now modified to use BindingStatus.INPUT_GRID
+# =============================================================================
 def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_grid") -> ActionInstance:
     return ActionInstance(
         id=f"start_input_{'train' if isTrain else 'test'}_{id}#{getUniqueId()}",
         action=registry.get_by_id("get_start_input"),
-        bindings={},
+        bindings={
+            "grid": ArgumentBinding(
+                name="grid",
+                type="Grid",
+                binding=BindingStatus.INPUT_GRID,
+                value=None  # the grid will be injected during evaluation
+            )
+        },
         output_var=output_var,
         output_value=grid,
         trainId=id if isTrain else -1,
@@ -161,6 +392,9 @@ def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_gri
         isToOutput=False
     )
 
+# =============================================================================
+# FACT_TO_ACTION_MAPPING: list of all mappings.
+# =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     FactToActionMapping("rotated_90", "rotate_90"),
     FactToActionMapping("rotated_180", "rotate_180"),
@@ -170,4 +404,6 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
     FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
     ZoomFactToAction(),
+    RepeatedSpriteFactToAction(),
+    CanvasByRatioFactToAction(),
 ]

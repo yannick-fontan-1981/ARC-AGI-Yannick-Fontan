@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import List, Dict
 from collections import defaultdict, deque
 from itertools import product
@@ -64,7 +65,19 @@ def normalize_procedures_with_levels(procedures: List[Procedure]) -> List[Proced
 
     return normalized
 
-def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure]:
+def make_hashable(val):
+    if isinstance(val, list):
+        return tuple(make_hashable(x) for x in val)
+    elif isinstance(val, dict):
+        return tuple(sorted((k, make_hashable(v)) for k, v in val.items()))
+    else:
+        return val
+from collections import defaultdict
+from itertools import product
+from typing import List, Dict
+# Assuming you have an appropriate make_hashable function defined somewhere.
+
+def squeeze_with_remapped_sources_old(procedures: List[Procedure]) -> List[Procedure]:
     if not procedures:
         return []
 
@@ -73,6 +86,7 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
         for i, step in enumerate(proc.steps.values()):
             aligned_steps[i].append(step)
 
+    # Start with one generic procedure represented as a dict mapping step IDs to ActionInstances.
     generic_procedures = [{}]
     action_counters = defaultdict(int)
     global_id_remap: Dict[str, str] = {}
@@ -83,17 +97,10 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
         step_group = aligned_steps[i]
         action_names = {step.action.name for step in step_group}
         print(f"\n🧱 Step group {i + 1}: {action_names}")
+        # Removed the branch that forced a merge when actions diverge.
+        # We keep all steps as they are.
 
-        has_get_input = "Get Input Grid" in action_names
-        if len(action_names) != 1:
-            if has_get_input:
-                print("ℹ️  Including 'Get Input Grid' despite divergence.")
-                step_group = [s for s in step_group if s.action.name == "Get Input Grid"]
-            else:
-                print("⚠️  Diverging actions in step group — skipping")
-                continue
-
-        action_ref = step_group[0].action
+        # Collect binding info from the step group.
         bindings_by_arg = defaultdict(set)
         types_by_arg = {}
         original_source_ids_by_arg = {}
@@ -104,7 +111,7 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
                 types_by_arg[arg_name] = binding.type
                 original_binding_map[arg_name] = binding
                 if binding.binding == BindingStatus.CONSTANT:
-                    bindings_by_arg[arg_name].add(binding.value)
+                    bindings_by_arg[arg_name].add(make_hashable(binding.value))
                 elif binding.binding == BindingStatus.VARIABLE and binding.source_procedure_id:
                     bindings_by_arg[arg_name].add(None)
                     original_source_ids_by_arg[arg_name] = binding.source_procedure_id
@@ -117,6 +124,8 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
         new_generics = []
         for combo in value_combinations:
             bindings = {}
+            # Use the action of the first step in the group as the reference.
+            action_ref = step_group[0].action
             action_counters[action_ref.name] += 1
             new_id = f"{action_ref.id}#{action_counters[action_ref.name]}"
 
@@ -129,7 +138,7 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
                     original_binding = original_binding_map[arg_name]
 
                     if val is not None:
-                        binding = ArgumentBinding(
+                        binding_new = ArgumentBinding(
                             name=arg_name,
                             type=b_type,
                             binding=BindingStatus.CONSTANT,
@@ -138,15 +147,13 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
                     elif arg_name in original_source_ids_by_arg:
                         original_source_id = original_source_ids_by_arg[arg_name]
                         resolved_id = global_id_remap.get(original_source_id)
-
                         if resolved_id is None:
                             print(f"⚠️ Cannot remap original ID '{original_source_id}' → source_procedure_id is None")
                             binding_status = BindingStatus.UNRESOLVED
                         else:
                             print(f"🔁 Remapped {original_source_id} → {resolved_id}")
                             binding_status = BindingStatus.VARIABLE
-
-                        binding = ArgumentBinding(
+                        binding_new = ArgumentBinding(
                             name=arg_name,
                             type=b_type,
                             binding=binding_status,
@@ -155,14 +162,14 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
                             candidates=original_binding.candidates
                         )
                     else:
-                        binding = ArgumentBinding(
+                        binding_new = ArgumentBinding(
                             name=arg_name,
                             type=b_type,
                             binding=BindingStatus.UNRESOLVED,
                             value=None
                         )
 
-                    bindings[arg_name] = binding
+                    bindings[arg_name] = binding_new
 
                 action_instance = ActionInstance(
                     id=new_id,
@@ -177,6 +184,7 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
                     print(f"🔄 Remapping {step.id} → {new_id}")
                     global_id_remap[step.id] = new_id
 
+                # Remap downstream dependencies
                 for b in bindings.values():
                     if b.binding == BindingStatus.VARIABLE and b.source_procedure_id:
                         if b.source_procedure_id in gproc:
@@ -194,7 +202,7 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
         proc_id = f"squeezed_proc_{i+1}"
         steps = list(step_dict.values())
         if steps:
-            steps[-1].END = True  # ✅ Mark the final step with END=True
+            steps[-1].END = True  # Mark the final step with END=True
         proc = Procedure(
             id=proc_id,
             steps={f"step_{j+1}": step for j, step in enumerate(steps)}
@@ -203,6 +211,71 @@ def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure
         print(f"\n✅ {proc_id} generated with {len(proc.steps)} step(s): {[s.action.name for s in proc.steps.values()]}")
         if steps and steps[-1].END:
             print(f"  ➤ Marked {steps[-1].id} as END ✅")
-
     return result
 
+
+def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure]:
+    """
+    Squeezes a list of procedures by aligning steps that occur at the same
+    index. Unlike previous versions, this function does not drop (or merge)
+    step alternatives when multiple actions exist at the same step index.
+    Instead, each alternative is kept as a separate branch.
+
+    In short, for each step index i, every action instance from the original
+    procedure is independently added (using a deep copy) to every generic
+    procedure that has been generated so far.
+
+    This way, if your JSON input grid–providing action (Get Input Grid) already
+    uses BindingStatus.INPUT_GRID, it will be preserved without extra parameters
+    (e.g., ratio_width, ratio_height) that belong only to Canvas by Ratio.
+    """
+    if not procedures:
+        return []
+
+    # Group steps by their index across procedures.
+    aligned_steps: Dict[int, List[ActionInstance]] = defaultdict(list)
+    for proc in procedures:
+        for i, step in enumerate(proc.steps.values()):
+            aligned_steps[i].append(step)
+
+    # generic_procedures will be a list of dictionaries mapping new step IDs to ActionInstances.
+    generic_procedures: List[Dict[str, ActionInstance]] = [{}]
+    action_counters = defaultdict(int)
+    global_id_remap: Dict[str, str] = {}
+
+    print("🔄 Starting squeeze_with_remapped_sources...")
+
+    # Instead of merging different actions (as was done previously),
+    # we now expand the branch for each step in the group.
+    for i in sorted(aligned_steps.keys()):
+        step_group = aligned_steps[i]
+        new_generic_procs = []
+        for proc_dict in generic_procedures:
+            for step in step_group:
+                action_counters[step.action.name] += 1
+                new_id = f"{step.action.id}#{action_counters[step.action.name]}"
+                new_step = deepcopy(step)
+                new_step.id = new_id
+                proc_copy = proc_dict.copy()
+                proc_copy[new_id] = new_step
+                global_id_remap[step.id] = new_id
+                new_generic_procs.append(proc_copy)
+        generic_procedures = new_generic_procs
+
+    # Build new Procedure objects from each generic procedure branch.
+    result = []
+    for i, step_dict in enumerate(generic_procedures):
+        proc_id = f"squeezed_proc_{i + 1}"
+        steps = list(step_dict.values())
+        if steps:
+            # Mark the last step of each procedure with END=True.
+            steps[-1].END = True
+        proc = Procedure(
+            id=proc_id,
+            steps={f"step_{j + 1}": step for j, step in enumerate(steps)}
+        )
+        result.append(proc)
+        print(f"\n✅ {proc_id} generated with {len(proc.steps)} step(s): {[s.action.name for s in proc.steps.values()]}")
+        if steps and steps[-1].END:
+            print(f"  ➤ Marked {steps[-1].id} as END ✅")
+    return result

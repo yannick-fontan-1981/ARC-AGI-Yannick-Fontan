@@ -1,3 +1,5 @@
+# scripts/verify_task.py
+
 import json
 import argparse
 import os
@@ -6,7 +8,8 @@ from collections import defaultdict
 import sqlite3
 import subprocess
 
-from constelize.tools.fact_to_action_mapping import load_end_outputs_from_json
+from constelize.tools.fact_to_action_mapping import load_end_outputs_from_json, load_json_inputs_from_json, \
+    TRAIN_INPUT_GRIDS, TEST_INPUT_GRIDS
 from constelize.tools.pattern_analysis import (
     generate_draft_procedure,
     extract_rules_from_procedure,
@@ -24,8 +27,8 @@ from constelize.tools.squeeze import squeeze_with_remapped_sources, normalize_pr
 #DEFAULT_TASK_ID = "68b16354"
 #DEFAULT_TASK_ID = "74dd1130"
 #DEFAULT_TASK_ID = "6150a2bd"
-#DEFAULT_TASK_ID = "9172f3a0"
-DEFAULT_TASK_ID = "a416b8f3"
+DEFAULT_TASK_ID = "9172f3a0"
+ #DEFAULT_TASK_ID = "a416b8f3_simple"
 #DEFAULT_TASK_ID = "b1948b0a"
 #DEFAULT_TASK_ID = "c8f0f002"
 #DEFAULT_TASK_ID = "c59eb873"
@@ -64,6 +67,8 @@ def filter_successful_procedures(results):
 
 # Load and process ARC task
 load_end_outputs_from_json(json_path)
+load_json_inputs_from_json(json_path)
+
 data = load_arc_json(json_path)
 procedures = generate_draft_procedure(db_path, json_path, name=f"{TASK_ID}_procedure")
 normalized_procs = normalize_procedures_with_levels(list(procedures.values()))
