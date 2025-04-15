@@ -15,7 +15,7 @@ from constelize.core.procedure import Procedure, evaluate_procedure, build_proce
 from constelize.tools.sqlite_loader import load_sqlite_to_dict
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 import traceback
 
 def table_for_fact(fact_name: str) -> str:
@@ -166,11 +166,64 @@ def auto_link_by_value_and_type(action_instances: list):
                     link_producer_to_consumer(binding, producer, consumer)
 
 
+def flatten_binding(binding) -> Optional[Any]:
+    """
+    Recursively convert a compound binding into a concrete value.
+
+    - If the binding is not compound, return binding.value.
+    - If binding.type is "Coord" and its sub_bindings is a dict with keys "x" and "y",
+      flatten each and return a tuple (x, y).
+    - If binding.type is "Array<Coord>" (or starts with "Array"),
+      flatten each element in the sub_bindings list and return a list of coordinate tuples.
+    - Otherwise, if sub_bindings is a dict, flatten each value into a dict.
+    - If sub_bindings is a list, flatten each element into a list.
+    Returns None if any sub-binding cannot be fully flattened.
+    """
+    if binding.binding != BindingStatus.COMPOUND:
+        return binding.value
+    # Special case: a coordinate binding.
+    if binding.type == "Coord" and isinstance(binding.sub_bindings, dict):
+        sub_x = flatten_binding(binding.sub_bindings.get("x"))
+        sub_y = flatten_binding(binding.sub_bindings.get("y"))
+        if sub_x is None or sub_y is None:
+            return None
+        return (sub_x, sub_y)
+    # Special case: an array binding.
+    if binding.type.startswith("Array"):
+        if isinstance(binding.sub_bindings, list):
+            result = []
+            for sub_bind in binding.sub_bindings:
+                sub_val = flatten_binding(sub_bind)
+                if sub_val is None:
+                    return None
+                result.append(sub_val)
+            return result
+    # Fallback: if sub_bindings is a dict.
+    if isinstance(binding.sub_bindings, dict):
+        result = {}
+        for key, sub_bind in binding.sub_bindings.items():
+            sub_val = flatten_binding(sub_bind)
+            if sub_val is None:
+                return None
+            result[key] = sub_val
+        return result
+    # If sub_bindings is a list (non-array), convert each.
+    if isinstance(binding.sub_bindings, list):
+        result = []
+        for sub_bind in binding.sub_bindings:
+            sub_val = flatten_binding(sub_bind)
+            if sub_val is None:
+                return None
+            result.append(sub_val)
+        return result
+    return None
+
 def auto_find_constant(action_instances: List[ActionInstance]) -> None:
     """
     For each action (grouped by action.id) among the provided ActionInstance objects,
     check for each binding (argument) across training examples (trainId != -1) if the
     value is present and identical. If so, mark the binding as CONSTANT with that value.
+    If the binding is compound (e.g., Array<Coord>), try to flatten it.
 
     Instances with a missing action (i.e. instance.action is None) are skipped.
     """
@@ -188,30 +241,52 @@ def auto_find_constant(action_instances: List[ActionInstance]) -> None:
         if not train_instances:
             continue
 
-        # For each binding key in the first training instance, check for constant value across training examples
+        # For each binding key in the first training instance, check for constant value.
         for arg_name in train_instances[0].bindings.keys():
             constant_value = None
             is_constant = True
             for inst in train_instances:
                 binding = inst.bindings.get(arg_name)
-                # If the binding is missing or its value is None, consider it non-constant
-                if binding is None or binding.value is None:
+                # If binding missing or has no value, mark as non-constant.
+                if binding is None:
                     is_constant = False
                     break
-                if constant_value is None:
-                    constant_value = binding.value
-                else:
-                    if constant_value != binding.value:
+
+                if binding.binding == BindingStatus.COMPOUND:
+                    # Use flatten_binding to get the concrete value.
+                    value_to_compare = flatten_binding(binding)
+                    if value_to_compare is None:
                         is_constant = False
                         break
+                else:
+                    if binding.value is None:
+                        is_constant = False
+                        break
+                    value_to_compare = binding.value
+
+                if constant_value is None:
+                    constant_value = value_to_compare
+                else:
+                    if constant_value != value_to_compare:
+                        is_constant = False
+                        break
+
             if is_constant:
-                # Update all instances (both training and test) for this action and binding
+                # Propagate the constant value to all instances.
                 for inst in instances:
-                    binding = inst.bindings[arg_name]
-                    binding.binding = BindingStatus.CONSTANT
-                    binding.value = constant_value
+                    binding = inst.bindings.get(arg_name)
+                    if binding is None:
+                        continue
+                    if binding.binding == BindingStatus.COMPOUND:
+                        flattened = flatten_binding(binding)
+                        binding.binding = BindingStatus.CONSTANT
+                        binding.value = flattened
+                    else:
+                        binding.binding = BindingStatus.CONSTANT
+                        binding.value = constant_value
                 print(
                     f"[auto_find_constant] Action '{action_id}', argument '{arg_name}' stabilized as CONSTANT with value: {constant_value}")
+
 
 def values_equal(v1, v2, type_name):
     if type_name == "Grid":
