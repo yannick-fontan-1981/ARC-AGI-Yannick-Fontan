@@ -1,281 +1,273 @@
-from copy import deepcopy
-from typing import List, Dict
-from collections import defaultdict, deque
-from itertools import product
-from constelize.core.procedure import Procedure, ActionInstance
-from constelize.core.binding import ArgumentBinding, BindingStatus
+from __future__ import annotations
+
+import copy
+import uuid
+from collections import defaultdict
+from typing import Dict, List, Tuple
+
+from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
+from constelize.core.procedure import ActionInstance, Procedure
+
+
+###############################################################################
+# Utilities
+###############################################################################
+
+def _make_hashable(val):
+    """Recursively turn *val* into a hashable representation."""
+    if isinstance(val, list):
+        return tuple(_make_hashable(x) for x in val)
+    if isinstance(val, dict):
+        return tuple(sorted((k, _make_hashable(v)) for k, v in val.items()))
+    if isinstance(val, set):
+        return tuple(sorted(_make_hashable(x) for x in val))
+    return val
+
+
+def _constant_signature(step: ActionInstance) -> Tuple:
+    """Return a tuple that uniquely identifies the constant bindings of *step*."""
+    sig = []
+    for name in sorted(step.bindings.keys()):
+        b = step.bindings[name]
+        if b.binding == BindingStatus.CONSTANT:
+            sig.append((name, _make_hashable(b.value)))
+    return tuple(sig)
+
+
+def _find_equivalent(step: ActionInstance, candidates: List[ActionInstance]) -> ActionInstance | None:
+    """
+    Return the first candidate that has the same action.id and constant signature as *step*.
+    """
+    sig = _constant_signature(step)
+    for cand in candidates:
+        if cand.action.id == step.action.id and _constant_signature(cand) == sig:
+            return cand
+    return None
+
+
+###############################################################################
+# Topological helpers (kept as is)
+###############################################################################
+
+def _is_input_grid_only(inst: ActionInstance) -> bool:
+    """True if every binding is either INPUT_GRID or CONSTANT."""
+    for b in inst.bindings.values():
+        if b.binding not in {BindingStatus.INPUT_GRID, BindingStatus.CONSTANT}:
+            return False
+    return True
 
 
 def topological_levels(instances: Dict[str, ActionInstance]) -> List[List[str]]:
-    """
-    Retourne les étapes regroupées par niveaux topologiques (actions parallélisables).
-    Chaque niveau contient les étapes pouvant être exécutées en parallèle.
-    """
+    """Return lists of step‑ids grouped by parallelisable level."""
+    # 1. Build dependency graph.
     graph = defaultdict(set)
-    in_degree = defaultdict(int)
+    in_deg = defaultdict(int, {sid: 0 for sid in instances})
+    for inst in instances.values():
+        for bind in inst.bindings.values():
+            if bind.binding == BindingStatus.VARIABLE and bind.source_procedure_id:
+                graph[bind.source_procedure_id].add(inst.id)
+                in_deg[inst.id] += 1
 
-    for instance_id in instances:
-        in_degree[instance_id] = 0
+    # 2. Perform Kahn’s algorithm.
+    levels, cur = [], [n for n, d in in_deg.items() if d == 0]
+    seen = set()
+    while cur:
+        levels.append(cur)
+        nxt = []
+        for n in cur:
+            seen.add(n)
+            for m in graph[n]:
+                in_deg[m] -= 1
+                if in_deg[m] == 0:
+                    nxt.append(m)
+        cur = nxt
+    if len(seen) != len(instances):
+        levels = [[sid] for sid in instances]
 
-    for instance in instances.values():
-        for binding in instance.bindings.values():
-            if binding.binding == BindingStatus.VARIABLE and binding.source_procedure_id:
-                source = binding.source_procedure_id
-                target = instance.id
-                graph[source].add(target)
-                in_degree[target] += 1
-
-    levels: List[List[str]] = []
-    current_level = [node for node, deg in in_degree.items() if deg == 0]
-    visited = set()
-
-    while current_level:
-        levels.append(current_level)
-        next_level = []
-
-        for node in current_level:
-            visited.add(node)
-            for neighbor in graph[node]:
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0:
-                    next_level.append(neighbor)
-
-        current_level = next_level
-
-    if len(visited) != len(instances):
-        print("⚠️ Cycle detected or incomplete sort. Falling back to flat topological order.")
-        return [[node] for node in visited]
-
+    # 3. Special re‑arrangement: collect INPUT_GRID‑only steps and END steps.
+    input_grid_steps, end_steps = [], []
+    for lvl in levels:
+        for sid in list(lvl):  # iterate over a copy
+            inst = instances[sid]
+            if inst.END:
+                end_steps.append(sid)
+                lvl.remove(sid)
+            elif _is_input_grid_only(inst):
+                input_grid_steps.append(sid)
+                lvl.remove(sid)
+    levels = [lvl for lvl in levels if lvl]
+    if input_grid_steps:
+        levels.insert(0, sorted(input_grid_steps))
+    if end_steps:
+        levels.append(sorted(end_steps))
     return levels
 
 
-def normalize_procedures_with_levels(procedures: List[Procedure]) -> List[Procedure]:
-    normalized = []
-    for proc in procedures:
-        id_based_steps = {step.id: step for step in proc.steps.values()}
-        levels = topological_levels(id_based_steps)
-        flat_ordered_ids = [step_id for group in levels for step_id in group]
-        sorted_steps = {step_id: id_based_steps[step_id] for step_id in flat_ordered_ids}
-        normalized_proc = Procedure(id=proc.id, steps=sorted_steps)
-        normalized.append(normalized_proc)
+def _order_steps(step_dict: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
+    """Return step_dict sorted in topological order (levels then id)."""
+    lvls = topological_levels(step_dict)
+    ordered_ids = [sid for lvl in lvls for sid in sorted(lvl)]
+    return {f"step_{i + 1}": step_dict[sid] for i, sid in enumerate(ordered_ids)}
 
-        print(f"🧭 {proc.id} topological levels:")
-        for i, group in enumerate(levels):
-            print(f"  Niveau {i}: {group}")
 
-    return normalized
+###############################################################################
+# Sanitisation helper
+###############################################################################
+def _sanitise_branch(step_dict: Dict[str, ActionInstance]) -> None:
+    """
+    In place:
+      • Set step.output_value = None.
+      • For each binding, only reset binding.value if its binding status is UNRESOLVED.
+      (If the binding is VARIABLE, MULTIPLE, CONSTANT, or INPUT_GRID, we consider it solved.)
+    """
+    for step in step_dict.values():
+        step.output_value = None
+        for bind in step.bindings.values():
+            if bind.binding == BindingStatus.UNRESOLVED:
+                bind.value = None
 
-def make_hashable(val):
-    if isinstance(val, list):
-        return tuple(make_hashable(x) for x in val)
-    elif isinstance(val, dict):
-        return tuple(sorted((k, make_hashable(v)) for k, v in val.items()))
-    else:
-        return val
-from collections import defaultdict
-from itertools import product
-from typing import List, Dict
-# Assuming you have an appropriate make_hashable function defined somewhere.
 
-def squeeze_with_remapped_sources_old(procedures: List[Procedure]) -> List[Procedure]:
-    if not procedures:
+###############################################################################
+# New squeeze implementation – NO INDEX ALIGNMENT; renamed to squeeze_with_unresolved
+###############################################################################
+def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
+    """
+    Build generic procedures (one per branch) from a list of per‑train procedures
+    without relying on positional indices. Steps are merged (forked) based on action
+    identity and constant‑binding signature. All id translations occur on the fly.
+
+    This verbose version logs every decision.
+    """
+    print("\n═══════════════════════════════════════════════════════════════")
+    print("🎬 squeeze_with_unresolved – starting")
+    print(f"• Received {len(train_procs)} train procedure(s)")
+    if not train_procs:
+        print("  → Nothing to do. Returning []")
         return []
 
-    aligned_steps = defaultdict(list)
-    for proc in procedures:
-        for i, step in enumerate(proc.steps.values()):
-            aligned_steps[i].append(step)
+    # Data structures:
+    branches: List[Dict[str, ActionInstance]] = [{}]  # start with one empty branch
+    action_counters: Dict[str, int] = defaultdict(int)  # for unique id generation per action
+    train_to_generic_id: Dict[str, str] = {}  # maps train step id -> generic step id
 
-    # Start with one generic procedure represented as a dict mapping step IDs to ActionInstances.
-    generic_procedures = [{}]
-    action_counters = defaultdict(int)
-    global_id_remap: Dict[str, str] = {}
+    # First pass: iterate over train procedures and build/fork branches
+    for proc_idx, proc in enumerate(train_procs):
+        print(f"\n────────────────────────────────────────────")
+        print(f"📑 Processing train procedure #{proc_idx} (id={proc.id})")
+        for step_idx, step in enumerate(proc.steps.values()):
+            print(f"\n  🔹 Train step #{step_idx} (id={step.id}, action={step.action.name})")
+            new_branches: List[Dict[str, ActionInstance]] = []
+            for branch_idx, branch in enumerate(branches):
+                print(f"    • Considering branch #{branch_idx} (contains {len(branch)} step(s))")
+                # For each binding in this train step, update its source_procedure_id according to
+                # the mapping from previously processed steps.
+                for b_name, bind in step.bindings.items():
+                    if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):
+                        old_src = bind.source_procedure_id
+                        if old_src:
+                            new_src = train_to_generic_id.get(old_src, old_src)
+                            if new_src != old_src:
+                                print(f"      ↻ Remapping binding '{b_name}': {old_src} → {new_src}")
+                                bind.source_procedure_id = new_src
+                                if bind.candidates is not None:
+                                    for cand in bind.candidates:
+                                        if cand.producer_id == old_src:
+                                            print(f"         ↻ Also remapping candidate from {old_src} → {new_src}")
+                                            cand.producer_id = new_src
 
-    print("🔄 Starting squeeze_with_remapped_sources...")
+                # Try to reuse an equivalent generic step in this branch.
+                equiv = _find_equivalent(step, list(branch.values()))
+                if equiv:
+                    print(f"      ✅ Found equivalent generic step {equiv.id}; reusing it.")
+                    train_to_generic_id[step.id] = equiv.id
+                    new_branches.append(branch)
+                    continue
 
-    for i in sorted(aligned_steps.keys()):
-        step_group = aligned_steps[i]
-        action_names = {step.action.name for step in step_group}
-        print(f"\n🧱 Step group {i + 1}: {action_names}")
-        # Removed the branch that forced a merge when actions diverge.
-        # We keep all steps as they are.
+                # Otherwise, fork the branch with a deep copy of the step.
+                copied = copy.deepcopy(step)
+                action_counters[copied.action.id] += 1
+                copied.id = f"{copied.action.id}#{action_counters[copied.action.id]}"
+                train_to_generic_id[step.id] = copied.id
+                print(f"      ➕ No equivalent – creating new generic step {copied.id}")
+                # Update producers in the new branch:
+                for bind in copied.bindings.values():
+                    if bind.binding == BindingStatus.VARIABLE and bind.source_procedure_id:
+                        prod = branch.get(bind.source_procedure_id)
+                        if prod and copied.id not in prod.used_by:
+                            prod.used_by.append(copied.id)
+                            print(f"         • Updated producer {prod.id}.used_by ← {copied.id}")
+                branch2 = branch.copy()
+                branch2[copied.id] = copied
+                new_branches.append(branch2)
+                print(f"      ↳ Forked branch now has {len(branch2)} step(s)")
+            branches = new_branches
+            print(f"    → After processing step, total branches: {len(branches)}")
 
-        # Collect binding info from the step group.
-        bindings_by_arg = defaultdict(set)
-        types_by_arg = {}
-        original_source_ids_by_arg = {}
-        original_binding_map = {}
+    # Second pass: ensure that all VARIABLE/MULTIPLE bindings’ source_procedure_ids (and their candidate lists)
+    # are properly remapped using the global train_to_generic_id map.
+    print("\n────────────────────────────────────────────")
+    print("🛠 Second pass: re-updating VARIABLE/MULTIPLE bindings")
+    for branch in branches:
+        for step in branch.values():
+            for bind in step.bindings.values():
+                if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE) and bind.source_procedure_id:
+                    old_source = bind.source_procedure_id
+                    new_source = train_to_generic_id.get(old_source, old_source)
+                    if new_source != old_source:
+                        print(f"      ↻ Updating binding in step {step.id}: {old_source} → {new_source}")
+                        bind.source_procedure_id = new_source
+                    if bind.candidates is not None:
+                        for cand in bind.candidates:
+                            if cand.producer_id in train_to_generic_id:
+                                old_cand = cand.producer_id
+                                cand.producer_id = train_to_generic_id[old_cand]
+                                print(
+                                    f"         ↻ Updating candidate in step {step.id}: {old_cand} → {cand.producer_id}")
 
-        for step in step_group:
-            for arg_name, binding in step.bindings.items():
-                types_by_arg[arg_name] = binding.type
-                original_binding_map[arg_name] = binding
-                if binding.binding == BindingStatus.CONSTANT:
-                    bindings_by_arg[arg_name].add(make_hashable(binding.value))
-                elif binding.binding == BindingStatus.VARIABLE and binding.source_procedure_id:
-                    bindings_by_arg[arg_name].add(None)
-                    original_source_ids_by_arg[arg_name] = binding.source_procedure_id
-                else:
-                    bindings_by_arg[arg_name].add(None)
+    # Final assembly: build Procedure objects, order steps, and mark the last step with END=True.
+    print("\n────────────────────────────────────────────")
+    print("📦 Building final generic Procedure objects")
+    generic_procs: List[Procedure] = []
+    for idx, step_dict in enumerate(branches, 1):
+        _sanitise_branch(step_dict)  # Only wipe bindings with UNRESOLVED status
+        print(f"\n  🛠 Branch #{idx}: contains {len(step_dict)} step(s)")
+        ordered_steps = _order_steps(step_dict)
+        if ordered_steps:
+            last_key = list(ordered_steps.keys())[-1]
+            ordered_steps[last_key].END = True
+            print(f"     • Marked step {ordered_steps[last_key].id} as END")
+        proc_id = f"generic_proc_{idx}"
+        generic_procs.append(Procedure(id=proc_id, steps=ordered_steps))
+        print(f"     → Created Procedure '{proc_id}'")
 
-        binding_names = list(bindings_by_arg.keys())
-        value_combinations = product(*[sorted(vals, key=lambda v: str(v)) for vals in bindings_by_arg.values()])
-
-        new_generics = []
-        for combo in value_combinations:
-            bindings = {}
-            # Use the action of the first step in the group as the reference.
-            action_ref = step_group[0].action
-            action_counters[action_ref.name] += 1
-            new_id = f"{action_ref.id}#{action_counters[action_ref.name]}"
-
-            print(f"\n🔧 Generating new instance {new_id} for action: {action_ref.name}")
-            print(f"   ➤ Binding combo: {dict(zip(binding_names, combo))}")
-
-            for gproc in generic_procedures:
-                for arg_name, val in zip(binding_names, combo):
-                    b_type = types_by_arg[arg_name]
-                    original_binding = original_binding_map[arg_name]
-
-                    if val is not None:
-                        binding_new = ArgumentBinding(
-                            name=arg_name,
-                            type=b_type,
-                            binding=BindingStatus.CONSTANT,
-                            value=val
-                        )
-                    elif arg_name in original_source_ids_by_arg:
-                        original_source_id = original_source_ids_by_arg[arg_name]
-                        resolved_id = global_id_remap.get(original_source_id)
-                        if resolved_id is None:
-                            print(f"⚠️ Cannot remap original ID '{original_source_id}' → source_procedure_id is None")
-                            binding_status = BindingStatus.UNRESOLVED
-                        else:
-                            print(f"🔁 Remapped {original_source_id} → {resolved_id}")
-                            binding_status = BindingStatus.VARIABLE
-                        binding_new = ArgumentBinding(
-                            name=arg_name,
-                            type=b_type,
-                            binding=binding_status,
-                            value=None,
-                            source_procedure_id=resolved_id,
-                            candidates=original_binding.candidates
-                        )
-                    else:
-                        binding_new = ArgumentBinding(
-                            name=arg_name,
-                            type=b_type,
-                            binding=BindingStatus.UNRESOLVED,
-                            value=None
-                        )
-
-                    bindings[arg_name] = binding_new
-
-                action_instance = ActionInstance(
-                    id=new_id,
-                    action=action_ref,
-                    bindings=bindings,
-                    output_var=new_id,
-                    output_type=action_ref.output_type,
-                    used_by=[],
-                )
-
-                for step in step_group:
-                    print(f"🔄 Remapping {step.id} → {new_id}")
-                    global_id_remap[step.id] = new_id
-
-                # Remap downstream dependencies
-                for b in bindings.values():
-                    if b.binding == BindingStatus.VARIABLE and b.source_procedure_id:
-                        if b.source_procedure_id in gproc:
-                            print(f"📎 {b.source_procedure_id} → used_by → {new_id}")
-                            gproc[b.source_procedure_id].used_by.append(new_id)
-
-                new_proc = gproc.copy()
-                new_proc[new_id] = action_instance
-                new_generics.append(new_proc)
-
-        generic_procedures = new_generics
-
-    result = []
-    for i, step_dict in enumerate(generic_procedures):
-        proc_id = f"squeezed_proc_{i+1}"
-        steps = list(step_dict.values())
-        if steps:
-            steps[-1].END = True  # Mark the final step with END=True
-        proc = Procedure(
-            id=proc_id,
-            steps={f"step_{j+1}": step for j, step in enumerate(steps)}
-        )
-        result.append(proc)
-        print(f"\n✅ {proc_id} generated with {len(proc.steps)} step(s): {[s.action.name for s in proc.steps.values()]}")
-        if steps and steps[-1].END:
-            print(f"  ➤ Marked {steps[-1].id} as END ✅")
-    return result
+    print("\n🎉 squeeze_with_unresolved – done. Generated "
+          f"{len(generic_procs)} generic procedure(s)")
+    print("═══════════════════════════════════════════════════════════════\n")
+    return generic_procs
 
 
-def squeeze_with_remapped_sources(procedures: List[Procedure]) -> List[Procedure]:
+def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
+    """Return copies of *procs* whose steps are sorted topologically."""
+    norm = []
+    for p in procs:
+        ordered = _order_steps({s.id: s for s in p.steps.values()})
+        norm.append(Procedure(id=p.id, steps=ordered))
+    return norm
+
+def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
     """
-    Squeezes a list of procedures by aligning steps that occur at the same
-    index. Unlike previous versions, this function does not drop (or merge)
-    step alternatives when multiple actions exist at the same step index.
-    Instead, each alternative is kept as a separate branch.
-
-    In short, for each step index i, every action instance from the original
-    procedure is independently added (using a deep copy) to every generic
-    procedure that has been generated so far.
-
-    This way, if your JSON input grid–providing action (Get Input Grid) already
-    uses BindingStatus.INPUT_GRID, it will be preserved without extra parameters
-    (e.g., ratio_width, ratio_height) that belong only to Canvas by Ratio.
+    Return a new branch dictionary that excludes any ActionInstance that has at least one binding
+    with status UNRESOLVED. (These actions are considered unsolved.)
     """
-    if not procedures:
-        return []
-
-    # Group steps by their index across procedures.
-    aligned_steps: Dict[int, List[ActionInstance]] = defaultdict(list)
-    for proc in procedures:
-        for i, step in enumerate(proc.steps.values()):
-            aligned_steps[i].append(step)
-
-    # generic_procedures will be a list of dictionaries mapping new step IDs to ActionInstances.
-    generic_procedures: List[Dict[str, ActionInstance]] = [{}]
-    action_counters = defaultdict(int)
-    global_id_remap: Dict[str, str] = {}
-
-    print("🔄 Starting squeeze_with_remapped_sources...")
-
-    # Instead of merging different actions (as was done previously),
-    # we now expand the branch for each step in the group.
-    for i in sorted(aligned_steps.keys()):
-        step_group = aligned_steps[i]
-        new_generic_procs = []
-        for proc_dict in generic_procedures:
-            for step in step_group:
-                action_counters[step.action.name] += 1
-                new_id = f"{step.action.id}#{action_counters[step.action.name]}"
-                new_step = deepcopy(step)
-                new_step.id = new_id
-                proc_copy = proc_dict.copy()
-                proc_copy[new_id] = new_step
-                global_id_remap[step.id] = new_id
-                new_generic_procs.append(proc_copy)
-        generic_procedures = new_generic_procs
-
-    # Build new Procedure objects from each generic procedure branch.
-    result = []
-    for i, step_dict in enumerate(generic_procedures):
-        proc_id = f"squeezed_proc_{i + 1}"
-        steps = list(step_dict.values())
-        if steps:
-            # Mark the last step of each procedure with END=True.
-            steps[-1].END = True
-        proc = Procedure(
-            id=proc_id,
-            steps={f"step_{j + 1}": step for j, step in enumerate(steps)}
-        )
-        result.append(proc)
-        print(f"\n✅ {proc_id} generated with {len(proc.steps)} step(s): {[s.action.name for s in proc.steps.values()]}")
-        if steps and steps[-1].END:
-            print(f"  ➤ Marked {steps[-1].id} as END ✅")
-    return result
+    print("  [remove_unresolved_actions_from_generic] Scanning branch for unsolved actions:")
+    new_branch = {}
+    for sid, step in branch.items():
+        unresolved = False
+        for bname, bind in step.bindings.items():
+            if bind.binding == BindingStatus.UNRESOLVED:
+                print(f"    → Removing step {step.id} due to unresolved binding '{bname}'.")
+                unresolved = True
+                break
+        if not unresolved:
+            new_branch[sid] = step
+    return new_branch

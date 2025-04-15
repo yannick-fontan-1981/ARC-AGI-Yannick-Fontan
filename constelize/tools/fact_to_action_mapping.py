@@ -129,7 +129,15 @@ class ZoomFactToAction(FactToActionMapping):
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        seen = set()
+        unique_rows = []
+        for r in rows:
+            key = (r["trainId"], r["zoom_x"], r["zoom_y"])  # anything that defines the zoom
+            if key not in seen:
+                seen.add(key)
+                unique_rows.append(r)
+        return unique_rows
 
     def _build_function(self, row: dict) -> ActionInstance:
         output_grid = to_concrete_grid(json.loads(row["data"]))
@@ -348,13 +356,13 @@ class CanvasByRatioFactToAction(FactToActionMapping):
                 "ratio_width": ArgumentBinding(
                     name="ratio_width",
                     type="Integer",
-                    binding=BindingStatus.CONSTANT,
+                    binding=BindingStatus.UNRESOLVED,
                     value=ratio_w
                 ),
                 "ratio_height": ArgumentBinding(
                     name="ratio_height",
                     type="Integer",
-                    binding=BindingStatus.CONSTANT,
+                    binding=BindingStatus.UNRESOLVED,
                     value=ratio_h
                 )
             },

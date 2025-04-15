@@ -15,9 +15,8 @@ from constelize.core.procedure import Procedure, evaluate_procedure, build_proce
 from constelize.tools.sqlite_loader import load_sqlite_to_dict
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
-from typing import List
+from typing import List, Dict
 import traceback
-
 
 def table_for_fact(fact_name: str) -> str:
     return {
@@ -25,7 +24,6 @@ def table_for_fact(fact_name: str) -> str:
         "flipped_horizontal": "symmetry",
         "flipped_vertical": "symmetry",
     }.get(fact_name, fact_name)
-
 
 def generate_action_instances_from_db(db_path: str) -> List:
     conn = sqlite3.connect(db_path)
@@ -48,7 +46,6 @@ def generate_action_instances_from_db(db_path: str) -> List:
 
     conn.close()
     return action_instances
-
 
 def generate_draft_procedure(db_path: str, json_path: str, name: str = "generated_procedure") -> List[Procedure]:
     action_instances = generate_action_instances_from_db(db_path)
@@ -268,9 +265,6 @@ def test_generic_procs_on_trains(generic_procs, arc_json_data) -> List[dict]:
     Teste chaque procédure générique sur tous les exemples d'entraînement d’un fichier ARC.
     Retourne une liste de résultats avec réussite ou échec.
     """
-    from constelize.dsl.grid_dsl import grids_equal
-    from constelize.tools.pattern_analysis import evaluate_procedure_on_input, clone_procedure
-
     results = []
     train_data = arc_json_data["train"]
 
@@ -311,66 +305,137 @@ def resolve_candidate(candidate, context):
         return context[candidate]
     return candidate
 
-def evaluate_step_with_multiple(step, input_grid, context):
+def remove_value_from_generic(proc: Procedure) -> None:
+    """
+    Clears out output values and unsolved binding values from a generic procedure.
+    For each step, set step.output_value = None and for each binding whose
+    status is VARIABLE, MULTIPLE, UNRESOLVED or INPUT_GRID, set binding.value to None.
+    This is done to avoid reusing stale data from a previous evaluation.
+    """
+    for step in proc.steps.values():
+        step.output_value = None
+        for bind in step.bindings.values():
+            if bind.binding in {BindingStatus.VARIABLE,
+                                BindingStatus.MULTIPLE,
+                                BindingStatus.UNRESOLVED,
+                                BindingStatus.INPUT_GRID}:
+                bind.value = None
+
+def _build_step_lookup(proc: Procedure) -> Dict[str, ActionInstance]:
+    """Return a mapping from step id to ActionInstance for fast lookup."""
+    return {st.id: st for st in proc.steps.values()}
+
+def evaluate_step_with_multiple(step: ActionInstance, input_grid, context: dict,
+                                step_lookup: dict[str, ActionInstance]):
+    """
+    Verbose evaluation of a step with careful handling of bindings.
+
+    For each binding:
+      - If its status is INPUT_GRID: use the provided input_grid.
+      - If VARIABLE: look up the produced value in context using source_procedure_id.
+      - If CONSTANT: use the stored value.
+      - If MULTIPLE: use the candidate value.
+
+    Returns the result of calling the step's action function.
+    """
+    print("\n==============================")
+    print(f"Starting evaluation of step: {step.id} ({step.action.name})")
+    print(f"Input grid: {input_grid}")
+    print(f"Existing context: {context}")
+    print("==============================")
     args = {}
-    # For each binding of the step...
     for arg_name, binding in step.bindings.items():
-        # If the binding uses the special INPUT_GRID status:
+        print(f"\n-- Processing binding for argument '{arg_name}' --")
+        print(f"  Binding status: {binding.binding}")
+        print(f"  Binding type: {binding.type}")
         if binding.binding == BindingStatus.INPUT_GRID:
-            # Check if the current step (that produces the grid)
-            # has already been executed and is in the context.
+            print("  Detected INPUT_GRID binding.")
+            if binding.source_procedure_id:
+                print(f"  Source procedure id is set: {binding.source_procedure_id}")
+                if binding.source_procedure_id in context:
+                    args[arg_name] = context[binding.source_procedure_id]
+                    print(f"  Found produced value in context: {args[arg_name]}")
+                else:
+                    print("  No produced value in context; attempting to execute producer...")
+                    producer = step_lookup.get(binding.source_procedure_id)
+                    if producer is None:
+                        raise RuntimeError(f"ERROR: No producer with id {binding.source_procedure_id}")
+                    try:
+                        produced_value = producer.action.function(grid=input_grid)
+                        context[binding.source_procedure_id] = produced_value
+                        args[arg_name] = produced_value
+                        print(f"  Executed producer {binding.source_procedure_id}; produced value: {produced_value}")
+                    except Exception as e:
+                        print(f"  ERROR executing producer {binding.source_procedure_id}: {e}")
+                        raise RuntimeError(f"Error executing producer step {binding.source_procedure_id}: {e}")
+            else:
+                print("  No source procedure id specified; using input_grid as value.")
+                args[arg_name] = input_grid
+
+        elif binding.binding == BindingStatus.VARIABLE:
+            print("  Detected VARIABLE binding.")
             if binding.source_procedure_id:
                 if binding.source_procedure_id in context:
                     args[arg_name] = context[binding.source_procedure_id]
+                    print(f"  Resolved VARIABLE binding from context: {args[arg_name]}")
                 else:
-                    # If not, try to run that producing step now.
-                    producer = get_step_by_id(binding.source_procedure_id)
-                    # Here get_step_by_id is a helper that finds the step with the given ID.
-                    # (Alternatively, if you are using cartesian product expansion, you may
-                    #  force the execution of the candidate step if its binding is INPUT_GRID.)
-                    produced_value = producer.action.function(grid=input_grid)
-                    # Store it in the context under the producer's id.
-                    context[binding.source_procedure_id] = produced_value
-                    args[arg_name] = produced_value
+                    raise RuntimeError(
+                        f"Variable binding for {arg_name} in step {step.id} cannot be resolved: source {binding.source_procedure_id} not in context")
             else:
-                # If no source is specified, simply inject the evaluation input.
-                args[arg_name] = input_grid
+                raise RuntimeError(f"VARIABLE binding for {arg_name} in step {step.id} has no source_procedure_id set.")
 
-        # For other binding statuses, if they are UNRESOLVED or CONSTANT, do your usual processing.
-        elif binding.binding in (BindingStatus.UNRESOLVED, BindingStatus.CONSTANT):
+        elif binding.binding in {BindingStatus.UNRESOLVED, BindingStatus.CONSTANT}:
+            print("  Binding is CONSTANT or UNRESOLVED; using stored value.")
             args[arg_name] = binding.value
-        # If binding status is MULTIPLE, then your system must expand a Cartesian product.
+            print(f"  Using value: {binding.value}")
+
         elif binding.binding == BindingStatus.MULTIPLE:
-            # (Assume that the system already expanded candidate combinations and
-            #  determined a single candidate value for this particular combination.)
+            print("  Binding is MULTIPLE; assuming candidate expansion has produced a single candidate.")
             args[arg_name] = binding.value
+            print(f"  Using candidate value: {binding.value}")
+
         else:
-            # You can add extra rules as needed.
+            print("  Encountered an unhandled binding status; defaulting to binding.value.")
             args[arg_name] = binding.value
+            print(f"  Using value: {binding.value}")
+
+    print("\nConstructed argument dictionary for step function:")
+    for k, v in args.items():
+        print(f"  {k}: {v}")
 
     try:
+        print(f"\nExecuting action function for step {step.id} ({step.action.name})...")
         result = step.action.function(**args)
+        print(f"Execution succeeded. Step {step.id} produced: {result}")
     except Exception as e:
+        print(f"ERROR: Failed executing step {step.id} with arguments: {args}")
+        print(f"Exception: {e}")
         raise RuntimeError(f"Error executing step {step.id}: {e}")
-    # After execution, if this step produces an output, store it in the context.
+
     context[step.id] = result
+    print(f"Updated context[{step.id}] = {result}")
+    print(f"Completed evaluation of step {step.id}.\n------------------------------\n")
     return result
 
 
-def evaluate_procedure_on_input(procedure, input_grid) -> any:
+def evaluate_procedure_on_input(procedure: Procedure, input_grid) -> any:
     """
     Evaluate a procedure on the given input grid.
 
-    Steps are executed in order and their outputs stored in a context (keyed by step id) so that later steps
-    can reference earlier ones. This function calls our helper evaluate_step_with_multiple to correctly handle
-    MULTIPLE bindings by cartesian expansion.
+    Before evaluation, the procedure is cloned and sanitized (removing any cached outputs or binding values).
+    Each step is then evaluated in topological order via evaluate_step_with_multiple.
     """
+    # Clone the procedure to avoid side effects.
+    proc_clone = clone_procedure(procedure)
+    # Sanitize the procedure so that unsolved bindings and output_value are cleared.
+    remove_value_from_generic(proc_clone)
     context = {}
-    print(f"\n🚀 Starting evaluation of procedure: {procedure.id}")
-    for step_index, step in enumerate(procedure.steps.values(), 1):
+    step_lookup = _build_step_lookup(proc_clone)
+    print(f"\n🚀 Starting evaluation of procedure: {proc_clone.id}")
+    for step_index, step in enumerate(proc_clone.steps.values(), 1):
         print(f"\n🔹 Step {step_index}: {step.id} ({step.action.name})")
         try:
-            result = evaluate_step_with_multiple(step, input_grid, context)
+            result = evaluate_step_with_multiple(step, input_grid, context, step_lookup)
             print(f"   ✅ Step result: {result}")
         except Exception as e:
             print(f"   ❌ Exception occurred during execution of {step.id}: {e}")
@@ -379,30 +444,28 @@ def evaluate_procedure_on_input(procedure, input_grid) -> any:
         if step.END:
             print(f"\n🏁 END reached at step {step.id}. Returning result.")
             return result
-
-    last_step = list(procedure.steps.values())[-1]
+    last_step = list(proc_clone.steps.values())[-1]
     print(f"\n⚠️ No END step defined. Returning result of final step: {last_step.id}")
     return context[last_step.id]
 
 def load_arc_json(json_path: str) -> dict:
     """
-    Charge un fichier ARC .json et retourne le dictionnaire correspondant.
+    Load an ARC JSON file and return the corresponding dictionary.
     """
     with open(json_path, "r") as f:
         return json.load(f)
 
 def clone_procedure(proc: Procedure) -> Procedure:
     """
-    Fait une copie indépendante et propre d'une procédure pour exécution isolée.
+    Return a deep copy of a procedure for independent evaluation.
     """
     return copy.deepcopy(proc)
 
-def run_generic_procs_on_tests(generic_procs, arc_json_data) -> list:
+def run_generic_procs_on_tests(generic_procs: List[Procedure], arc_json_data: dict) -> list:
     """
-    Évalue chaque procédure générique sur tous les exemples de test d’un fichier ARC.
-    Retourne une liste de résultats avec réussite ou échec.
+    Evaluate each generic procedure on every test example in an ARC JSON file.
+    Returns a list of dictionaries with testId, procedure_id, success flag, evaluated output, and expected output.
     """
-    from constelize.tools.pattern_analysis import evaluate_procedure_on_input
     from constelize.dsl.grid_dsl import grids_equal
     import copy
 
@@ -414,9 +477,16 @@ def run_generic_procs_on_tests(generic_procs, arc_json_data) -> list:
         expected_output = test["output"]
 
         for proc in generic_procs:
-            cloned = copy.deepcopy(proc)
-            evaluated_output = evaluate_procedure_on_input(cloned, input_grid)
+            proc_clone = clone_procedure(proc)
+            # Sanitize the procedure copy before evaluation.
+            remove_value_from_generic(proc_clone)
+            evaluated_output = evaluate_procedure_on_input(proc_clone, input_grid)
             success = grids_equal(evaluated_output, expected_output)
+            status = "✅ SUCCESS" if success else "❌ FAIL"
+            print(f"\n🔍 Testing procedure {proc.id} on testId={testId}: {status}")
+            if not success:
+                print(f"     🔴 Expected: {expected_output}")
+                print(f"     🔵 Got     : {evaluated_output}")
 
             results.append({
                 "testId": testId,
@@ -425,14 +495,13 @@ def run_generic_procs_on_tests(generic_procs, arc_json_data) -> list:
                 "evaluated_output": evaluated_output,
                 "expected_output": expected_output
             })
-
     return results
 
 
 def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_data: dict, output_path: str) -> None:
     """
-    Génère un fichier submission.json conforme au format ARC officiel
-    en utilisant les prédictions issues des procédures symboliques génériques.
+    Generate a submission.json file conforming to the ARC format, using predictions
+    produced by the generic symbolic procedures.
     """
     submission = {task_id: []}
     test_data = arc_data["test"]
@@ -443,19 +512,20 @@ def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_d
 
         best_output = None
         for proc in generic_procs:
-            cloned = copy.deepcopy(proc)
+            proc_clone = clone_procedure(proc)
             try:
-                predicted = evaluate_procedure_on_input(cloned, input_grid)
+                predicted = evaluate_procedure_on_input(proc_clone, input_grid)
                 if grids_equal(predicted, expected_output):
                     best_output = predicted
-                    break  # dès qu'une prédiction est parfaite, on la garde
+                    break  # Use the first perfect prediction.
                 elif best_output is None:
                     best_output = predicted
             except Exception as e:
                 print(f"⚠️ Error evaluating procedure {proc.id} on test input: {e}")
 
         if best_output is None:
-            best_output = [[0 for _ in row] for row in expected_output]  # fallback : grille vide
+            # Fallback: produce an empty grid with the same dimensions as expected_output.
+            best_output = [[0 for _ in row] for row in expected_output]
 
         submission[task_id].append({
             "attempt_1": best_output,
@@ -464,20 +534,18 @@ def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_d
 
     with open(output_path, "w") as f:
         json.dump(submission, f)
-
     print(f"📤 Submission file written to {output_path}")
-
 
 def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_path: str, output_path: str) -> None:
     """
-    Compare les prédictions du fichier submission.json avec les outputs présents dans le fichier ARC (si disponibles).
-    Écrit un fichier de rapport avec True/False + score en cas d'échec (pixels correspondants / total).
+    Compare the predictions in submission.json with the outputs in the ARC file.
+    Writes a report indicating success/failure and a pixel match score where applicable.
     """
     import json
 
     def pixel_match_score(pred, expected) -> float:
         if len(pred) != len(expected) or len(pred[0]) != len(expected[0]):
-            return 0.0  # dimensions mismatch = 0%
+            return 0.0
         total = sum(len(row) for row in expected)
         correct = sum(
             1 for i in range(len(pred))
@@ -506,7 +574,6 @@ def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_p
         pred_entry = task_preds[i] if i < len(task_preds) else {}
         attempt_1 = pred_entry.get("attempt_1")
         attempt_2 = pred_entry.get("attempt_2")
-
         match1 = attempt_1 == expected
         match2 = attempt_2 == expected
 
@@ -536,5 +603,4 @@ def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_p
             else:
                 print(f"⚠️ testId={r['testId']}: {r['reason']}\n")
                 f.write(f"⚠️ testId={r['testId']}: {r['reason']}\n")
-
     print(f"📊 Comparison report written to {output_path}")
