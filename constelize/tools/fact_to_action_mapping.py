@@ -187,7 +187,7 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
         self.test_function = self._test_function
         self.build_function = self._build_function
 
-    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+    def _test_function(self, conn: sqlite3.Connection) -> list[dict]:
         query = """
         SELECT
             so.sprite_unique_id,
@@ -222,22 +222,88 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
 
     def _build_function(self, row: dict) -> ActionInstance:
         from constelize.dsl.grid_dsl import to_concrete_grid, paint
+
+        # Convert stored sprite JSON to a grid.
         sprite_grid = to_concrete_grid(json.loads(row["data"]))
+        # Decode fact coordinates for both input and output positions.
         input_coords = json.loads(row["inputCoords"])
         output_coords = json.loads(row["outputCoords"])
+        # Sort the coordinate lists by row, then column.
+        input_coords.sort(key=lambda coord: (coord[1], coord[0]))
+        output_coords.sort(key=lambda coord: (coord[1], coord[0]))
         action = self.action
         trainId = row["trainId"]
         testId = row["testId"]
+
+        # Retrieve the output grid from stored facts.
         output_grid_raw = END_OUTPUTS_BY_TRAINID.get(trainId)
         if output_grid_raw is None:
-            raise ValueError(f"❌ Missing output grid for trainId={trainId}")
-        anonymized_canvas = tuple([tuple(-8 for _ in row) for row in output_grid_raw])
+            raise ValueError(f"Missing output grid for trainId={trainId}")
+        # Create an anonymized canvas (a blank grid) based on the output grid dimensions.
+        anonymized_canvas = tuple(tuple(-8 for _ in row) for row in output_grid_raw)
+
+        # Paint the sprite at all provided output coordinates.
         painted_canvas = anonymized_canvas
         for (x, y) in output_coords:
             painted_canvas = paint(painted_canvas, sprite_grid, (y, x))
+
+        # --- Build compound binding for output_positions ---
+        output_positions_binding = ArgumentBinding(
+            name="output_positions",
+            type="Array<Coord>",
+            binding=BindingStatus.COMPOUND,
+            sub_bindings=[],  # We will fill this list below.
+            sub_bindings_length_status=BindingStatus.UNRESOLVED,
+            sub_bindings_length_value=len(output_coords)
+            #TODO value=output_coords ?
+        )
+        for idx, coord in enumerate(output_coords):
+            x_val = int(coord[0])
+            y_val = int(coord[1])
+            sub_binding = ArgumentBinding(
+                name=f"coord_{idx}",
+                type="Coord",
+                binding=BindingStatus.COMPOUND,
+                sub_bindings={
+                    "x": ArgumentBinding(name="x", type="Integer", binding=BindingStatus.UNRESOLVED, value=x_val),
+                    "y": ArgumentBinding(name="y", type="Integer", binding=BindingStatus.UNRESOLVED, value=y_val)
+                },
+                # The coordinate itself is always composed of two parts.
+                sub_bindings_length_status=BindingStatus.CONSTANT,
+                sub_bindings_length_value=2
+            )
+            output_positions_binding.sub_bindings.append(sub_binding)
+
+        # --- Build compound binding for input_positions with the same logic ---
+        input_positions_binding = ArgumentBinding(
+            name="input_positions",
+            type="Array<Coord>",
+            binding=BindingStatus.COMPOUND,
+            sub_bindings=[],  # To be populated below.
+            sub_bindings_length_status=BindingStatus.UNRESOLVED,
+            sub_bindings_length_value=len(input_coords)
+            # TODO value=output_coords ?
+        )
+        for idx, coord in enumerate(input_coords):
+            x_val = int(coord[0])
+            y_val = int(coord[1])
+            sub_binding = ArgumentBinding(
+                name=f"coord_{idx}",
+                type="Coord",
+                binding=BindingStatus.COMPOUND,
+                sub_bindings={
+                    "x": ArgumentBinding(name="x", type="Integer", binding=BindingStatus.UNRESOLVED, value=x_val),
+                    "y": ArgumentBinding(name="y", type="Integer", binding=BindingStatus.UNRESOLVED, value=y_val)
+                },
+                sub_bindings_length_status=BindingStatus.CONSTANT,
+                sub_bindings_length_value=2
+            )
+            input_positions_binding.sub_bindings.append(sub_binding)
+
+        # --- Build and return the ActionInstance ---
         return ActionInstance(
             id=f"repeated_sprite_{row['sprite_unique_id']}#{getUniqueId()}",
-            action=self.action,
+            action=action,
             bindings={
                 "output_canvas": ArgumentBinding(
                     name="output_canvas",
@@ -251,25 +317,16 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
                     binding=BindingStatus.UNRESOLVED,
                     value=sprite_grid
                 ),
-                "input_positions": ArgumentBinding(
-                    name="input_positions",
-                    type="Container",
-                    binding=BindingStatus.UNRESOLVED,
-                    value=input_coords
-                ),
-                "output_positions": ArgumentBinding(
-                    name="output_positions",
-                    type="Container",
-                    binding=BindingStatus.UNRESOLVED,
-                    value=output_coords
-                )
+                # Use the newly constructed compound bindings for input and output positions.
+                "input_positions": input_positions_binding,
+                "output_positions": output_positions_binding
             },
             output_var="repeated_grid",
             output_value=painted_canvas,
             output_type="Grid",
             trainId=trainId,
             testId=testId,
-            isTrain=trainId != -1,
+            isTrain=(trainId != -1),
             isToOutput=True,
             END=False
         )

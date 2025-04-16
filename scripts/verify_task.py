@@ -1,5 +1,5 @@
 # scripts/verify_task.py
-
+import copy
 import json
 import argparse
 import os
@@ -18,7 +18,8 @@ from constelize.tools.pattern_analysis import (
     load_arc_json, generate_submission_file, compare_submission_to_arc_outputs,
 )
 from constelize.tools.sqlite_loader import load_all_tables_from_sqlite
-from constelize.tools.squeeze import squeeze_with_remapped_sources, normalize_procedures_with_levels
+from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved, \
+    remove_unresolved_actions_from_generic
 
 # Default task ID
 #DEFAULT_TASK_ID = "3c9b0459"
@@ -27,8 +28,8 @@ from constelize.tools.squeeze import squeeze_with_remapped_sources, normalize_pr
 #DEFAULT_TASK_ID = "68b16354"
 #DEFAULT_TASK_ID = "74dd1130"
 #DEFAULT_TASK_ID = "6150a2bd"
-DEFAULT_TASK_ID = "9172f3a0"
- #DEFAULT_TASK_ID = "a416b8f3_simple"
+#DEFAULT_TASK_ID = "9172f3a0"
+DEFAULT_TASK_ID = "a416b8f3_simple"
 #DEFAULT_TASK_ID = "b1948b0a"
 #DEFAULT_TASK_ID = "c8f0f002"
 #DEFAULT_TASK_ID = "c59eb873"
@@ -70,9 +71,20 @@ load_end_outputs_from_json(json_path)
 load_json_inputs_from_json(json_path)
 
 data = load_arc_json(json_path)
+
 procedures = generate_draft_procedure(db_path, json_path, name=f"{TASK_ID}_procedure")
+
 normalized_procs = normalize_procedures_with_levels(list(procedures.values()))
-generic_procs = squeeze_with_remapped_sources(normalized_procs)
+
+generic_proc_with_unresolved = squeeze_with_unresolved(normalized_procs)
+
+generic_procs = copy.deepcopy(generic_proc_with_unresolved)
+
+# Apply the removal helper to the copy for each Procedure.
+for proc in generic_procs:
+    # Assuming `remove_unresolved_actions_from_generic` receives a dictionary of steps
+    # and returns a new dictionary with unresolved actions removed.
+    proc.steps = remove_unresolved_actions_from_generic(proc.steps)
 
 # Test on training examples
 results = test_generic_procs_on_trains(generic_procs, data)

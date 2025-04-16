@@ -1,11 +1,13 @@
 # spatial_transformation.py
+import copy
 
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
-    zoom, paint
-from typing import Tuple, Any
+    zoom, paint, Grid
+from typing import Tuple, Any, List, Dict
+
 
 def shift(patch: Any, directions: Tuple[int, int]) -> Any:
     di, dj = directions
@@ -20,14 +22,13 @@ def normalize(patch: Any) -> Any:
     min_j = min(j for _, (i, j) in patch)
     return shift(patch, (-min_i, -min_j))
 
-def repeated_sprite(output_canvas, sprite, input_positions, output_positions):
-    """
-    Paint the same sprite multiple times on an output canvas at specified positions.
-    The input_positions are not used in this implementation but kept for consistency.
-    """
-    canvas = output_canvas
-    for (x, y) in output_positions:  # x = col, y = row
-        canvas = paint(canvas, sprite, (y, x))
+def repeated_sprite(output_canvas: Grid, sprite: Grid,
+                    input_positions: List[Dict[str, int]],
+                    output_positions: List[Dict[str, int]]) -> Grid:
+    canvas = copy.deepcopy(output_canvas)
+    for pos in output_positions:
+        x, y = pos["x"], pos["y"]
+        canvas = paint(canvas, sprite, (y, x))  # (row,col) = (y,x)
     return canvas
 
 def canvas_by_ratio_fn(grid, ratio_width: int, ratio_height: int):
