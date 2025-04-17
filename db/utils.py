@@ -1,4 +1,4 @@
-# utils.py
+# db/utils.py
 
 import sqlite3
 import os
@@ -33,8 +33,10 @@ def main():
     # Create a table first_sight_analysis if it doesn't exist
     cursor.execute("""
 CREATE TABLE IF NOT EXISTS first_sight_analysis (
+    id INTEGER PRIMARY KEY,
     filename TEXT NOT NULL,
-    trainId INTEGER NOT NULL,
+    trainId INTEGER NOT NULL DEFAULT -1,
+    testId INTEGER NOT NULL DEFAULT -1,
 
     widthInput INTEGER,
     widthOutput INTEGER,
@@ -485,7 +487,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
 
     # Create table: sprite_analysis
     cursor.execute("""
-    CREATE TABLE sprite_analysis (
+    CREATE TABLE IF NOT EXISTS sprite_analysis (
     	id INTEGER PRIMARY KEY,
         filename TEXT NOT NULL,
         trainId INTEGER NOT NULL,

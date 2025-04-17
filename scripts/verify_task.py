@@ -29,7 +29,8 @@ from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_w
 #DEFAULT_TASK_ID = "74dd1130"
 #DEFAULT_TASK_ID = "6150a2bd"
 #DEFAULT_TASK_ID = "9172f3a0"
-DEFAULT_TASK_ID = "a416b8f3_simple"
+#DEFAULT_TASK_ID = "a416b8f3_simple"
+DEFAULT_TASK_ID = "a416b8f3"
 #DEFAULT_TASK_ID = "b1948b0a"
 #DEFAULT_TASK_ID = "c8f0f002"
 #DEFAULT_TASK_ID = "c59eb873"
@@ -55,8 +56,10 @@ submission_path = os.path.join(PROJECT_ROOT, "results", "submission.json")
 comparison_path = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_comparison.txt")
 
 # Relaunch object_analysis and sprite_analysis scripts
+first_sight_script = os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py")
 object_script = os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py")
 sprite_script = os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py")
+subprocess.run(["python", first_sight_script, json_path])
 subprocess.run(["python", object_script, json_path])
 subprocess.run(["python", sprite_script, json_path])
 
