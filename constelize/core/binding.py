@@ -9,6 +9,7 @@ class BindingStatus(Enum):
     UNRESOLVED = auto()     # Not yet bound.
     MULTIPLE = auto()       # Requires candidate expansion.
     INPUT_GRID = auto()     # To be injected from JSON input.
+    CONTEXT = auto()        # Externally provided metadata, e.g. trainId/testId.
     COMPOUND = auto()       # Structured binding for composite types.
 
 @dataclass

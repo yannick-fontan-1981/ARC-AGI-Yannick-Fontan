@@ -126,6 +126,20 @@ def _sanitise_branch(step_dict: Dict[str, ActionInstance]) -> None:
             if bind.binding == BindingStatus.UNRESOLVED:
                 bind.value = None
 
+def update_source_procedure_recursive(binding, id_remap):
+    if binding.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE) and binding.source_procedure_id:
+        if binding.source_procedure_id in id_remap:
+            old_id = binding.source_procedure_id
+            binding.source_procedure_id = id_remap[old_id]
+            print(f"         ↻ Deep remap: {old_id} → {binding.source_procedure_id}")
+
+    if binding.binding == BindingStatus.COMPOUND:
+        if isinstance(binding.sub_bindings, dict):
+            for sub in binding.sub_bindings.values():
+                update_source_procedure_recursive(sub, id_remap)
+        elif isinstance(binding.sub_bindings, list):
+            for sub in binding.sub_bindings:
+                update_source_procedure_recursive(sub, id_remap)
 
 ###############################################################################
 # New squeeze implementation – NO INDEX ALIGNMENT; renamed to squeeze_with_unresolved
@@ -223,6 +237,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
                                 cand.producer_id = train_to_generic_id[old_cand]
                                 print(
                                     f"         ↻ Updating candidate in step {step.id}: {old_cand} → {cand.producer_id}")
+                update_source_procedure_recursive(bind, train_to_generic_id)
 
     # Final assembly: build Procedure objects, order steps, and mark the last step with END=True.
     print("\n────────────────────────────────────────────")

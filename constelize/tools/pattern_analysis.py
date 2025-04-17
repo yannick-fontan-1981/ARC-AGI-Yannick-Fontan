@@ -9,10 +9,14 @@ from itertools import product
 from constelize.core.binding import BindingStatus, LinkCandidate, ArgumentBinding
 from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid
+
+import constelize.library.attribute_access as _aa_mod
+from constelize.library.attribute_access import build_get_attribute_instance
+
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input
 from constelize.core.procedure import Procedure, evaluate_procedure, build_procedure_from_action_instances, \
     ActionInstance
-from constelize.tools.sqlite_loader import load_sqlite_to_dict
+from constelize.tools.sqlite_loader import load_sqlite_to_dict, common_attributes_by_train_value_pairs
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
 from typing import List, Dict, Optional, Any, Tuple
@@ -73,6 +77,27 @@ def generate_draft_procedure(db_path: str, json_path: str, name: str = "generate
 
     auto_link_by_value_and_type(action_instances)
 
+    action_instances = auto_link_by_common_attribute(action_instances)
+
+    # 🔍 Supprimer toute action qui contient encore un binding non résolu
+    action_instances = [inst for inst in action_instances if not has_unresolved_binding(inst)]
+
+    print(f"\n🔍 ActionInstances after linking:")
+    for inst in action_instances:
+        print(f"\n🔹 {inst.id} ({inst.action.id})")
+        print(f"    trainId={inst.trainId}, testId={inst.testId}, output_var={inst.output_var}")
+        print(f"    ➤ output_value = {inst.output_value}")
+        print(f"    ➤ bindings:")
+        for path, bind in _iter_all_bindings(inst.bindings):
+            print(f"      • {path} → {bind.binding.name}", end="")
+            if bind.binding in {BindingStatus.MULTIPLE}:
+                print(f" = {bind.value}")
+            if bind.binding in {BindingStatus.CONSTANT, BindingStatus.CONTEXT, BindingStatus.INPUT_GRID}:
+                print(f" = {bind.value}")
+            elif bind.binding == BindingStatus.VARIABLE:
+                print(f" ← from {bind.source_procedure_id}")
+            else:
+                print("")
 
     procedures = generate_procedures_by_train(action_instances)
 
@@ -119,20 +144,6 @@ def extract_rules_from_procedure(procedure: Procedure) -> str:
         rule_descriptions.append(f"{action_id}")
     return "\n".join(rule_descriptions)
 
-
-def evaluate_draft_procedure(draft_proc: Procedure, train_data: Dict[int, Grid]) -> Dict[int, Grid]:
-    results = {}
-    for train_id, grid in train_data.items():
-        print(f"Evaluating trainId={train_id}")
-        try:
-            result = evaluate_procedure_on_input(draft_proc, grid)
-            results[train_id] = result
-        except Exception as e:
-            print(f"Failed evaluation for trainId={train_id}: {e}")
-            results[train_id] = None
-    return results
-
-
 def auto_link_by_value_and_type(action_instances: list):
     """
     Try to auto-link unresolved input bindings in action_instances
@@ -172,6 +183,87 @@ def auto_link_by_value_and_type(action_instances: list):
                     print(f"    ✅ Linked {producer.id} → {consumer.id}.{arg_name}")
                     link_producer_to_consumer(binding, producer, consumer)
 
+def auto_link_by_common_attribute(action_instances: list) -> list:
+    """
+    Try to resolve any UNRESOLVED Integer binding by detecting a common attribute
+    across training examples for that argument's value.
+    Returns a new list of action instances including any new get_attribute steps.
+    """
+    print("\n🔎 Starting auto_link_by_common_attribute...")
+    print(f"len(_attributes_by_input_and_values) : {len(_aa_mod._attributes_by_input_and_values)}")
+
+    # Step 1: Collect unresolved integer bindings by path across all consumers
+    unresolved_by_path = defaultdict(list)  # path -> list of (consumer, binding)
+    trainval_by_path = defaultdict(list)    # path -> list of (trainId, value)
+
+    for consumer in action_instances:
+        if consumer.action is None:
+            continue
+        for path, binding in _iter_all_bindings(consumer.bindings):
+            if binding.binding == BindingStatus.UNRESOLVED and binding.type == "Integer" and binding.value is not None:
+                unresolved_by_path[path].append((consumer, binding))
+                if consumer.trainId != -1:
+                    trainval_by_path[path].append((consumer.trainId, binding.value))
+
+    # Step 2: Resolve all at once per path
+    new_instances = []
+    for path, pairs in trainval_by_path.items():
+        print(f"\n🔍 Trying to resolve bindings at path: {path}")
+        print(f"   value_pairs = {pairs}")
+
+        common_attrs = common_attributes_by_train_value_pairs(_aa_mod._attributes_by_input_and_values, pairs)
+        if not common_attrs:
+            print(f"   ❌ No common attribute found for path {path}.")
+            continue
+
+        chosen_attr = common_attrs[0]
+        print(f"   ✅ Found common attribute: {chosen_attr}")
+
+        for consumer, binding in unresolved_by_path[path]:
+            key = f"{consumer.trainId}#{consumer.testId}"
+            value = _aa_mod._values_by_input.get(key, {}).get(chosen_attr)
+            if value is None:
+                print(f"      ⚠️ Skipping {consumer.id}.{path} → attribute missing in {key}")
+                continue
+
+            print(f"      🔁 Linking {consumer.id}.{path} to get_attribute({chosen_attr}) = {value}")
+
+            instance = build_get_attribute_instance(
+                trainId=consumer.trainId,
+                testId=consumer.testId,
+                attribute_name=chosen_attr,
+                output_value=value
+            )
+
+            #instance.bindings["trainId"].binding = BindingStatus.CONTEXT
+            #instance.bindings["testId"].binding = BindingStatus.CONTEXT
+
+            new_instances.append(instance)
+            binding.binding = BindingStatus.VARIABLE
+            binding.source_procedure_id = instance.id
+
+    print(f"\n✅ auto_link_by_common_attribute complete. {len(new_instances)} new action(s) added.")
+    return new_instances + action_instances
+
+
+def _iter_all_bindings(bindings, prefix=""):
+    """
+    Recursively yield all (full_path, ArgumentBinding) pairs from a possibly compound structure.
+    """
+    if isinstance(bindings, dict):
+        for name, b in bindings.items():
+            path = f"{prefix}.{name}" if prefix else name
+            if b.binding == BindingStatus.COMPOUND:
+                yield from _iter_all_bindings(b.sub_bindings, prefix=path)
+            else:
+                yield path, b
+    elif isinstance(bindings, list):
+        for idx, b in enumerate(bindings):
+            path = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            if b.binding == BindingStatus.COMPOUND:
+                yield from _iter_all_bindings(b.sub_bindings, prefix=path)
+            else:
+                yield path, b
 
 def flatten_binding(binding: ArgumentBinding) -> Tuple[bool, any]:
     """
@@ -404,7 +496,7 @@ def test_generic_procs_on_trains(generic_procs, arc_json_data) -> List[dict]:
         for proc in generic_procs:
             print(f"🚀 Testing procedure {proc.id} on trainId={trainId}")
             cloned = clone_procedure(proc)
-            evaluated_output = evaluate_procedure_on_input(cloned, input_grid)
+            evaluated_output = evaluate_procedure_on_input(cloned, input_grid, trainId, -1)
 
             success = grids_equal(evaluated_output, expected_output)
             status = "✅ SUCCESS" if success else "❌ FAIL"
@@ -436,7 +528,7 @@ def resolve_candidate(candidate, context):
 def remove_value_from_generic(proc: Procedure):
     for step in proc.steps:
         for binding in step.bindings.values():
-            if binding.binding not in [BindingStatus.CONSTANT, BindingStatus.INPUT_GRID]:
+            if binding.binding in [BindingStatus.VARIABLE]:
                 binding.value = None
             clear_sub_bindings(binding)
 
@@ -444,12 +536,12 @@ def clear_sub_bindings(binding: ArgumentBinding):
     if binding.sub_bindings:
         if isinstance(binding.sub_bindings, dict):
             for sub_binding in binding.sub_bindings.values():
-                if sub_binding.binding not in [BindingStatus.CONSTANT, BindingStatus.INPUT_GRID]:
+                if sub_binding.binding in [BindingStatus.VARIABLE]:
                     sub_binding.value = None
                 clear_sub_bindings(sub_binding)
         elif isinstance(binding.sub_bindings, list):
             for sub_binding in binding.sub_bindings:
-                if sub_binding.binding not in [BindingStatus.CONSTANT, BindingStatus.INPUT_GRID]:
+                if sub_binding.binding in [BindingStatus.VARIABLE]:
                     sub_binding.value = None
                 clear_sub_bindings(sub_binding)
 
@@ -465,6 +557,9 @@ def evaluate_step_with_multiple(step: ActionInstance, input_grid: Grid, context:
     for arg_name, binding in step.bindings.items():
         resolved_value = resolve_binding_recursive(binding, context, step_lookup, input_grid)
         args[arg_name] = resolved_value
+        if resolved_value is None:
+            print(f"Unresolved '{arg_name}' skip this action: {step.id}")
+            return None
         print(f"Resolved '{arg_name}' to value: {resolved_value}")
 
     print(f"Evaluating {step.action.name} with args: {args}")
@@ -476,12 +571,16 @@ def evaluate_step_with_multiple(step: ActionInstance, input_grid: Grid, context:
     except Exception as e:
         raise RuntimeError(f"Error executing step {step.id}: {e}")
 
-def evaluate_procedure_on_input(proc: Procedure, input_grid: Grid) -> Grid:
+def evaluate_procedure_on_input(proc: Procedure, input_grid: Grid, trainId, testId) -> Grid:
     context = {}
     step_lookup = _build_step_lookup(proc)
     print(f"[DEBUG] proc.steps: {proc.steps}")  # Add this debug print
     last_result = None
     for step in proc.steps:
+        step.trainId = trainId
+        step.testId = testId
+        context["trainId"] = trainId
+        context["testId"] = testId
         print(f"[DEBUG] Current step: {step}, type: {type(step)}")
         last_result = evaluate_step_with_multiple(step, input_grid, context, step_lookup)
     return last_result
@@ -526,7 +625,7 @@ def run_generic_procs_on_tests(generic_procs: List[Procedure], arc_json_data: di
             proc_clone = clone_procedure(proc)
             # Sanitize the procedure copy before evaluation.
             remove_value_from_generic(proc_clone)
-            evaluated_output = evaluate_procedure_on_input(proc_clone, input_grid)
+            evaluated_output = evaluate_procedure_on_input(proc_clone, input_grid, -1, testId)
             success = grids_equal(evaluated_output, expected_output)
             status = "✅ SUCCESS" if success else "❌ FAIL"
             print(f"\n🔍 Testing procedure {proc.id} on testId={testId}: {status}")
@@ -552,7 +651,15 @@ def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_d
     submission = {task_id: []}
     test_data = arc_data["test"]
 
-    for test_entry in test_data:
+    # Handle both list-style and dict-style test sets
+    if isinstance(test_data, list):
+        test_iter = enumerate(test_data)
+    elif isinstance(test_data, dict):
+        test_iter = ((int(k), v) for k, v in test_data.items())
+    else:
+        raise ValueError("Unsupported test format: must be list or dict")
+
+    for testId, test_entry in test_iter:
         input_grid = test_entry["input"]
         expected_output = test_entry["output"]
 
@@ -560,14 +667,14 @@ def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_d
         for proc in generic_procs:
             proc_clone = clone_procedure(proc)
             try:
-                predicted = evaluate_procedure_on_input(proc_clone, input_grid)
+                predicted = evaluate_procedure_on_input(proc_clone, input_grid, -1, testId)
                 if grids_equal(predicted, expected_output):
                     best_output = predicted
                     break  # Use the first perfect prediction.
                 elif best_output is None:
                     best_output = predicted
             except Exception as e:
-                print(f"⚠️ Error evaluating procedure {proc.id} on test input: {e}")
+                print(f"⚠️ Error evaluating procedure {proc.id} on test input {testId}: {e}")
 
         if best_output is None:
             # Fallback: produce an empty grid with the same dimensions as expected_output.
@@ -663,9 +770,20 @@ def resolve_binding_recursive(binding: ArgumentBinding, context: Dict[str, Any],
         # Directly return the provided input_grid
         return input_grid
 
+    elif binding.binding == BindingStatus.CONTEXT:
+        return context.get(binding.name)
+
     elif binding.binding == BindingStatus.VARIABLE and binding.source_procedure_id in context:
         # Return resolved value from context
         return context[binding.source_procedure_id]
+
+
+    elif binding.binding == BindingStatus.MULTIPLE:
+        for candidate in binding.candidates or []:
+            if candidate.producer_id in context:
+                return context[candidate.producer_id]
+        print(f"⚠️ MULTIPLE with no resolved candidate found in context: {binding.candidates}")
+        return None
 
     elif binding.binding == BindingStatus.COMPOUND:
         # Recursively resolve each sub-binding
@@ -685,3 +803,9 @@ def resolve_binding_recursive(binding: ArgumentBinding, context: Dict[str, Any],
     else:
         # Default handling: use stored value, or None
         return binding.value
+
+def has_unresolved_binding(instance) -> bool:
+    for _, binding in _iter_all_bindings(instance.bindings):
+        if binding.binding == BindingStatus.UNRESOLVED:
+            return True
+    return False

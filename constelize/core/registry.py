@@ -1,3 +1,5 @@
+# constelize/core/registry.py
+
 import importlib
 import pkgutil
 from typing import List

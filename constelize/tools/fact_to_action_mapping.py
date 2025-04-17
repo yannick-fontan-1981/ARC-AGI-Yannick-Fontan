@@ -11,10 +11,7 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
-
-# Instantiate and register all actions.
-registry = ActionRegistry()
-registry.register_all_actions()
+from constelize.tools.registry_singleton import registry
 
 # Global unique ID counter for ActionInstances.
 _unique_id = 0

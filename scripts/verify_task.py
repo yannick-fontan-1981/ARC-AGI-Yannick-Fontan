@@ -17,9 +17,11 @@ from constelize.tools.pattern_analysis import (
     run_generic_procs_on_tests,
     load_arc_json, generate_submission_file, compare_submission_to_arc_outputs,
 )
-from constelize.tools.sqlite_loader import load_all_tables_from_sqlite
+from constelize.tools.sqlite_loader import load_all_tables_from_sqlite, build_values_by_input, \
+    build_attributes_by_input_and_values
 from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved, \
     remove_unresolved_actions_from_generic
+import constelize.library.attribute_access as _aa_mod
 
 # Default task ID
 #DEFAULT_TASK_ID = "3c9b0459"
@@ -29,9 +31,8 @@ from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_w
 #DEFAULT_TASK_ID = "74dd1130"
 #DEFAULT_TASK_ID = "6150a2bd"
 #DEFAULT_TASK_ID = "9172f3a0"
-#DEFAULT_TASK_ID = "a416b8f3_simple"
-DEFAULT_TASK_ID = "a416b8f3"
-#DEFAULT_TASK_ID = "b1948b0a"
+#DEFAULT_TASK_ID = "a416b8f3"
+DEFAULT_TASK_ID = "b1948b0a"
 #DEFAULT_TASK_ID = "c8f0f002"
 #DEFAULT_TASK_ID = "c59eb873"
 #DEFAULT_TASK_ID = "d10ecb37"
@@ -62,6 +63,15 @@ sprite_script = os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py
 subprocess.run(["python", first_sight_script, json_path])
 subprocess.run(["python", object_script, json_path])
 subprocess.run(["python", sprite_script, json_path])
+
+# --- 2) Build & inject our precomputed maps into the attribute_access module ---
+_values = build_values_by_input(db_path)
+_attrs  = build_attributes_by_input_and_values(_values)
+
+_aa_mod._values_by_input = _values
+_aa_mod._attributes_by_input_and_values = _attrs
+
+print(f"[verify_task] Injected attributes: {len(_attrs)} entries")
 
 def filter_successful_procedures(results):
     success_map = defaultdict(list)

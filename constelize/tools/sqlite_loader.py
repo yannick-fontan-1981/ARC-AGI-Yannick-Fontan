@@ -50,6 +50,11 @@ def load_all_tables_from_sqlite(db_path: str) -> Dict[str, Dict[int, Dict[str, A
 def is_excluded_column(col_name):
     return col_name == "id" or col_name.endswith("_id")
 
+def _sanitize_binding_value(value):
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
 def build_values_by_input(db_path: str):
     tables = load_all_tables_from_sqlite(db_path)
     values_by_input = defaultdict(dict)
@@ -67,7 +72,7 @@ def build_values_by_input(db_path: str):
         key_id = f"{train_id}#{test_id}"
         for col in input_columns_first_sight_analysis:
             if col in row_data and row_data[col] is not None:
-                values_by_input[key_id][f"first_sight_analysis.{col}"] = row_data[col]
+                values_by_input[key_id][f"first_sight_analysis.{col}"] = _sanitize_binding_value(row_data[col])
 
     # 🧩 2. Tables with isInsideInput flag
     relevant_shape_ids = set()
@@ -88,7 +93,7 @@ def build_values_by_input(db_path: str):
             for col, val in row_data.items():
                 if is_excluded_column(col) or col in {'id', 'trainId', 'testId', 'filename', 'isInsideInput', 'isInsideOutput', 'isInsideTrain', 'isInsideTest'}:
                     continue
-                values_by_input[key_id][f"{table_name}#{row_id}.{col}"] = val
+                values_by_input[key_id][f"{table_name}#{row_id}.{col}"] = _sanitize_binding_value(val)
             # track ids for later joins
             if table_name == "shape_occurrence":
                 shape_id = row_data.get("shape_id")
@@ -119,7 +124,7 @@ def build_values_by_input(db_path: str):
                     continue
                 key = f"{table_name}#{row_id}.{col}"
                 for key_id in values_by_input:
-                    values_by_input[key_id][key] = val
+                    values_by_input[key_id][key] = _sanitize_binding_value(val)
 
     process_joined_table("shape", relevant_shape_ids)
     process_joined_table("shape_transformation", relevant_shape_trans_ids)
@@ -176,7 +181,7 @@ if __name__ == "__main__":
 
     # Test: attributs communs avec des valeurs différentes par train
     print("\n🔍 Testing common_attributes_by_train_value_pairs...")
-    test_pairs = [(0, 3), (1, 3), (2, 4)]  # à adapter selon ton jeu de données
+    test_pairs = [(1, 3), (2, 4)] # [(0, 3), (1, 3), (2, 4)]  # à adapter selon ton jeu de données
     common_attrs = common_attributes_by_train_value_pairs(attributes_by_input_and_values, test_pairs)
 
     print(f"\n✅ Common attributes for: {test_pairs}")
