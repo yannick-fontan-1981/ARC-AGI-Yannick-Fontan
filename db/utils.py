@@ -577,6 +577,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sprite_unique (
             id INTEGER PRIMARY KEY,
+            trainId INTEGER NOT NULL DEFAULT -1,
+            testId INTEGER NOT NULL DEFAULT -1,
             filename TEXT NOT NULL,
             height INTEGER NOT NULL,
             width INTEGER NOT NULL,
@@ -610,6 +612,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             flipped_horiz_90 BOOLEAN NOT NULL DEFAULT 0,
             zoom_x INTEGER NOT NULL DEFAULT 1,
             zoom_y INTEGER NOT NULL DEFAULT 1,
+            recolored TEXT NOT NULL DEFAULT '[]',
+            sprite_produce_id INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (sprite_unique_id) REFERENCES sprite_unique(id)
         );
         """)
