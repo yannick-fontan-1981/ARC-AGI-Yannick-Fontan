@@ -244,230 +244,237 @@ def find_existing_sprite_and_flags(sprite_data, global_data):
     # is "original" in your final usage.
     return (None, transformations_to_test[0][1])  # i.e., the original's flags
 
-def compute_recolor_map(base_canonical_json: str,
-                        sprite_grid: list[list[int]]
-                       ) -> list[list[int]]|None:
-    """
-    Given:
-      • base_canonical_json: the JSON‑dumped 'data' field from sprite_unique
-                            (a list of (color,(row,col)) tuples)
-      • sprite_grid: the 2D list of ints you just observed
 
-    Returns:
-      • a list of [fromColor, toColor] pairs if sprite_grid is exactly
-        the same shape as base and differs only by recoloring
-      • []     if it’s identical (no recolor needed)
-      • None   if it’s NOT a pure recolor (dims differ, empty pixels mismatch,
-                or one base color maps to multiple new colors)
-    """
-    # 1) Reconstruct the base grid (with -1 for “empty” pixels)
-    base_data = json.loads(base_canonical_json)
-    base_grid = to_concrete_grid(base_data)
-
-    # 2) Quick dimension check
-    h1, w1 = len(base_grid), len(base_grid[0]) if base_grid else 0
-    h2, w2 = len(sprite_grid), len(sprite_grid[0]) if sprite_grid else 0
-    if (h1, w1) != (h2, w2):
+def compute_recolor_map(from_grid: list[list[int]], to_grid: list[list[int]]) -> list[list[int]]|None:
+    if len(from_grid) != len(to_grid) or len(from_grid[0]) != len(to_grid[0]):
         return None
 
-    # 3) Build the mapping
-    recolor_map: dict[int,int] = {}
-    for i in range(h2):
-        for j in range(w2):
-            orig = base_grid[i][j]
-            new  = sprite_grid[i][j]
-
-            # if either is “empty” (-1), we consider that a structural change
-            if orig == -1 or new == -1:
-                if orig != new:
+    recolor_map = {}
+    reverse_map = {}
+    for i in range(len(from_grid)):
+        for j in range(len(from_grid[0])):
+            a, b = from_grid[i][j], to_grid[i][j]
+            if a == -1 or b == -1:
+                if a != b:
                     return None
-                else:
-                    continue
-
-            if orig == new:
                 continue
-
-            # if we’ve already seen orig→something else, fail
-            if orig in recolor_map and recolor_map[orig] != new:
+            if a == b:
+                continue
+            if a in recolor_map and recolor_map[a] != b:
                 return None
-
-            recolor_map[orig] = new
-
-    # 4) format result
-    return [[f, t] for f, t in recolor_map.items()]
-
+            if b in reverse_map and reverse_map[b] != a:
+                return None  # 🔁 Prevent two different 'a' mapping to same 'b'
+            recolor_map[a] = b
+            reverse_map[b] = a
+    return list(recolor_map.items())
 
 def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
-    """
-    Insert a sprite into sprite_unique, sprite_transformation, and sprite_occurrence tables,
-    avoiding duplicates. Records both the canonical (source) sprite and the observed (produced)
-    sprite, plus rotation, flip, zoom, and recolor—all scoped per trainId, and with strict
-    pixel-by-pixel recolor checking to avoid false positives.
-    """
     import json
 
-    # 1) Find or create the canonical sprite_unique record, tagging with trainId
-    existing_id, flags = find_existing_sprite_and_flags(sprite_grid, global_data)
-    inverted, r90, r180_flag, r270, fv, fh, fv90, fh90 = flags
+    #print("\n🔍 Starting analysis for sprite:")
+    #print(json.dumps(sprite_grid, indent=2))
 
-    if existing_id is not None:
-        produced_id = existing_id
+    canon = canonical_sprite_representation(sprite_grid)
+    #print(f"→ Canonical representation: {canon}")
+
+    if canon in global_data["sprites_map"]:
+        produced_id = global_data["sprites_map"][canon]
+        #print(f"→ Reusing produced_id {produced_id} from sprites_map")
     else:
         produced_id = global_data["next_sprite_id"]
         global_data["next_sprite_id"] += 1
-
-        canon = canonical_sprite_representation(sprite_grid)
         global_data["sprites_map"][canon] = produced_id
+        #print(f"→ New produced_id assigned: {produced_id}")
 
         h = len(sprite_grid)
         w = len(sprite_grid[0]) if h else 0
         color_count = color_counts_in_sprite(sprite_grid)
         rec = {
-            "id":           produced_id,
-            "trainId":      attr_dict["trainId"],
-            "filename":     attr_dict["filename"],
-            "height":       h,
-            "width":        w,
-            "pixel_count":  h * w,
-            "nbBlack":      color_count["nbBlack"],
-            "nbBlue":       color_count["nbBlue"],
-            "nbRed":        color_count["nbRed"],
-            "nbGreen":      color_count["nbGreen"],
-            "nbYellow":     color_count["nbYellow"],
-            "nbGrey":       color_count["nbGrey"],
-            "nbFuchsia":    color_count["nbFuchsia"],
-            "nbOrange":     color_count["nbOrange"],
-            "nbTeal":       color_count["nbTeal"],
-            "nbBrown":      color_count["nbBrown"],
-            "data":         canon
+            "id": produced_id,
+            "trainId": attr_dict["trainId"],
+            "filename": attr_dict["filename"],
+            "height": h,
+            "width": w,
+            "pixel_count": h * w,
+            **color_count,
+            "data": canon
         }
         global_data["sprite_unique_records"].append(rec)
+        #print(f"✅ Added sprite_unique record: ID={produced_id}")
 
-    # 2) Prepare to search only this train’s own sprites
-    current_tid    = attr_dict["trainId"]
-    source_id      = produced_id
-    zoom_x, zoom_y = 1, 1
-    recolored      = []
+    current_tid = attr_dict["trainId"]
+    best_identity = None
+    found_any = False
 
-    # helper for 180° if not directly imported
     rot180_fn = lambda g: rot90(rot90(g))
-
-    # 3) All rotation/flip functions + their flag‑tuples
     transformations = [
-        (lambda g: g,                  (inverted, False, False, False, False, False, False, False)),
-        (rot90,                        (inverted, True,  False, False, False, False, False, False)),
-        (rot180_fn,                    (inverted, False, True,  False, False, False, False, False)),
-        (rot270,                       (inverted, False, False, True,  False, False, False, False)),
-        (hmirror,                      (inverted, False, False, False, False, True,  False, False)),
-        (vmirror,                      (inverted, False, False, False, True,  False, False, False)),
-        (lambda g: vmirror(rot90(g)), (inverted, True,  False, False, True,  False, False, False)),
-        (lambda g: hmirror(rot90(g)), (inverted, True,  False, False, False, True,  False, False)),
+        (lambda g: g,                  (False, False, False, False, False, False, False, False)),
+        (rot180_fn,                    (False, False, True,  False, False, False, False, False)),
+        (rot90,                        (False, True,  False, False, False, False, False, False)),
+        (rot270,                       (False, False, False, True,  False, False, False, False)),
+        (hmirror,                      (False, False, False, False, True,  False, False, False)),
+        (vmirror,                      (False, False, False, False, False, True,  False, False)),
+        (lambda g: vmirror(rot90(g)), (False, False, False, False, False, False, True,  False)),
+        (lambda g: hmirror(rot90(g)), (False, False, False, False, False, False, False, True)),
     ]
 
-    # 4) Try only this train’s sprites for a full match
-    found = False
+    matched_trans_ids = set()
+
     for other in global_data["sprite_unique_records"]:
         if other["trainId"] != current_tid:
             continue
-        base_id   = other["id"]
+        base_id = other["id"]
         base_grid = to_concrete_grid(json.loads(other["data"]))
 
         for fn, flag_tuple in transformations:
-            inv2, r902, r180_2, r2702, fv2, fh2, fv902, fh902 = flag_tuple
-
-            # 4a) rotation/flip
+            inv, r90, r180, r270, fv, fh, fv90, fh90 = flag_tuple
             transformed = fn(base_grid)
+            #print(f"  🔁 Trying transformation: {fn.__name__} | fh={fh}, fv={fv}, r90={r90}, r180={r180}")
 
-            # 4b) zoom detection
             zx, zy = detect_zoom_factors(transformed, sprite_grid)
-            if zx != 1 or zy != 1:
+            #print(f"     → Zoom factors: zx={zx}, zy={zy}")
+            if zx <= 0 or zy <= 0:
+                #print("     ⛔ Invalid zoom factors")
+                continue
+
+            try:
                 zoomed = [
-                    [transformed[i // zy][j // zx]
-                        for j in range(zx * len(transformed[0]))]
+                    [transformed[i // zy][j // zx] for j in range(zx * len(transformed[0]))]
                     for i in range(zy * len(transformed))
-                ]
-            else:
-                zoomed = transformed
+                ] if (zx != 1 or zy != 1) else transformed
+            except IndexError:
+                #print("     ⛔ Zoomed grid out of bounds")
+                continue
 
-            # dims must match exactly
             if len(zoomed) != len(sprite_grid) or len(zoomed[0]) != len(sprite_grid[0]):
+                #print("     ⛔ Shape mismatch after zoom")
                 continue
 
-            # 4c) compute a one-to-one recolor map
-            pairs = compute_recolor_map(canonical_sprite_representation(zoomed), sprite_grid)
+            pairs = compute_recolor_map(zoomed, sprite_grid)
+            is_identity = (fn.__name__ == '<lambda>' and zx == 1 and zy == 1)
+            #print(f"     → Recolor map: {pairs}")
+
             if pairs is None:
+                #print("     ⛔ Invalid recolor map")
                 continue
 
-            # 4d) apply the recolor map pixelwise and verify exact equality
-            mapping = { frm:to for frm,to in pairs }
-            recolored_grid = [
-                [ mapping.get(c,c) for c in row ]
-                for row in zoomed
-            ]
+            mapping = {frm: to for frm, to in pairs}
+            recolored_grid = [[mapping.get(c, c) for c in row] for row in zoomed]
+
             if recolored_grid != sprite_grid:
+                #print("     ⛔ Grid mismatch after recolor")
                 continue
 
-            # if we reach here, we have a true match
-            source_id      = base_id
-            zoom_x, zoom_y = zx, zy
-            recolored      = pairs
-            inverted, r90, r180_flag, r270, fv, fh, fv90, fh90 = (
-                inv2, r902, r180_2, r2702, fv2, fh2, fv902, fh902
+            found_any = True
+            #print(f"     ✅ Valid match: flags=[r90={r90}, r180={r180}, fh={fh}, fv={fv}, fv90={fv90}, fh90={fh90}] zoom=({zx},{zy})")
+            tkey = (
+                base_id, inv, r90, r180, r270, fv, fh, fv90, fh90,
+                zx, zy, tuple(tuple(p) for p in pairs)
             )
-            found = True
-            break
-        if found:
-            break
+            if tkey not in global_data["sprite_trans_map"]:
+                trans_id = global_data["next_sprite_trans_id"]
+                global_data["next_sprite_trans_id"] += 1
+                global_data["sprite_trans_map"][tkey] = trans_id
+                global_data["sprite_trans_records"].append({
+                    "id": trans_id,
+                    "sprite_unique_id": base_id,
+                    "sprite_produce_id": produced_id,
+                    "inverted": inv,
+                    "rotated_90": r90,
+                    "rotated_180": r180,
+                    "rotated_270": r270,
+                    "flipped_vert": fv,
+                    "flipped_horiz": fh,
+                    "flipped_vert_90": fv90,
+                    "flipped_horiz_90": fh90,
+                    "zoom_x": zx,
+                    "zoom_y": zy,
+                    "recolored": json.dumps(pairs)
+                })
+                #print(f"     🟢 REGISTERED: {base_id} → {produced_id}")
+            trans_id = global_data["sprite_trans_map"][tkey]
+            matched_trans_ids.add(trans_id)
+            if is_identity and not best_identity:
+                best_identity = (base_id, flag_tuple, zx, zy, pairs)
+                #print(f"     🔹 Best identity stored")
 
-    # 5) Dedup key for sprite_transformation
-    tkey = (
-        source_id,
-        inverted, r90, r180_flag, r270,
-        fv, fh, fv90, fh90,
-        zoom_x, zoom_y,
-        tuple(tuple(p) for p in recolored)
-    )
-    if tkey in global_data["sprite_trans_map"]:
-        trans_id = global_data["sprite_trans_map"][tkey]
-    else:
-        trans_id = global_data["next_sprite_trans_id"]
-        global_data["next_sprite_trans_id"] += 1
-        global_data["sprite_trans_map"][tkey] = trans_id
+    if not found_any and not best_identity:
+        inv, r90, r180, r270, fv, fh, fv90, fh90 = (False,) * 8
+        zx, zy = 1, 1
+        pairs = []
+        tkey = (
+            produced_id, inv, r90, r180, r270, fv, fh, fv90, fh90,
+            zx, zy, tuple(tuple(p) for p in pairs)
+        )
+        if tkey not in global_data["sprite_trans_map"]:
+            trans_id = global_data["next_sprite_trans_id"]
+            global_data["next_sprite_trans_id"] += 1
+            global_data["sprite_trans_map"][tkey] = trans_id
+            global_data["sprite_trans_records"].append({
+                "id": trans_id,
+                "sprite_unique_id": produced_id,
+                "sprite_produce_id": produced_id,
+                "inverted": inv,
+                "rotated_90": r90,
+                "rotated_180": r180,
+                "rotated_270": r270,
+                "flipped_vert": fv,
+                "flipped_horiz": fh,
+                "flipped_vert_90": fv90,
+                "flipped_horiz_90": fh90,
+                "zoom_x": zx,
+                "zoom_y": zy,
+                "recolored": json.dumps(pairs)
+            })
+            matched_trans_ids.add(trans_id)
+            #print(f"🟣 DEFAULT IDENTITY REGISTERED: {produced_id} → {produced_id}")
 
-        trec = {
-            "id":                 trans_id,
-            "sprite_unique_id":   source_id,
-            "sprite_produce_id":  produced_id,
-            "inverted":           inverted,
-            "rotated_90":         r90,
-            "rotated_180":        r180_flag,
-            "rotated_270":        r270,
-            "flipped_vert":       fv,
-            "flipped_horiz":      fh,
-            "flipped_vert_90":    fv90,
-            "flipped_horiz_90":   fh90,
-            "zoom_x":             zoom_x,
-            "zoom_y":             zoom_y,
-            "recolored":          json.dumps(recolored)
+    if not found_any and best_identity:
+        base_id, flag_tuple, zx, zy, pairs = best_identity
+        inv, r90, r180, r270, fv, fh, fv90, fh90 = flag_tuple
+        tkey = (
+            base_id, inv, r90, r180, r270, fv, fh, fv90, fh90,
+            zx, zy, tuple(tuple(p) for p in pairs)
+        )
+        if tkey not in global_data["sprite_trans_map"]:
+            trans_id = global_data["next_sprite_trans_id"]
+            global_data["next_sprite_trans_id"] += 1
+            global_data["sprite_trans_map"][tkey] = trans_id
+            global_data["sprite_trans_records"].append({
+                "id": trans_id,
+                "sprite_unique_id": base_id,
+                "sprite_produce_id": produced_id,
+                "inverted": inv,
+                "rotated_90": r90,
+                "rotated_180": r180,
+                "rotated_270": r270,
+                "flipped_vert": fv,
+                "flipped_horiz": fh,
+                "flipped_vert_90": fv90,
+                "flipped_horiz_90": fh90,
+                "zoom_x": zx,
+                "zoom_y": zy,
+                "recolored": json.dumps(pairs)
+            })
+            matched_trans_ids.add(trans_id)
+            #print(f"🟡 USING IDENTITY: {base_id} → {produced_id}")
+
+    for trans_id in matched_trans_ids:
+        occ = {
+            "sprite_unique_id": base_id if best_identity else produced_id,
+            "sprite_transformation_id": trans_id,
+            "isInsideInput": attr_dict["isInsideInput"],
+            "isInsideOutput": attr_dict["isInsideOutput"],
+            "isInsideTrain": attr_dict["isInsideTrain"],
+            "isInsideTest": attr_dict["isInsideTest"],
+            "trainId": attr_dict["trainId"] if attr_dict["isInsideTrain"] else -1,
+            "testId": attr_dict["testId"] if attr_dict["isInsideTest"] else -1,
+            "sprite_id": attr_dict["id"],
+            "minX": attr_dict["minX"],
+            "minY": attr_dict["minY"],
         }
-        global_data["sprite_trans_records"].append(trec)
-
-    # 6) Finally, record this occurrence
-    occ = {
-        "sprite_unique_id":         source_id,
-        "sprite_transformation_id": trans_id,
-        "isInsideInput":            attr_dict["isInsideInput"],
-        "isInsideOutput":           attr_dict["isInsideOutput"],
-        "isInsideTrain":            attr_dict["isInsideTrain"],
-        "isInsideTest":             attr_dict["isInsideTest"],
-        "trainId":                  attr_dict["trainId"] if attr_dict["isInsideTrain"] else -1,
-        "testId":                   attr_dict["testId"]  if attr_dict["isInsideTest"]  else -1,
-        "sprite_id":                attr_dict["id"],
-        "minX":                     attr_dict["minX"],
-        "minY":                     attr_dict["minY"],
-    }
-    global_data["sprite_occ_records"].append(occ)
-
+        global_data["sprite_occ_records"].append(occ)
+        #print(f"📦 Recorded occurrence for produced_id {produced_id} with transformation_id {trans_id}")
 
 
 
@@ -1031,12 +1038,12 @@ def compute_splitter_sprite(grid, filename, trainId, testId, isInsideInput):
     return []
 
 def pad_grid(grid, pad_value, pad_width=1):
-    #print("----------------------")
-    #print("pad_grid")
-    #print("grid", grid)
-    #print("pad_value", pad_value)
-    #print("pad_width", pad_width)
-    #print("----------------------")
+    ##print("----------------------")
+    ##print("pad_grid")
+    ##print("grid", grid)
+    ##print("pad_value", pad_value)
+    ##print("pad_width", pad_width)
+    ##print("----------------------")
     """
     Pads a 2D grid (list of lists) with pad_width layers of pad_value on all sides.
     """

@@ -64,8 +64,8 @@ def build_get_attribute_instance(
         },
         output_var=f"attr_{attribute_name}",
         output_value=output_value,
-        trainId=str(trainId),
-        testId=str(testId),
+        trainId=trainId,
+        testId=testId,
         isTrain=(trainId != -1),
         isToOutput=True
     )

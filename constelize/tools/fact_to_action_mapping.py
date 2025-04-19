@@ -9,7 +9,7 @@ from itertools import product
 from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
-from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom
+from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
 from constelize.tools.registry_singleton import registry
 
@@ -62,25 +62,41 @@ class FactToActionMapping:
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = f"""
-        SELECT sprite_transformation.sprite_unique_id,
-               sprite_occurrence.isInsideInput,
-               sprite_occurrence.isInsideOutput,
-               sprite_occurrence.trainId,
-               sprite_occurrence.testId,
-               sprite_unique.data
-        FROM sprite_transformation
-        INNER JOIN sprite_unique ON sprite_unique.id = sprite_transformation.sprite_unique_id
-        INNER JOIN sprite_occurrence ON sprite_transformation.id = sprite_occurrence.sprite_transformation_id
-        WHERE {self.column_name} = 1
+        SELECT 
+            st.sprite_unique_id,
+            st.sprite_produce_id,
+            so.isInsideInput,
+            so.isInsideOutput,
+            so.trainId,
+            so.testId,
+            source.data AS source_data,
+            produced.data AS produced_data
+        FROM sprite_transformation AS st
+        INNER JOIN sprite_occurrence AS so ON st.id = so.sprite_transformation_id
+        INNER JOIN sprite_unique AS produced ON produced.id = st.sprite_produce_id
+        INNER JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
+        WHERE st.{self.column_name} = 1
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
+
+        #if self.column_name == "flipped_horiz":
+        #    print("_test_function flipped_horiz")
+        #    print([dict(zip(columns, row)) for row in cursor.fetchall()])
+
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def _build_function(self, row: dict) -> ActionInstance:
-        raw_data = json.loads(row["data"])
+        raw_data = json.loads(row["source_data"])
         input_grid = to_concrete_grid(raw_data)
         output_grid = self.action.function(input_grid)
+
+        #if self.column_name == "flipped_horiz":
+        #   print("input_grid")
+        #   print(grid_to_pretty_string(input_grid))
+        #   print("output_grid")
+        #   print(grid_to_pretty_string(output_grid))
+
         trainId = row["trainId"]
         return ActionInstance(
             id=f"{self.action_id}_instance_{row['sprite_unique_id']}#{getUniqueId()}",
@@ -113,6 +129,7 @@ class ZoomFactToAction(FactToActionMapping):
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = """
         SELECT st.sprite_unique_id,
+               st.sprite_produce_id,
                so.trainId,
                so.testId,
                so.isInsideOutput,
@@ -121,7 +138,7 @@ class ZoomFactToAction(FactToActionMapping):
                st.zoom_y
         FROM sprite_transformation st
         JOIN sprite_occurrence so ON so.sprite_unique_id = st.sprite_unique_id
-        JOIN sprite_unique su ON su.id = st.sprite_unique_id
+        JOIN sprite_unique su ON su.id = st.sprite_produce_id
         WHERE (zoom_x > 1 OR zoom_y > 1)
         """
         cursor = conn.execute(query)
@@ -142,6 +159,15 @@ class ZoomFactToAction(FactToActionMapping):
         zoom_y = int(row["zoom_y"])
         input_grid = unzoom(output_grid, zoom_x, zoom_y)
         trainId = row["trainId"]
+
+        print("ZoomFactToAction _build_function ")
+        print("grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))")
+        print(grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId)))
+        print("output_grid")
+        print(output_grid)
+        print("END_OUTPUTS_BY_TRAINID.get(trainId))")
+        print(END_OUTPUTS_BY_TRAINID.get(trainId))
+
         return ActionInstance(
             id=f"zoom_instance_{row['sprite_unique_id']}#{getUniqueId()}",
             action=self.action,
@@ -191,7 +217,7 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             so.sprite_transformation_id,
             so.trainId,
             so.testId,
-            su.data,
+            source.data AS data,
             COALESCE('[' || GROUP_CONCAT(
                 CASE WHEN so.isInsideInput = 1
                      THEN '[' || so.minX || ',' || so.minY || ']'
@@ -203,15 +229,24 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
                 END, ','
             ) || ']', '[]') AS outputCoords
         FROM sprite_occurrence AS so
-        JOIN sprite_unique AS su ON su.id = so.sprite_unique_id
+        JOIN sprite_transformation AS st ON st.id = so.sprite_transformation_id
+        JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
         WHERE (so.sprite_unique_id, so.sprite_transformation_id) IN (
             SELECT sprite_unique_id, sprite_transformation_id
             FROM sprite_occurrence
             GROUP BY sprite_unique_id, sprite_transformation_id
             HAVING COUNT(*) > 1
         )
-        GROUP BY so.sprite_unique_id, so.sprite_transformation_id, so.trainId, so.testId, su.data
-        ORDER BY so.sprite_unique_id, so.trainId, so.testId;
+        GROUP BY
+            so.sprite_unique_id,
+            so.sprite_transformation_id,
+            so.trainId,
+            so.testId,
+            source.data
+        ORDER BY
+            so.sprite_unique_id,
+            so.trainId,
+            so.testId;
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
@@ -442,7 +477,7 @@ def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_gri
                 name="grid",
                 type="Grid",
                 binding=BindingStatus.INPUT_GRID,
-                value=None  # the grid will be injected during evaluation
+                value=None
             )
         },
         output_var=output_var,
@@ -453,6 +488,46 @@ def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_gri
         isFromInput=True,
         isToOutput=False
     )
+
+class RecolorSpriteFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("recolor_sprite", "recolor_sprite")
+
+    def _test_function(self, conn):
+        query = """
+        SELECT st.sprite_unique_id, so.trainId, so.testId, so.isInsideOutput,
+               su.data, st.recolored
+        FROM sprite_transformation st
+        JOIN sprite_occurrence so ON so.sprite_transformation_id = st.id
+        JOIN sprite_unique su ON su.id = st.sprite_unique_id
+        WHERE st.recolored IS NOT NULL AND st.recolored != '[]'
+        """
+        cursor = conn.execute(query)
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    def _build_function(self, row):
+        base_data = json.loads(row["data"])
+        input_grid = to_concrete_grid(base_data)
+        recolor_pairs = json.loads(row["recolored"])
+        output_grid = recolor_sprite(input_grid, recolor_pairs)
+        trainId = row["trainId"]
+        return ActionInstance(
+            id=f"recolor_{row['sprite_unique_id']}#{getUniqueId()}",
+            action=registry.get_by_id(self.action_id),
+            bindings={
+                "grid": ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.UNRESOLVED, value=input_grid),
+                "recolor_map": ArgumentBinding(name="recolor_map", type="List<List<Integer>>", binding=BindingStatus.UNRESOLVED, value=recolor_pairs)
+            },
+            output_var="recolored_grid",
+            output_value=output_grid,
+            output_type=self.action.output_type,
+            trainId=trainId,
+            testId=row["testId"],
+            isTrain=(trainId != -1),
+            isToOutput=row["isInsideOutput"],
+            END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
+        )
 
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
@@ -468,4 +543,5 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     ZoomFactToAction(),
     RepeatedSpriteFactToAction(),
     CanvasByRatioFactToAction(),
+    RecolorSpriteFactToAction(),
 ]

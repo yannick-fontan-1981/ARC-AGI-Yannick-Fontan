@@ -1,9 +1,11 @@
+# constelize/tools/squeeze.py
+
 from __future__ import annotations
 
 import copy
 import uuid
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
 from constelize.core.procedure import ActionInstance, Procedure
@@ -144,121 +146,146 @@ def update_source_procedure_recursive(binding, id_remap):
 ###############################################################################
 # New squeeze implementation – NO INDEX ALIGNMENT; renamed to squeeze_with_unresolved
 ###############################################################################
-def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
-    """
-    Build generic procedures (one per branch) from a list of per‑train procedures
-    without relying on positional indices. Steps are merged (forked) based on action
-    identity and constant‑binding signature. All id translations occur on the fly.
 
-    This verbose version logs every decision.
-    """
-    print("\n═══════════════════════════════════════════════════════════════")
-    print("🎬 squeeze_with_unresolved – starting")
-    print(f"• Received {len(train_procs)} train procedure(s)")
+def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
+    from copy import deepcopy
+    from collections import defaultdict
+
+    print("\n🎨 squeeze_with_unresolved – updating producer/candidate ids")
+
     if not train_procs:
-        print("  → Nothing to do. Returning []")
         return []
 
-    # Data structures:
-    branches: List[Dict[str, ActionInstance]] = [{}]  # start with one empty branch
-    action_counters: Dict[str, int] = defaultdict(int)  # for unique id generation per action
-    train_to_generic_id: Dict[str, str] = {}  # maps train step id -> generic step id
+    branches: List[Dict[str, ActionInstance]] = [{}]
+    action_counters: Dict[str, int] = defaultdict(int)
+    train_to_generic_id: Dict[str, str] = {}
 
-    # First pass: iterate over train procedures and build/fork branches
-    for proc_idx, proc in enumerate(train_procs):
-        print(f"\n────────────────────────────────────────────")
-        print(f"📑 Processing train procedure #{proc_idx} (id={proc.id})")
-        for step_idx, step in enumerate(proc.steps.values()):
-            print(f"\n  🔹 Train step #{step_idx} (id={step.id}, action={step.action.name})")
-            new_branches: List[Dict[str, ActionInstance]] = []
-            for branch_idx, branch in enumerate(branches):
-                print(f"    • Considering branch #{branch_idx} (contains {len(branch)} step(s))")
-                # For each binding in this train step, update its source_procedure_id according to
-                # the mapping from previously processed steps.
-                for b_name, bind in step.bindings.items():
+    def replace_nested_source_ids(binding: Union[ArgumentBinding, dict, list], mapping: dict, current_consumer_id: str, branch: dict):
+        if isinstance(binding, ArgumentBinding):
+            if binding.source_procedure_id in mapping:
+                old_id = binding.source_procedure_id
+                new_id = mapping[old_id]
+                print(f"🔁 Replacing source_procedure_id {old_id} → {new_id}")
+                binding.source_procedure_id = new_id
+                if new_id in branch:
+                    if current_consumer_id not in branch[new_id].used_by:
+                        branch[new_id].used_by.append(current_consumer_id)
+            replace_nested_source_ids(binding.sub_bindings, mapping, current_consumer_id, branch)
+        elif isinstance(binding, dict):
+            for sub in binding.values():
+                replace_nested_source_ids(sub, mapping, current_consumer_id, branch)
+        elif isinstance(binding, list):
+            for item in binding:
+                replace_nested_source_ids(item, mapping, current_consumer_id, branch)
+
+    def get_all_nested_source_ids(binding: Union[ArgumentBinding, dict, list]) -> set[str]:
+        ids = set()
+        if isinstance(binding, ArgumentBinding):
+            if binding.source_procedure_id:
+                ids.add(binding.source_procedure_id)
+            ids.update(get_all_nested_source_ids(binding.sub_bindings))
+        elif isinstance(binding, dict):
+            for sub in binding.values():
+                ids.update(get_all_nested_source_ids(sub))
+        elif isinstance(binding, list):
+            for item in binding:
+                ids.update(get_all_nested_source_ids(item))
+        return ids
+
+    def is_step_still_used(step_id: str, branch: dict) -> bool:
+        for s in branch.values():
+            for b in s.bindings.values():
+                if step_id in get_all_nested_source_ids(b):
+                    return True
+        return False
+
+    for proc in train_procs:
+        for step in proc.steps.values():
+            new_branches = []
+            for branch in branches:
+                for bind in step.bindings.values():
                     if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):
-                        old_src = bind.source_procedure_id
-                        if old_src:
-                            new_src = train_to_generic_id.get(old_src, old_src)
-                            if new_src != old_src:
-                                print(f"      ↻ Remapping binding '{b_name}': {old_src} → {new_src}")
-                                bind.source_procedure_id = new_src
-                                if bind.candidates is not None:
-                                    for cand in bind.candidates:
-                                        if cand.producer_id == old_src:
-                                            print(f"         ↻ Also remapping candidate from {old_src} → {new_src}")
-                                            cand.producer_id = new_src
+                        old_id = bind.source_procedure_id
+                        if old_id and old_id in train_to_generic_id:
+                            bind.source_procedure_id = train_to_generic_id[old_id]
+                        if bind.candidates:
+                            for cand in bind.candidates:
+                                if cand.producer_id in train_to_generic_id:
+                                    print(f"↻ Updating candidate: {cand.producer_id} → {train_to_generic_id[cand.producer_id]}")
+                                    cand.producer_id = train_to_generic_id[cand.producer_id]
 
-                # Try to reuse an equivalent generic step in this branch.
-                equiv = _find_equivalent(step, list(branch.values()))
-                if equiv:
-                    print(f"      ✅ Found equivalent generic step {equiv.id}; reusing it.")
-                    train_to_generic_id[step.id] = equiv.id
+                found = None
+                for b in branch.values():
+                    if b.action.id == step.action.id:
+                        const_match = all(
+                            b.bindings[k].value == step.bindings[k].value
+                            for k in b.bindings
+                            if b.bindings[k].binding == BindingStatus.CONSTANT
+                        )
+                        if const_match:
+                            found = b
+                            break
+
+                if found:
+                    train_to_generic_id[step.id] = found.id
                     new_branches.append(branch)
                     continue
 
-                # Otherwise, fork the branch with a deep copy of the step.
-                copied = copy.deepcopy(step)
+                copied = deepcopy(step)
                 action_counters[copied.action.id] += 1
                 copied.id = f"{copied.action.id}#{action_counters[copied.action.id]}"
                 train_to_generic_id[step.id] = copied.id
-                print(f"      ➕ No equivalent – creating new generic step {copied.id}")
-                # Update producers in the new branch:
-                for bind in copied.bindings.values():
-                    if bind.binding == BindingStatus.VARIABLE and bind.source_procedure_id:
-                        prod = branch.get(bind.source_procedure_id)
-                        if prod and copied.id not in prod.used_by:
-                            prod.used_by.append(copied.id)
-                            print(f"         • Updated producer {prod.id}.used_by ← {copied.id}")
+
+                for b in copied.bindings.values():
+                    replace_nested_source_ids(b, train_to_generic_id, copied.id, branch)
+                    if b.candidates:
+                        for cand in b.candidates:
+                            if cand.producer_id in train_to_generic_id:
+                                print(f"↻ Updating candidate: {cand.producer_id} → {train_to_generic_id[cand.producer_id]}")
+                                cand.producer_id = train_to_generic_id[cand.producer_id]
+
+                if copied.output_type is None:
+                    copied.output_type = copied.action.output_type
+
+                if copied.action.id == "get_start_input":
+                    for b in copied.bindings.values():
+                        if b.binding == BindingStatus.INPUT_GRID and b.value is None and copied.output_value:
+                            b.value = copied.output_value
+
                 branch2 = branch.copy()
                 branch2[copied.id] = copied
                 new_branches.append(branch2)
-                print(f"      ↳ Forked branch now has {len(branch2)} step(s)")
             branches = new_branches
-            print(f"    → After processing step, total branches: {len(branches)}")
 
-    # Second pass: ensure that all VARIABLE/MULTIPLE bindings’ source_procedure_ids (and their candidate lists)
-    # are properly remapped using the global train_to_generic_id map.
-    print("\n────────────────────────────────────────────")
-    print("🛠 Second pass: re-updating VARIABLE/MULTIPLE bindings")
-    for branch in branches:
-        for step in branch.values():
-            for bind in step.bindings.values():
-                if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE) and bind.source_procedure_id:
-                    old_source = bind.source_procedure_id
-                    new_source = train_to_generic_id.get(old_source, old_source)
-                    if new_source != old_source:
-                        print(f"      ↻ Updating binding in step {step.id}: {old_source} → {new_source}")
-                        bind.source_procedure_id = new_source
-                    if bind.candidates is not None:
-                        for cand in bind.candidates:
-                            if cand.producer_id in train_to_generic_id:
-                                old_cand = cand.producer_id
-                                cand.producer_id = train_to_generic_id[old_cand]
-                                print(
-                                    f"         ↻ Updating candidate in step {step.id}: {old_cand} → {cand.producer_id}")
-                update_source_procedure_recursive(bind, train_to_generic_id)
+    generic_procs = []
+    for idx, branch in enumerate(branches):
+        for s in branch.values():
+            s.output_value = None
+            for b in s.bindings.values():
+                if b.binding == BindingStatus.UNRESOLVED:
+                    b.value = None
 
-    # Final assembly: build Procedure objects, order steps, and mark the last step with END=True.
-    print("\n────────────────────────────────────────────")
-    print("📦 Building final generic Procedure objects")
-    generic_procs: List[Procedure] = []
-    for idx, step_dict in enumerate(branches, 1):
-        _sanitise_branch(step_dict)  # Only wipe bindings with UNRESOLVED status
-        print(f"\n  🛠 Branch #{idx}: contains {len(step_dict)} step(s)")
-        ordered_steps = _order_steps(step_dict)
-        if ordered_steps:
-            last_key = list(ordered_steps.keys())[-1]
-            ordered_steps[last_key].END = True
-            print(f"     • Marked step {ordered_steps[last_key].id} as END")
-        proc_id = f"generic_proc_{idx}"
-        generic_procs.append(Procedure(id=proc_id, steps=ordered_steps))
-        print(f"     → Created Procedure '{proc_id}'")
+        # 🧹 Clean up unused 'used_by' references pointing to removed steps
+        step_ids = set(branch.keys())
+        for s in branch.values():
+            if s.used_by:
+                s.used_by = [uid for uid in s.used_by if uid in step_ids]
 
-    print("\n🎉 squeeze_with_unresolved – done. Generated "
-          f"{len(generic_procs)} generic procedure(s)")
-    print("═══════════════════════════════════════════════════════════════\n")
+        # 🧹 Remove truly unused steps unless they produce final output
+        final_output_ids = {s.id for s in branch.values() if s.END or s.isToOutput}
+        to_remove = [
+            sid for sid in branch
+            if not is_step_still_used(sid, branch) and sid not in final_output_ids
+        ]
+        for sid in to_remove:
+            print(f"🧹 Removing truly unused producer: {sid} from generic_proc_{idx+1}")
+            branch.pop(sid)
+
+        proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch)
+        generic_procs.append(proc)
+
     return generic_procs
+
 
 
 def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
@@ -272,17 +299,22 @@ def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
 def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
     """
     Return a new branch dictionary that excludes any ActionInstance that has at least one binding
-    with status UNRESOLVED. (These actions are considered unsolved.)
+    with status UNRESOLVED. These actions are considered unsolved.
+    This version adds verbose output to help debug why each step is excluded or kept.
     """
-    print("  [remove_unresolved_actions_from_generic] Scanning branch for unsolved actions:")
+    print("\n🔍 [remove_unresolved_actions_from_generic] Scanning branch for unsolved actions...")
     new_branch = {}
     for sid, step in branch.items():
         unresolved = False
+        print(f"  🔎 Inspecting step: {step.id} ({step.action.name})")
         for bname, bind in step.bindings.items():
+            print(f"    • Binding '{bname}' → status: {bind.binding.name}, value: {bind.value}")
             if bind.binding == BindingStatus.UNRESOLVED:
-                print(f"    → Removing step {step.id} due to unresolved binding '{bname}'.")
+                print(f"    ❌ Step {step.id} will be removed due to unresolved binding: '{bname}'")
                 unresolved = True
                 break
         if not unresolved:
+            print(f"    ✅ Step {step.id} is kept.")
             new_branch[sid] = step
+    print(f"  ✅ Final branch size: {len(new_branch)} (filtered from {len(branch)})")
     return new_branch

@@ -9,8 +9,8 @@ from constelize.core.binding import BindingStatus, ArgumentBinding
 class ActionInstance:
     id: str
     action: Action
-    trainId: Optional[str] = None
-    testId: Optional[str] = None
+    trainId: Optional[int] = None
+    testId: Optional[int] = None
     isTrain: Optional[bool] = None
     bindings: Dict[str, Any] = field(default_factory=dict)
     isFromInput: Optional[bool] = None

@@ -104,6 +104,17 @@ def paint(base: Grid, patch: Grid, top_left: Tuple[int, int]) -> Grid:
 
     return tuple(tuple(row) for row in result)
 
+def recolor_sprite(grid: Grid, recolor_map: List[List[int]]) -> Grid:
+    """
+    Recolor a grid according to a mapping list of [fromColor, toColor] pairs.
+    Pixels not in the map remain unchanged.
+    """
+    # Build mapping dict
+    map_dict = {frm: to for frm, to in recolor_map}
+    return tuple(
+        tuple(map_dict.get(cell, cell) for cell in row)
+        for row in grid
+    )
 
 def to_object(grid: Grid) -> frozenset:
     return frozenset((val, (i, j)) for i, row in enumerate(grid) for j, val in enumerate(row) if val >= 0)
@@ -170,12 +181,23 @@ def grid_to_pretty_string(grid: Grid) -> str:
 
 
 def grids_equal(grid1, grid2) -> bool:
-    # Convert both grids to nested lists.
+    """
+    Compare two grids for equality, treating None or non‑grids as always unequal.
+    """
+    # If either is None, they can't be equal
+    if grid1 is None or grid2 is None:
+        return False
+
     def to_nested_list(g):
+        # If g isn't iterable (or its rows aren’t), this will raise TypeError
         return [list(row) for row in g]
 
-    list1 = to_nested_list(grid1)
-    list2 = to_nested_list(grid2)
+    try:
+        list1 = to_nested_list(grid1)
+        list2 = to_nested_list(grid2)
+    except TypeError:
+        # grid1 or grid2 wasn’t a proper 2D iterable
+        return False
 
     if len(list1) != len(list2):
         return False
@@ -183,9 +205,25 @@ def grids_equal(grid1, grid2) -> bool:
         if len(row1) != len(row2):
             return False
         for cell1, cell2 in zip(row1, row2):
-            # If either cell is -8, we treat it as a wildcard that always "matches"
+            # −8 is a wildcard
             if cell1 == -8 or cell2 == -8:
                 continue
             if cell1 != cell2:
+                return False
+    return True
+
+def concrete_grids_equal(g1: Grid, g2: Grid) -> bool:
+    """
+    Compares two grids including -8 (transparent) values.
+    """
+    if g1 is None or g2 is None:
+        return False
+    if len(g1) != len(g2):
+        return False
+    for row1, row2 in zip(g1, g2):
+        if len(row1) != len(row2):
+            return False
+        for val1, val2 in zip(row1, row2):
+            if val1 != val2:
                 return False
     return True

@@ -1,6 +1,8 @@
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
-from constelize.core.binding import ArgumentBinding
+from constelize.core.binding import ArgumentBinding, BindingStatus
+from constelize.dsl.grid_dsl import recolor_sprite
+
 
 def recolor(value: int, patch) -> frozenset:
     return frozenset((value, index) for index in patch)
@@ -96,5 +98,17 @@ ACTIONS = [
         ],
         output_type="Integer",
         description="Get the least common color in the element."
+    ),
+    Action(
+        id="recolor_sprite",
+        name="Recolor Sprite",
+        description="Recolor a grid according to a color mapping.",
+        category=ActionCategory.COLOR_SYMBOL_MANIPULATION,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="recolor_map", type="List<List<Integer>>", binding=BindingStatus.UNRESOLVED)
+        ],
+        output_type="Grid",
+        function=recolor_sprite
     ),
 ]

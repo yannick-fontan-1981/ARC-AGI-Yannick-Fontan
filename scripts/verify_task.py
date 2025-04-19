@@ -8,20 +8,28 @@ from collections import defaultdict
 import sqlite3
 import subprocess
 
+from constelize.core.binding import BindingStatus
 from constelize.tools.fact_to_action_mapping import load_end_outputs_from_json, load_json_inputs_from_json, \
     TRAIN_INPUT_GRIDS, TEST_INPUT_GRIDS
 from constelize.tools.pattern_analysis import (
     generate_draft_procedure,
     extract_rules_from_procedure,
-    test_generic_procs_on_trains,
+    evaluate_generic_procedures,
     run_generic_procs_on_tests,
-    load_arc_json, generate_submission_file, compare_submission_to_arc_outputs,
+    load_arc_json, generate_submission_file, compare_submission_to_arc_outputs, print_test_results,
 )
 from constelize.tools.sqlite_loader import load_all_tables_from_sqlite, build_values_by_input, \
     build_attributes_by_input_and_values
 from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved, \
     remove_unresolved_actions_from_generic
 import constelize.library.attribute_access as _aa_mod
+
+def validate_get_start_input_usage(procedures):
+    for proc in procedures:
+        for step in proc.steps.values():
+            if step.action and step.action.id == "get_start_input":
+                if not step.used_by:
+                    print(f"⚠️ Warning: 'get_start_input' step {step.id} is not used by any other action in {proc.id}!")
 
 # Default task ID
 #DEFAULT_TASK_ID = "3c9b0459"
@@ -32,9 +40,9 @@ import constelize.library.attribute_access as _aa_mod
 #DEFAULT_TASK_ID = "6150a2bd"
 #DEFAULT_TASK_ID = "9172f3a0"
 #DEFAULT_TASK_ID = "a416b8f3"
-DEFAULT_TASK_ID = "b1948b0a_hard"
+#DEFAULT_TASK_ID = "b1948b0a"
 #DEFAULT_TASK_ID = "c8f0f002"
-#DEFAULT_TASK_ID = "c59eb873"
+DEFAULT_TASK_ID = "c59eb873"
 #DEFAULT_TASK_ID = "d10ecb37"
 #DEFAULT_TASK_ID = "d511f180"
 #DEFAULT_TASK_ID = "ed36ccf7"
@@ -85,11 +93,37 @@ load_json_inputs_from_json(json_path)
 
 data = load_arc_json(json_path)
 
+
 procedures = generate_draft_procedure(db_path, json_path, name=f"{TASK_ID}_procedure")
+
+
+print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
+for proc_id, proc in procedures.items():
+    print(f"  🔸 {proc_id} has {len(proc.steps)} steps")
+    for step in proc.steps.values():
+        print(f"    • {step.id} ({step.action.id})")
+        if "repeated_sprite" in step.id or step.action.id == "repeated_sprite":
+            print(f"    🧩 FOUND repeated_sprite in {step.id}")
 
 normalized_procs = normalize_procedures_with_levels(list(procedures.values()))
 
+print("\n🧪 [Pre-Squeeze] Inspecting normalized procedures...")
+for i, proc in enumerate(normalized_procs):
+    print(f"  📦 Proc {i+1}: {proc.id} with {len(proc.steps)} steps")
+    for step in proc.steps.values():
+        print(f"    🔹 {step.id} ({step.action.name})")
+        if "repeated_sprite" in step.id or step.action.id == "repeated_sprite":
+            print(f"    🧩 Found repeated_sprite step in {proc.id} → {step.id}")
+
 generic_proc_with_unresolved = squeeze_with_unresolved(normalized_procs)
+
+print("\n🧪 [Post-Squeeze] Inspecting unresolved generic procedures...")
+for i, proc in enumerate(generic_proc_with_unresolved):
+    print(f"  🧪 Generic Proc {i+1}: {proc.id} with {len(proc.steps)} steps")
+    for step in proc.steps.values():
+        print(f"    🔸 {step.id} ({step.action.name})")
+        if "repeated_sprite" in step.id or step.action.id == "repeated_sprite":
+            print(f"    🔍 STILL has repeated_sprite → {step.id}")
 
 generic_procs = copy.deepcopy(generic_proc_with_unresolved)
 
@@ -99,8 +133,10 @@ for proc in generic_procs:
     # and returns a new dictionary with unresolved actions removed.
     proc.steps = remove_unresolved_actions_from_generic(proc.steps)
 
+validate_get_start_input_usage(generic_procs)
+
 # Test on training examples
-results = test_generic_procs_on_trains(generic_procs, data)
+results = evaluate_generic_procedures("train", generic_procs, data)
 with open(results_path, "w") as f:
     f.write("✅ TRAINING RESULTS:\\n")
     for r in results:
@@ -113,16 +149,9 @@ valid_procs = [proc for proc in generic_procs if proc.id in valid_proc_ids]
 
 if valid_procs:
     print("🎯 At least one generic procedure passed all training examples. Running on test set...")
-    test_results = run_generic_procs_on_tests(valid_procs, data)
-    with open(results_path, "a") as f:
-        print("\\n✅ TEST RESULTS:\\n")
-        f.write("\\n✅ TEST RESULTS:\\n")
-        for r in test_results:
-            status = "✅" if r["success"] else "❌"
-            print(f"{status} testId={r['testId']}, proc={r['procedure_id']}\\n")
-            f.write(f"{status} testId={r['testId']}, proc={r['procedure_id']}\\n")
-
-    generate_submission_file(TASK_ID, valid_procs, data, submission_path)
+    test_results = evaluate_generic_procedures("test", valid_procs, data)
+    print_test_results(test_results, results_path)
+    generate_submission_file(TASK_ID, valid_procs, data, submission_path, test_results)
     compare_submission_to_arc_outputs(TASK_ID, data, submission_path, comparison_path)
 else:
     print("⚠️ No fully successful generic procedure found. Skipping test execution.")
