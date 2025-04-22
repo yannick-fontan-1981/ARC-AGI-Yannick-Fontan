@@ -9,7 +9,7 @@ from itertools import product
 from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
-from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string
+from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
 from constelize.tools.registry_singleton import registry
 
@@ -62,7 +62,7 @@ class FactToActionMapping:
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = f"""
-        SELECT 
+        SELECT DISTINCT
             st.sprite_unique_id,
             st.sprite_produce_id,
             so.isInsideInput,
@@ -76,6 +76,10 @@ class FactToActionMapping:
         INNER JOIN sprite_unique AS produced ON produced.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
         WHERE st.{self.column_name} = 1
+        AND COALESCE(st.zoom_x, 1) = 1
+        AND COALESCE(st.zoom_y, 1) = 1
+        AND (st.recolored IS NULL OR st.recolored = '[]')
+        AND so.sprite_id IS NOT NULL
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
@@ -105,7 +109,7 @@ class FactToActionMapping:
                 "grid": ArgumentBinding(
                     name="grid",
                     type="Grid",
-                    binding=BindingStatus.INPUT_GRID,  # now use INPUT_GRID
+                    binding=BindingStatus.VARIABLE,
                     value=None  # value will be injected during evaluation
                 )
             },
@@ -140,6 +144,15 @@ class ZoomFactToAction(FactToActionMapping):
         JOIN sprite_occurrence so ON so.sprite_unique_id = st.sprite_unique_id
         JOIN sprite_unique su ON su.id = st.sprite_produce_id
         WHERE (zoom_x > 1 OR zoom_y > 1)
+        AND COALESCE(st.rotated_90, 0) = 0
+        AND COALESCE(st.rotated_180, 0) = 0
+        AND COALESCE(st.rotated_270, 0) = 0
+        AND COALESCE(st.flipped_vert, 0) = 0
+        AND COALESCE(st.flipped_horiz, 0) = 0
+        AND COALESCE(st.flipped_vert_90, 0) = 0
+        AND COALESCE(st.flipped_horiz_90, 0) = 0
+        AND (st.recolored IS NULL OR st.recolored = '[]')
+        AND so.sprite_id IS NOT NULL
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
@@ -218,31 +231,43 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             so.trainId,
             so.testId,
             source.data AS data,
-            COALESCE('[' || GROUP_CONCAT(
-                CASE WHEN so.isInsideInput = 1
-                     THEN '[' || so.minX || ',' || so.minY || ']'
+            -- build the inputCoords exactly as before
+            COALESCE(
+              '[' || GROUP_CONCAT(
+                CASE WHEN so.isInsideInput  = 1
+                     THEN '['||so.minX||','||so.minY||']'
                 END, ','
-            ) || ']', '[]') AS inputCoords,
-            COALESCE('[' || GROUP_CONCAT(
+              ) || ']',
+              '[]'
+            ) AS inputCoords,
+            -- build the outputCoords exactly as before
+            COALESCE(
+              '[' || GROUP_CONCAT(
                 CASE WHEN so.isInsideOutput = 1
-                     THEN '[' || so.minX || ',' || so.minY || ']'
+                     THEN '['||so.minX||','||so.minY||']'
                 END, ','
-            ) || ']', '[]') AS outputCoords
+              ) || ']',
+              '[]'
+            ) AS outputCoords
         FROM sprite_occurrence AS so
-        JOIN sprite_transformation AS st ON st.id = so.sprite_transformation_id
-        JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
-        WHERE (so.sprite_unique_id, so.sprite_transformation_id) IN (
-            SELECT sprite_unique_id, sprite_transformation_id
-            FROM sprite_occurrence
-            GROUP BY sprite_unique_id, sprite_transformation_id
-            HAVING COUNT(*) > 1
-        )
+        JOIN sprite_transformation AS st
+          ON st.id = so.sprite_transformation_id
+        JOIN sprite_unique AS source
+          ON source.id = st.sprite_unique_id
+        WHERE so.sprite_id IS NOT NULL
         GROUP BY
             so.sprite_unique_id,
             so.sprite_transformation_id,
             so.trainId,
             so.testId,
             source.data
+        HAVING
+            -- count *distinct* output coords, not raw rows
+            COUNT(
+              DISTINCT CASE WHEN so.isInsideOutput = 1
+                            THEN so.minX || ',' || so.minY
+                       END
+            ) > 1
         ORDER BY
             so.sprite_unique_id,
             so.trainId,
@@ -380,14 +405,18 @@ class CanvasByRatioFactToAction(FactToActionMapping):
           input.height AS input_height,
           output.width AS output_width,
           output.height AS output_height,
-          (output.width * 1.0 / input.width)  AS ratio_width,
+          (output.width  * 1.0 / input.width ) AS ratio_width,
           (output.height * 1.0 / input.height) AS ratio_height
         FROM sprite_analysis AS input
         JOIN sprite_analysis AS output
           ON input.trainId = output.trainId
         WHERE
-          input.isInsideInput = 1 AND input.isGrid = 1
-          AND output.isInsideOutput = 1 AND output.isGrid = 1
+          input.isInsideInput  = 1
+          AND input.isGrid      = 1
+          AND output.isInsideOutput = 1
+          AND output.isGrid     = 1
+          -- exclude the trivial 1×1 case:
+          AND NOT (output.width = input.width AND output.height = input.height)
         """
         cursor = conn.execute(query)
         rows = cursor.fetchall()
@@ -439,7 +468,7 @@ class CanvasByRatioFactToAction(FactToActionMapping):
                 "grid": ArgumentBinding(
                     name="grid",
                     type="Grid",
-                    binding=BindingStatus.INPUT_GRID,  # Mark with INPUT_GRID status so evaluation engine injects the grid.
+                    binding=BindingStatus.INPUT_GRID,
                     value=None
                 ),
                 "ratio_width": ArgumentBinding(
@@ -501,6 +530,16 @@ class RecolorSpriteFactToAction(FactToActionMapping):
         JOIN sprite_occurrence so ON so.sprite_transformation_id = st.id
         JOIN sprite_unique su ON su.id = st.sprite_unique_id
         WHERE st.recolored IS NOT NULL AND st.recolored != '[]'
+        AND COALESCE(st.zoom_x, 1) = 1
+        AND COALESCE(st.zoom_y, 1) = 1
+        AND COALESCE(st.rotated_90, 0) = 0
+        AND COALESCE(st.rotated_180, 0) = 0
+        AND COALESCE(st.rotated_270, 0) = 0
+        AND COALESCE(st.flipped_vert, 0) = 0
+        AND COALESCE(st.flipped_horiz, 0) = 0
+        AND COALESCE(st.flipped_vert_90, 0) = 0
+        AND COALESCE(st.flipped_horiz_90, 0) = 0
+        AND so.sprite_id IS NOT NULL
         """
         cursor = conn.execute(query)
         cols = [d[0] for d in cursor.description]
@@ -529,6 +568,68 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
+class CropSpriteFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("crop_sprite", "crop_sprite")
+
+    def _test_function(self, conn):
+        query = """
+        SELECT
+          so.trainId   AS trainId,
+          so.testId    AS testId,
+          so.minX      AS minX,
+          so.minY      AS minY,
+          su.width     AS width,
+          su.height    AS height,
+          su.data      AS data
+        FROM sprite_occurrence so
+        JOIN sprite_transformation st ON so.sprite_transformation_id = st.id
+        JOIN sprite_unique su ON so.sprite_unique_id = su.id
+        WHERE so.sprite_id IS NULL
+          AND st.rotated_90=0 AND st.rotated_180=0 AND st.rotated_270=0
+          AND st.flipped_vert=0 AND st.flipped_horiz=0
+          AND st.flipped_vert_90=0 AND st.flipped_horiz_90=0
+        """
+        cursor = conn.execute(query)
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    def _build_function(self, row):
+        print(f"[DEBUG crop_sprite] Received row: {row}")
+        if row is None:
+            print("[DEBUG crop_sprite] Row is None, skipping build")
+            return None
+        if row is None:
+            return None
+        input_grid = TRAIN_INPUT_GRIDS[row["trainId"]] if row["trainId"] != -1 else TEST_INPUT_GRIDS[row["testId"]]
+        grid = to_concrete_grid(input_grid)
+        cropped = crop(
+            grid,
+            int(row["minX"]),
+            int(row["minY"]),
+            int(row["width"]),
+            int(row["height"])
+        )
+        return ActionInstance(
+            id=f"crop_sprite_{row['trainId']}_{row['minX']}_{row['minY']}#{getUniqueId()}",
+            action=registry.get_by_id("crop_sprite"),
+            bindings={
+                "grid": ArgumentBinding("grid", "Grid", binding=BindingStatus.INPUT_GRID),
+                "minX": ArgumentBinding("minX", "Integer", binding=BindingStatus.UNRESOLVED, value=row["minX"]),
+                "minY": ArgumentBinding("minY", "Integer", binding=BindingStatus.UNRESOLVED, value=row["minY"]),
+                "width": ArgumentBinding("width", "Integer", binding=BindingStatus.UNRESOLVED, value=row["width"]),
+                "height": ArgumentBinding("height", "Integer", binding=BindingStatus.UNRESOLVED, value=row["height"]),
+            },
+            output_var="cropped_sprite",
+            output_value=cropped,
+            output_type="Grid",
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=(row["trainId"] != -1),
+            isToOutput=True
+        )
+
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -544,4 +645,6 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     RepeatedSpriteFactToAction(),
     CanvasByRatioFactToAction(),
     RecolorSpriteFactToAction(),
+    CropSpriteFactToAction()
 ]
+

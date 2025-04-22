@@ -133,8 +133,13 @@ def to_concrete_grid(data) -> Tuple[Tuple[int]]:
     if isinstance(data, str):
         data = json.loads(data)
 
-    if isinstance(data, list):
-        data = frozenset((x[0], tuple(x[1])) for x in data)
+
+    if isinstance(data, list) and all(isinstance(x, (list, tuple))
+        and len(x) == 2
+        and isinstance(x[0], int)
+        and isinstance(x[1], (list, tuple))
+        for x in data):
+            data = frozenset((x[0], tuple(x[1])) for x in data)
 
     if isinstance(data, frozenset):
         try:
@@ -216,14 +221,26 @@ def concrete_grids_equal(g1: Grid, g2: Grid) -> bool:
     """
     Compares two grids including -8 (transparent) values.
     """
-    if g1 is None or g2 is None:
-        return False
-    if len(g1) != len(g2):
-        return False
-    for row1, row2 in zip(g1, g2):
-        if len(row1) != len(row2):
+    try:
+        if g1 is None or g2 is None:
             return False
-        for val1, val2 in zip(row1, row2):
-            if val1 != val2:
+        if len(g1) != len(g2):
+            return False
+        for row1, row2 in zip(g1, g2):
+            if len(row1) != len(row2):
                 return False
-    return True
+            for val1, val2 in zip(row1, row2):
+                if val1 != val2:
+                    return False
+        return True
+    except TypeError:
+        success = False
+
+def crop(grid: Grid, minX: int, minY: int, width: int, height: int) -> Grid:
+    """
+    Crop a sub-region from a grid given the top-left coordinates and dimensions.
+    """
+    return tuple(
+        tuple(grid[minY + i][minX + j] for j in range(width))
+        for i in range(height)
+    )

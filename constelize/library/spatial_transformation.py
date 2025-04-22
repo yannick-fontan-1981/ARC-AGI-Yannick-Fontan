@@ -5,7 +5,7 @@ from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
-    zoom, paint, Grid
+    zoom, paint, Grid, crop
 from typing import Tuple, Any, List, Dict
 
 
@@ -185,4 +185,19 @@ ACTIONS = [
         output_type="Grid",
         function=canvas_by_ratio_fn
     ),
+    Action(
+        id="crop_sprite",
+        name="Crop Sprite",
+        description="Crop a grid region defined by minX, minY, width and height.",
+        category=ActionCategory.COLOR_SYMBOL_MANIPULATION,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.INPUT_GRID),
+            ArgumentBinding(name="minX", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="minY", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="width", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="height", type="Integer", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=crop
+    )
 ]

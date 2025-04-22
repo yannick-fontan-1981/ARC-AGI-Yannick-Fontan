@@ -42,9 +42,18 @@ def generate_action_instances_from_db(db_path: str) -> List:
                     instance = mapping.build_function(row)
                     action_instances.append(instance)
                 except Exception as e:
-                    print(e.__dict__)
+                    # ——— EXTRA DEBUG LOGGING ———————————————————————————————————————————————
+                    print(f"[DEBUG gen_instances] mapping.fact_name = {mapping.fact_name}")
+                    print(f"[DEBUG gen_instances] full row           = {row!r}")
+                    print(f"[DEBUG gen_instances] raw inputs         = {{}}", row.get('data'))
+                    print(f"[DEBUG gen_instances] exception type     = {type(e).__name__}")
+                    import traceback;
+                    traceback.print_exc()
+                    # ——— ORIGINAL WARNING ——————————————————————————————————————————————
                     print(
-                        f"⚠️ Failed to build ActionInstance for {mapping.fact_name} row {row.get('sprite_unique_id')}: {e}")
+                        f"⚠️ Failed to build ActionInstance for {mapping.fact_name} "
+                        f"row {row.get('sprite_unique_id')}: {e}"
+                    )
         except Exception as e:
             print(f"❌ SQL test_function failed for {mapping.fact_name}: {e}")
 
@@ -74,6 +83,7 @@ def generate_draft_procedure(db_path: str, json_path: str, name: str = "generate
         action_instances.append(ai)
 
     print("\n🔧 Running constant detection...")
+    auto_find_constant_for_signature(action_instances)
     auto_find_constant_without_compound(action_instances)
     auto_find_constant_for_compound(action_instances)
 
@@ -107,7 +117,7 @@ def generate_draft_procedure(db_path: str, json_path: str, name: str = "generate
         print(f"    ➤ bindings:")
         for path, bind in _iter_all_bindings(inst.bindings):
             line = f"      • {path} → {bind.binding.name}"
-            if bind.binding in {BindingStatus.MULTIPLE, BindingStatus.CONSTANT, BindingStatus.CONTEXT, BindingStatus.INPUT_GRID}:
+            if bind.binding in {BindingStatus.MULTIPLE, BindingStatus.CONSTANT, BindingStatus.CONTEXT}:
                 line += f" = {bind.value}"
             elif bind.binding == BindingStatus.VARIABLE:
                 line += f" ← from {bind.source_procedure_id}"
@@ -132,7 +142,6 @@ def extract_rules_from_procedure(procedure: Procedure) -> str:
     return "\n".join(rule_descriptions)
 
 
-
 def auto_link_by_value_and_type(action_instances: list):
     """
     Try to auto-link unresolved input bindings in action_instances
@@ -141,18 +150,20 @@ def auto_link_by_value_and_type(action_instances: list):
     Also re-inject values into action_instances for each trainId individually.
     """
     from copy import deepcopy
+    link_stats = {}
 
     # Step 0: Group action_instances by trainId
-    grouped_by_train = {}
+    grouped_by_train = defaultdict(list)
     for instance in action_instances:
-        if instance.trainId not in grouped_by_train:
-            grouped_by_train[instance.trainId] = []
         grouped_by_train[instance.trainId].append(instance)
 
     for trainId, instances in grouped_by_train.items():
         print(f"\n🚂 Processing trainId={trainId} with {len(instances)} action(s)")
+        successful_links = 0
+        skipped_links = 0
+        failed_links = 0
 
-        # Step 1: Pre-fill available outputs from all action instances for this train
+        # Step 1: Gather available producers
         available_outputs = {}  # producer.id -> (producer_instance, value, type)
         for producer in instances:
             if getattr(producer, "END", False) or producer.action is None:
@@ -161,27 +172,29 @@ def auto_link_by_value_and_type(action_instances: list):
                 output_type = getattr(producer.action, "output_type", "Any")
                 available_outputs[producer.id] = (producer, producer.output_value, output_type)
 
-        # Step 2: Try to resolve unresolved input bindings for each consumer
+        # Step 2: Try to resolve bindings for each consumer
         for consumer in instances:
             if consumer.action is None:
-                print(f"Skipping consumer {consumer.id} because consumer.action is None")
+                print(f"⛔ Skipping consumer {consumer.id} because consumer.action is None")
                 continue
 
             print(f"\n🧩 Inspecting consumer: {consumer.id} ({consumer.action.name})")
 
             for arg_name, binding in consumer.bindings.items():
                 print(f"🔗 Attempting to resolve binding '{arg_name}'")
-                print(f"    ➤ Required type: {binding.type}, Current binding status: {binding.binding}, Current value: {binding.value}")
+                print(f"    ➤ Required type: {binding.type}, Current status: {binding.binding}, Current value: {binding.value}")
 
-                if binding.binding != BindingStatus.UNRESOLVED:
+                if binding.binding not in (BindingStatus.UNRESOLVED, BindingStatus.INPUT_GRID, BindingStatus.VARIABLE):
                     print(f"    ⏭️ Already resolved as {binding.binding}, skipping.")
+                    skipped_links += 1
                     continue
 
-                # Try to re-inject train-specific value if it's per-train constant
+                # Inject per-train constants if known
                 if hasattr(binding, "per_train_value") and trainId in binding.per_train_value:
                     binding.value = binding.per_train_value[trainId]
                     binding.binding = BindingStatus.CONSTANT
                     print(f"    💉 Injected per-train constant for trainId={trainId}: {binding.value}")
+                    successful_links += 1
                     continue
 
                 found = False
@@ -190,29 +203,47 @@ def auto_link_by_value_and_type(action_instances: list):
                         print(f"    ⚠️ Skipping self-link: {producer.id}")
                         continue
 
-                    # Allow link even if binding.value is None (typical in generalization phase)
                     if binding.value is not None and not values_equal(value, binding.value, binding.type):
-                        print(f"    ❌ Value does not match for producer {producer.id}")
-                        print(f"       ↪ Consumer value : {binding.value}")
-                        print(f"       ↪ Producer value : {value}")
+                        print(f"    ❌ Value mismatch with producer {producer.id}")
+                        print(f"       ↪ Consumer value: {binding.value}")
+                        print(f"       ↪ Producer value: {value}")
                         continue
                     else:
-                        print(f"    ✅ Value matches (or not specified) for producer {producer.id}")
+                        print(f"    ✅ Value matches (or not specified) with producer {producer.id}")
 
                     if not can_convert(out_type, binding.type):
                         print(f"    ❌ Type {out_type} not compatible with required {binding.type}")
                         continue
                     else:
-                        print(f"    ✅ Type {out_type} is compatible with required {binding.type}")
+                        print(f"    ✅ Type {out_type} is compatible with {binding.type}")
+
+                    if binding.binding == BindingStatus.INPUT_GRID:
+                        print(f"    🛡️ INPUT_GRID detected – skipping linking but marking as resolved")
+                        # Do not change binding – just acknowledge
+                        found = True
+                        skipped_links += 1
+                        break
 
                     print(f"    🔗 Linking {producer.id} → {consumer.id}.{arg_name}")
                     link_producer_to_consumer(binding, producer, consumer)
                     found = True
+                    successful_links += 1
                     break
 
                 if not found:
                     print(f"    ❌ No matching producer found for binding '{arg_name}' on {consumer.id}")
+                    failed_links += 1
 
+        link_stats[trainId] = {
+            "successful": successful_links,
+            "skipped": skipped_links,
+            "failed": failed_links,
+        }
+
+    # 📊 Final Synthesis
+    print("\n📊 Link Summary:")
+    for trainId, stats in link_stats.items():
+        print(f"  ▶️ trainId={trainId}: ✅ {stats['successful']} linked, 🛑 {stats['skipped']} skipped, ❌ {stats['failed']} unresolved")
 
 def auto_link_by_common_attribute(action_instances: list) -> list:
     """
@@ -324,64 +355,141 @@ def flatten_binding(binding: ArgumentBinding) -> Tuple[bool, any]:
             all_const = False
     return (all_const, flat_vals)
 
+def auto_find_constant_for_signature(action_instances: List[ActionInstance]) -> None:
+    """
+    Level 1 constant detection (per your spec):
+
+    1. Group by action.id **and** by trainId.
+    2. Skip any action.id that does not appear in *every* train.
+    3. For each action.id present in all trains:
+       - For each instance in train 0, build a “signature” of its UNRESOLVED Integer bindings:
+           sig = [(arg_name, value), …]
+       - Check that *every* other train has *some* instance with exactly that same sig.
+       - If so, **promote** those bindings in *all* matching instances to CONSTANT.
+    """
+    # 1) collect all trainIds
+    train_ids = sorted({inst.trainId for inst in action_instances if inst.trainId is not None and inst.trainId != -1})
+
+    # 2) group instances by action.id and trainId
+    by_action: Dict[str, Dict[int, List[ActionInstance]]] = defaultdict(lambda: defaultdict(list))
+    for inst in action_instances:
+        tid = inst.trainId
+        if tid is None or tid == -1:
+            continue
+        by_action[inst.action.id][tid].append(inst)
+
+    # 3) for each action.id present in all trains
+    for action_id, trains_map in by_action.items():
+        if set(trains_map.keys()) != set(train_ids):
+            # skip if not in every train
+            continue
+
+        # 4) for each candidate “base” in train 0
+        for base in trains_map[train_ids[0]]:
+            # build signature of its UNRESOLVED integer args
+            sig: List[Tuple[str,int]] = [
+                (name, b.value)
+                for name, b in base.bindings.items()
+                if b.binding == BindingStatus.UNRESOLVED
+                   and b.type == "Integer"
+                   and b.value is not None
+            ]
+            if not sig:
+                continue
+
+            # 5) find matching instance in each other train
+            matched = {train_ids[0]: base}
+            ok = True
+            for tid in train_ids[1:]:
+                found = None
+                for inst in trains_map[tid]:
+                    if all(
+                        (inst.bindings[n].binding == BindingStatus.UNRESOLVED and
+                         inst.bindings[n].value == v)
+                        for n, v in sig
+                    ):
+                        found = inst
+                        break
+                if found:
+                    matched[tid] = found
+                else:
+                    ok = False
+                    break
+
+            if not ok:
+                continue
+
+            # 6) promote all those bindings to CONSTANT
+            for inst in matched.values():
+                for name, value in sig:
+                    b = inst.bindings[name]
+                    b.binding = BindingStatus.CONSTANT
+                    b.value = value
+
+            print(f"[auto_find_constant_for_signature] "
+                  f"Action '{action_id}' sig={sig} → promoted to CONSTANT")
+
 
 ###############################################################################
 # Function: auto_find_constant_without_compound
 ###############################################################################
 
+
 def auto_find_constant_without_compound(action_instances: List[ActionInstance]) -> None:
     """
-    For every action (grouped by action.id) examine each binding (non-compound).
-    If for a given argument (non-compound) all training instances (trainId != -1)
-    have identical non-None values then mark the binding as CONSTANT.
+    For every action (grouped by action.id) examine each non‑compound Integer binding.
+    If for a given argument all training instances (trainId != -1)
+    have identical integer values, mark that argument CONSTANT across ALL instances.
     """
-    print("[auto_find_constant_without_compound] Starting processing.")
+    # 1) Group all instances by action ID
     actions_by_id = defaultdict(list)
     for inst in action_instances:
         if inst.action is None:
-            print(f"Skipping instance {inst.id} because its action is None.")
             continue
         actions_by_id[inst.action.id].append(inst)
 
+    # 2) For each action, look at its Integer arguments
     for action_id, instances in actions_by_id.items():
-        train_instances = [inst for inst in instances if hasattr(inst, "trainId") and inst.trainId != -1]
+        # Collect only those with trainId != -1
+        train_instances = [inst for inst in instances if getattr(inst, "trainId", -1) != -1]
         if not train_instances:
             continue
-        print(
-            f"[auto_find_constant_without_compound] Processing action '{action_id}' with {len(train_instances)} training instances.")
-        for arg_name in train_instances[0].bindings.keys():
-            constant_value = None
-            is_constant = True
-            for inst in train_instances:
-                binding = inst.bindings.get(arg_name)
-                if binding is None or binding.value is None:
-                    is_constant = False
-                    break
-                # Skip compound bindings here:
-                if binding.binding == BindingStatus.COMPOUND:
-                    print(
-                        f"[auto_find_constant_without_compound] Skipping compound binding '{arg_name}' in instance {inst.id}.")
-                    is_constant = False
-                    break
-                if constant_value is None:
-                    constant_value = binding.value
-                else:
-                    if constant_value != binding.value:
-                        print(
-                            f"[auto_find_constant_without_compound] Binding '{arg_name}' differs in instance {inst.id}: {binding.value} vs constant {constant_value}.")
-                        is_constant = False
-                        break
-            if is_constant:
-                for inst in instances:
-                    binding = inst.bindings.get(arg_name)
-                    if binding is None:
-                        continue
-                    binding.binding = BindingStatus.CONSTANT
-                    binding.value = constant_value
-                print(
-                    f"[auto_find_constant_without_compound] Action '{action_id}', argument '{arg_name}' stabilized as CONSTANT with value: {constant_value}")
-    print("[auto_find_constant_without_compound] Finished processing.")
 
+        # Iterate over each argument name
+        for arg_name, binding_example in train_instances[0].bindings.items():
+            # Only consider pure Integer arguments
+            if binding_example.type != "Integer":
+                continue
+
+            # Gather all train‐instance values for this argument
+            values = []
+            for inst in train_instances:
+                b = inst.bindings.get(arg_name)
+                # skip if missing, compound, or no value
+                if b is None or b.binding == BindingStatus.COMPOUND or b.value is None:
+                    values = None
+                    break
+                # skip non‐int values
+                if not isinstance(b.value, int):
+                    values = None
+                    break
+                values.append(b.value)
+
+            # If we aborted or found <1 value, skip
+            if not values:
+                continue
+
+            # Check if all are identical
+            first_val = values[0]
+            if all(v == first_val for v in values):
+                # Stabilize: mark CONSTANT on every instance (train or test)
+                for inst in instances:
+                    b = inst.bindings.get(arg_name)
+                    if b:
+                        b.binding = BindingStatus.CONSTANT
+                        b.value   = first_val
+                print(f"[auto_find_constant_without_compound] Action '{action_id}', "
+                      f"argument '{arg_name}' → CONSTANT = {first_val}")
 
 ###############################################################################
 # Function: auto_find_constant_for_compound
@@ -535,68 +643,145 @@ def pixel_accuracy(grid1, grid2):
     accuracy = matching / total if total > 0 else 0.0
     return {"matching": matching, "total": total, "accuracy": accuracy}
 
-def evaluate_generic_procedures(mode: str, generic_procs: List[Procedure], arc_json_data: dict) -> List[dict]:
-    """
-    Unified evaluation for training or test examples.
 
-    Args:
-        mode: 'train' or 'test'
-        generic_procs: list of Procedure objects
-        arc_json_data: parsed ARC JSON data
+def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, allow_multiple_end=False, return_execution_trace=False):
+    def get_original_step(proc: Procedure, cloned_step_id: str) -> Optional[ActionInstance]:
+        return proc.steps.get(cloned_step_id)
 
-    Returns:
-        List of result dictionaries
-    """
+    def learn_from_success(proc: Procedure, selected_step: Optional[str]):
+        if selected_step:
+            original_step = get_original_step(proc, selected_step)
+            if original_step:
+                original_step.END = True
+                print(f"💾 Learned END=True on step {selected_step} for procedure {proc.id}")
 
-    assert mode in ["train", "test"], "Mode must be 'train' or 'test'"
+    def fallback_if_no_end(proc_clone: Procedure, candidate_outputs: List):
+        if not candidate_outputs:
+            for step in reversed(proc_clone.steps.values()):
+                if step.output_type == "Grid" and step.output_value is not None:
+                    candidate_outputs.append((step.id, step.output_value))
+                    print(f"🧠 Fallback: using {step.id} as implicit END candidate")
+                    break
 
     results = []
-    dataset = arc_json_data[mode]
+    dataset = data[mode]
+    for proc in procedures:
+        for idx, example in enumerate(dataset):
+            input_grid = example["input"]
+            expected_output = example["output"]
+            trainId = idx if mode == "train" else -1
+            testId = -1 if mode == "train" else idx
 
-    for idx, example in enumerate(dataset):
-        input_grid = example["input"]
-        expected_output = example["output"]
-        trainId = idx if mode == "train" else -1
-        testId = -1 if mode == "train" else idx
-
-        print(f"\n🔍 Testing {mode}Id={idx}")
-
-        for proc in generic_procs:
             proc_clone = clone_procedure(proc)
 
-            # 💉 Inject metadata + reset or inject values
+            print("\n📋 Cloned Procedure Bindings Inspection:")
+            for sid, step in proc_clone.steps.items():
+                for arg_name, binding in step.bindings.items():
+                    print(f"  🔸 {sid}.{arg_name} → {binding.binding}, value={binding.value}")
+
+            print(f"\n🔍 Testing {'trainId' if trainId != -1 else 'testId'}={trainId if trainId != -1 else testId}")
+            print(f"[DEBUG] original_proc.steps: {proc_clone.steps}")
+
+            context = {
+                "input_grid": input_grid,
+                "trainId": trainId,
+                "testId": testId,
+            }
+
+            print(f"[DEBUG] context= trainId:{trainId}, testId:{testId}, input_grid:{input_grid} ")
+
+            candidate_outputs = []
+            trace = []
+            executed_steps = []
+
             for step in proc_clone.steps.values():
-                step.trainId = trainId
-                step.testId = testId
-                if step.action and step.action.id == "get_start_input":
-                    print(f"💉 Injecting input_grid into get_start_input for trainId={trainId}, testId={testId}")
-                    step.output_value = input_grid
-                    if "grid" in step.bindings:
-                        step.bindings["grid"].value = input_grid
-                        step.bindings["grid"].binding = BindingStatus.INPUT_GRID
+                resolved_args = {}
+                skip = False
+                arg_name_skipped = None
+                print(f"[DEBUG] Resolving input_arguments for: {step.id} ")
+                for arg_name, binding in step.bindings.items():
+                    resolved = resolve_binding_recursive(binding, context, input_grid)
+                    if resolved is None:
+                        skip = True
+                        arg_name_skipped = arg_name
+                        break
+                    resolved_args[arg_name] = resolved
 
-            evaluated_output = evaluate_procedure_on_input(proc_clone, input_grid, trainId, testId)
-            success = concrete_grids_equal(evaluated_output, expected_output)
-            accuracy_info = pixel_accuracy(evaluated_output, expected_output)
+                if skip:
+                    print(f"Unresolved '{arg_name_skipped}' skip this action: {step.id}")
+                    continue
 
-            status = "✅ SUCCESS" if success else "❌ FAIL"
-            print(f"   ➤ {status} for procedure {proc.id}")
-            if not success:
-                print(f"     🔴 Expected: {expected_output}")
-                print(f"     🔵 Got     : {evaluated_output}")
+                print(f"Evaluating {step.action.name} with args: {resolved_args}")
+                output = step.action.function(**resolved_args)
+                step.output_value = output
+                context[step.id] = output
+                executed_steps.append(step.id)
+                print(f"Execution succeeded and stored in context: {step.id} produced {output}")
 
-            results.append({
-                f"{mode}Id": idx,
+                if return_execution_trace:
+                    trace.append({
+                        "step_id": step.id,
+                        "action": step.action.id,
+                        "args": resolved_args,
+                        "output": output,
+                    })
+
+                if step.END:
+                    candidate_outputs.append((step.id, output))
+                    if not grids_equal(output, expected_output):
+                        print(f"🕱 Marking step {step.id} as inactive due to wrong output")
+                        step.active = False
+
+            fallback_if_no_end(proc_clone, candidate_outputs)
+
+            selected_output = None
+            selected_step = None
+            if allow_multiple_end:
+                for sid, output in candidate_outputs:
+                    if grids_equal(output, expected_output):
+                        selected_output = output
+                        selected_step = sid
+                        break
+                success = selected_output is not None
+                if success:
+                    print(f"   ➔ ✅ SUCCESS for procedure {proc.id} via step {selected_step}")
+                else:
+                    print(f"   ➔ ❌ FAIL for procedure {proc.id}, all END candidates incorrect")
+            else:
+                if candidate_outputs:
+                    selected_output = candidate_outputs[-1][1]
+                success = concrete_grids_equal(selected_output, expected_output)
+                if success:
+                    print(f"   ➔ ✅ SUCCESS for procedure {proc.id}")
+                else:
+                    print(f"   ➔ ❌ FAIL for procedure {proc.id}")
+                    print(f"     🔴 Expected: {expected_output}")
+                    print(f"     🔸 Got     : {selected_output}")
+
+            if success:
+                learn_from_success(proc, selected_step)
+
+            accuracy_info = pixel_accuracy(selected_output, expected_output)
+
+            result = {
                 "procedure_id": proc.id,
+                "trainId": trainId,
+                "testId": testId,
                 "success": success,
-                "evaluated_output": evaluated_output,
+                "evaluated_output": selected_output,
                 "expected_output": expected_output,
                 "matching_pixels": accuracy_info["matching"],
                 "total_pixels": accuracy_info["total"],
                 "pixel_accuracy": accuracy_info["accuracy"]
-            })
+            }
+            if return_execution_trace:
+                result["execution_trace"] = trace
+                result["executed_steps"] = executed_steps
+
+            results.append(result)
 
     return results
+
 
 
 def test_generic_procs_on_trains(generic_procs, arc_json_data) -> List[dict]:
@@ -679,17 +864,17 @@ def clear_sub_bindings(binding: ArgumentBinding):
                     sub_binding.value = None
                 clear_sub_bindings(sub_binding)
 
+def evaluate_step_with_multiple(step, input_grid, context):
+    # auto-fill CONTEXT bindings before resolution
+    for arg_name, binding in step.bindings.items():
+        if binding.binding == BindingStatus.CONTEXT:
+            if arg_name in context and binding.value is None:
+                binding.value = context[arg_name]
+                print(f"🧬 Injected CONTEXT binding: {arg_name} = {binding.value}")
 
-def _build_step_lookup(proc: Procedure) -> Dict[str, ActionInstance]:
-    # Robustly handle both dict and list types
-    if isinstance(proc.steps, dict):
-        return {step.id: step for step in proc.steps.values()}
-    return {step.id: step for step in proc.steps}
-
-def evaluate_step_with_multiple(step: ActionInstance, input_grid: Grid, context: Dict[str, Any], step_lookup: Dict[str, ActionInstance]) -> Any:
     args = {}
     for arg_name, binding in step.bindings.items():
-        resolved_value = resolve_binding_recursive(binding, context, step_lookup, input_grid)
+        resolved_value = resolve_binding_recursive(binding, context, input_grid)
         args[arg_name] = resolved_value
         if resolved_value is None:
             print(f"Unresolved '{arg_name}' skip this action: {step.id}")
@@ -699,15 +884,17 @@ def evaluate_step_with_multiple(step: ActionInstance, input_grid: Grid, context:
     print(f"Evaluating {step.action.name} with args: {args}")
     try:
         result = step.action.function(**args)
-        print(f"Execution succeeded: {step.id} produced {result}")
+        step.output_value = result
         context[step.id] = result
+        print(f"Execution succeeded and stored in context: {step.id} produced {result}")
         return result
     except Exception as e:
-        raise RuntimeError(f"Error executing step {step.id}: {e}")
+        print(f"[ERROR] Step {step.id} threw {type(e).__name__}: {e}")
+        step.active = False
+        return None
 
 def evaluate_procedure_on_input(proc: Procedure, input_grid: Grid, trainId, testId) -> Grid:
     context = {}
-    step_lookup = _build_step_lookup(proc)
     print(f"[DEBUG] proc.steps: {proc.steps}")  # Add this debug print
     last_result = None
     for step in proc.steps.values():
@@ -716,7 +903,7 @@ def evaluate_procedure_on_input(proc: Procedure, input_grid: Grid, trainId, test
         context["trainId"] = trainId
         context["testId"] = testId
         print(f"[DEBUG] Current step: {step}, type: {type(step)}")
-        last_result = evaluate_step_with_multiple(step, input_grid, context, step_lookup)
+        last_result = evaluate_step_with_multiple(step, input_grid, context)
     return last_result
 
 def load_arc_json(json_path: str) -> dict:
@@ -728,8 +915,6 @@ def load_arc_json(json_path: str) -> dict:
 
 
 def clone_procedure(original_proc: Procedure) -> Procedure:
-    step_lookup = _build_step_lookup(original_proc)
-    print(f"[DEBUG] step_lookup keys: {list(step_lookup.keys())}")
     print(f"[DEBUG] original_proc.steps: {original_proc.steps}")
 
     cloned_steps = {}
@@ -918,22 +1103,28 @@ def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_p
     print(f"📊 Comparison report written to {output_path}")
 
 
-def resolve_binding_recursive(binding, context, step_lookup, input_grid):
+def resolve_binding_recursive(binding, context, input_grid):
     """
     Recursively resolve an ArgumentBinding into its concrete value.
     """
+    print(f"resolve_binding_recursive: binding={binding}")
+    print(f"resolve_binding_recursive: context={context}")
+    print(f"resolve_binding_recursive: input_grid={input_grid}")
+
     print(f"🧠 Resolving binding: name={binding.name}, status={binding.binding}, value={binding.value}, source={binding.source_procedure_id}")
 
     if binding.binding == BindingStatus.CONSTANT:
         print(f"  📌 Constant binding resolved to: {binding.value}")
         return binding.value
 
+
     elif binding.binding == BindingStatus.INPUT_GRID:
-        if binding.value is None:
-            print(f"  🌐 Input grid binding resolved from input_grid")
+        if "input_grid" in context:
+            print(f"  🌐 Input grid binding resolved from context['input_grid']")
+            return context["input_grid"]
+        else:
+            print(f"  🌐 Input grid binding fallback to input_grid argument")
             return input_grid
-        print(f"  🌐 Input grid binding already has value: {binding.value}")
-        return binding.value
 
     elif binding.binding == BindingStatus.CONTEXT:
         context_val = context.get(binding.name)
@@ -965,20 +1156,20 @@ def resolve_binding_recursive(binding, context, step_lookup, input_grid):
         if isinstance(binding.sub_bindings, dict):
             print(f"  🔄 Resolving compound dict for {binding.name}")
             return {
-                key: resolve_binding_recursive(sub_binding, context, step_lookup, input_grid)
+                key: resolve_binding_recursive(sub_binding, context, input_grid)
                 for key, sub_binding in binding.sub_bindings.items()
             }
         elif isinstance(binding.sub_bindings, list):
             print(f"  🔄 Resolving compound list for {binding.name} with {len(binding.sub_bindings)} elements")
             return [
-                resolve_binding_recursive(sub_binding, context, step_lookup, input_grid)
+                resolve_binding_recursive(sub_binding, context, input_grid)
                 for sub_binding in binding.sub_bindings
             ]
         else:
             raise ValueError("Unexpected sub_bindings type encountered.")
 
     else:
-        print(f"  🔚 Unhandled binding type. Returning value: {binding.value}")
+        print(f"  🔚 Unhandled binding type {binding.binding} Returning value: {binding.value}")
         return binding.value
 
 

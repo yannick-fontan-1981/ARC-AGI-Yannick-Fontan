@@ -633,6 +633,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             sprite_id INTEGER,
             minX INTEGER NOT NULL,
             minY INTEGER NOT NULL,
+            glued BOOLEAN NOT NULL DEFAULT 0,
             FOREIGN KEY (sprite_unique_id) REFERENCES sprite_unique(id),
             FOREIGN KEY (sprite_transformation_id) REFERENCES sprite_transformation(id),
             FOREIGN KEY (sprite_id) REFERENCES sprite_analysis(id)

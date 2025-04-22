@@ -18,11 +18,14 @@ from constelize.tools.pattern_analysis import (
     run_generic_procs_on_tests,
     load_arc_json, generate_submission_file, compare_submission_to_arc_outputs, print_test_results,
 )
+from constelize.tools.prune_helpers import iterative_prune
 from constelize.tools.sqlite_loader import load_all_tables_from_sqlite, build_values_by_input, \
     build_attributes_by_input_and_values
 from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved, \
     remove_unresolved_actions_from_generic
 import constelize.library.attribute_access as _aa_mod
+from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR
+
 
 def validate_get_start_input_usage(procedures):
     for proc in procedures:
@@ -42,19 +45,16 @@ def validate_get_start_input_usage(procedures):
 #DEFAULT_TASK_ID = "a416b8f3"
 #DEFAULT_TASK_ID = "b1948b0a"
 #DEFAULT_TASK_ID = "c8f0f002"
-DEFAULT_TASK_ID = "c59eb873"
+#DEFAULT_TASK_ID = "c59eb873"
 #DEFAULT_TASK_ID = "d10ecb37"
 #DEFAULT_TASK_ID = "d511f180"
 #DEFAULT_TASK_ID = "ed36ccf7"
 
-# Parse CLI arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("--task_id", help="ARC task ID, e.g., 3c9b0459")
 args = parser.parse_args()
 TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
-# Setup paths
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -64,38 +64,22 @@ results_path = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_results.tx
 submission_path = os.path.join(PROJECT_ROOT, "results", "submission.json")
 comparison_path = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_comparison.txt")
 
-# Relaunch object_analysis and sprite_analysis scripts
-first_sight_script = os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py")
-object_script = os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py")
-sprite_script = os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py")
-subprocess.run(["python", first_sight_script, json_path])
-subprocess.run(["python", object_script, json_path])
-subprocess.run(["python", sprite_script, json_path])
+# Relaunch analyses
+subprocess.run(["python", os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"), json_path])
+subprocess.run(["python", os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"), json_path])
+subprocess.run(["python", os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"), json_path])
 
-# --- 2) Build & inject our precomputed maps into the attribute_access module ---
 _values = build_values_by_input(db_path)
 _attrs  = build_attributes_by_input_and_values(_values)
-
 _aa_mod._values_by_input = _values
 _aa_mod._attributes_by_input_and_values = _attrs
-
 print(f"[verify_task] Injected attributes: {len(_attrs)} entries")
 
-def filter_successful_procedures(results):
-    success_map = defaultdict(list)
-    for r in results:
-        success_map[r["procedure_id"]].append(r["success"])
-    return [pid for pid, success_list in success_map.items() if all(success_list)]
-
-# Load and process ARC task
+# Load data
 load_end_outputs_from_json(json_path)
 load_json_inputs_from_json(json_path)
-
 data = load_arc_json(json_path)
-
-
 procedures = generate_draft_procedure(db_path, json_path, name=f"{TASK_ID}_procedure")
-
 
 print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
 for proc_id, proc in procedures.items():
@@ -127,23 +111,79 @@ for i, proc in enumerate(generic_proc_with_unresolved):
 
 generic_procs = copy.deepcopy(generic_proc_with_unresolved)
 
-# Apply the removal helper to the copy for each Procedure.
+
+# === EVALUATION & PRUNING ===
+results = evaluate_generic_procedures("train", generic_procs, data)
+
+if all(r["success"] for r in results):
+    print("🎯 All trains passed, skipping second evaluation.")
+    with open(results_path, "w") as f:
+        f.write("✅ TRAINING RESULTS:\n")
+        for r in results:
+            status = "✅" if r["success"] else "❌"
+            f.write(f"{status} trainId={r['trainId']}, proc={r['procedure_id']}\n")
+    valid_proc_ids = [proc.id for proc in generic_procs]
+    valid_procs = [proc for proc in generic_procs if proc.id in valid_proc_ids]
+    print("🎯 At least one generic procedure passed all training examples. Running on test set...")
+    test_results = evaluate_generic_procedures("test", valid_procs, data)
+    print_test_results(test_results, results_path)
+    generate_submission_file(TASK_ID, valid_procs, data, submission_path, test_results)
+    compare_submission_to_arc_outputs(TASK_ID, data, submission_path, comparison_path)
+    print("✅ Evaluation completed. Results saved to", results_path)
+    exit(0)
+
+print(f"\n🔗 [Link Summary Before Removal] for procedure: {proc.id}")
+for step in proc.steps.values():
+    print(f"  🔹 Step {step.id} ({step.action.id})")
+    for name, bind in step.bindings.items():
+        desc = f"    • {name}: {bind.binding.name}"
+        if bind.binding == BindingStatus.CONSTANT:
+            desc += f" = {bind.value}"
+        elif bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):
+            if bind.source_procedure_id:
+                desc += f" → from {bind.source_procedure_id}"
+            if bind.candidates:
+                cand_ids = ', '.join(c.producer_id for c in bind.candidates)
+                desc += f" | candidates: {cand_ids}"
+        elif bind.binding == BindingStatus.INPUT_GRID:
+            desc += " (from INPUT_GRID)"
+        print(desc)
+
+# Else: prune unresolved actions
 for proc in generic_procs:
-    # Assuming `remove_unresolved_actions_from_generic` receives a dictionary of steps
-    # and returns a new dictionary with unresolved actions removed.
     proc.steps = remove_unresolved_actions_from_generic(proc.steps)
 
 validate_get_start_input_usage(generic_procs)
 
-# Test on training examples
+print("🔧 Pruning generic procedures until stable…")
+generic_procs = iterative_prune(generic_procs, data)
+
+print("=== GENERIC PROCEDURES ===")
+for i, proc in enumerate(generic_procs):
+    print(f"[{i}] Procedure id={proc.id}, steps={list(proc.steps.keys())}")
+    for sid, step in proc.steps.items():
+        binds = []
+        for name, bind in step.bindings.items():
+            st = bind.binding.name
+            if bind.binding.name == "CONSTANT":
+                binds.append(f"{name}=CONST({bind.value})")
+            elif bind.binding.name in ("VARIABLE", "MULTIPLE"):
+                src = bind.source_procedure_id or ", ".join(c.producer_id for c in (bind.candidates or []))
+                binds.append(f"{name}={st}→{src}")
+            else:
+                val = f"={bind.value}" if bind.value is not None else ""
+                binds.append(f"{name}={st}{val}")
+        print(f"     - {sid}: action={step.action.id}, " + "; ".join(binds))
+print("===========================")
+
+# Second evaluation
 results = evaluate_generic_procedures("train", generic_procs, data)
 with open(results_path, "w") as f:
-    f.write("✅ TRAINING RESULTS:\\n")
+    f.write("✅ TRAINING RESULTS:\n")
     for r in results:
         status = "✅" if r["success"] else "❌"
-        f.write(f"{status} trainId={r['trainId']}, proc={r['procedure_id']}\\n")
+        f.write(f"{status} trainId={r['trainId']}, proc={r['procedure_id']}\n")
 
-# Keep only fully successful procedures
 valid_proc_ids = filter_successful_procedures(results)
 valid_procs = [proc for proc in generic_procs if proc.id in valid_proc_ids]
 

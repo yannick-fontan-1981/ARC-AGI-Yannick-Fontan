@@ -147,6 +147,27 @@ def update_source_procedure_recursive(binding, id_remap):
 # New squeeze implementation – NO INDEX ALIGNMENT; renamed to squeeze_with_unresolved
 ###############################################################################
 
+def get_all_nested_source_ids(binding: Union[ArgumentBinding, dict, list]) -> set[str]:
+    ids = set()
+    if isinstance(binding, ArgumentBinding):
+        if binding.source_procedure_id:
+            ids.add(binding.source_procedure_id)
+        ids.update(get_all_nested_source_ids(binding.sub_bindings))
+    elif isinstance(binding, dict):
+        for sub in binding.values():
+            ids.update(get_all_nested_source_ids(sub))
+    elif isinstance(binding, list):
+        for item in binding:
+            ids.update(get_all_nested_source_ids(item))
+    return ids
+
+def is_step_still_used(step_id: str, branch: dict) -> bool:
+    for s in branch.values():
+        for b in s.bindings.values():
+            if step_id in get_all_nested_source_ids(b):
+                return True
+    return False
+
 def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
     from copy import deepcopy
     from collections import defaultdict
@@ -177,27 +198,6 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
         elif isinstance(binding, list):
             for item in binding:
                 replace_nested_source_ids(item, mapping, current_consumer_id, branch)
-
-    def get_all_nested_source_ids(binding: Union[ArgumentBinding, dict, list]) -> set[str]:
-        ids = set()
-        if isinstance(binding, ArgumentBinding):
-            if binding.source_procedure_id:
-                ids.add(binding.source_procedure_id)
-            ids.update(get_all_nested_source_ids(binding.sub_bindings))
-        elif isinstance(binding, dict):
-            for sub in binding.values():
-                ids.update(get_all_nested_source_ids(sub))
-        elif isinstance(binding, list):
-            for item in binding:
-                ids.update(get_all_nested_source_ids(item))
-        return ids
-
-    def is_step_still_used(step_id: str, branch: dict) -> bool:
-        for s in branch.values():
-            for b in s.bindings.values():
-                if step_id in get_all_nested_source_ids(b):
-                    return True
-        return False
 
     for proc in train_procs:
         for step in proc.steps.values():
@@ -235,6 +235,15 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
                 action_counters[copied.action.id] += 1
                 copied.id = f"{copied.action.id}#{action_counters[copied.action.id]}"
                 train_to_generic_id[step.id] = copied.id
+
+                # 🔁 Met à jour les source ids + restaure manuellement les constantes si absentes
+                for b in copied.bindings.values():
+                    replace_nested_source_ids(b, train_to_generic_id, copied.id, branch)
+                    if b.binding == BindingStatus.CONSTANT and b.value is None:
+                        original_bind = step.bindings.get(b.name)
+                        if original_bind and original_bind.binding == BindingStatus.CONSTANT:
+                            b.value = original_bind.value
+                            print(f"💾 Restored constant value for {b.name} = {b.value}")
 
                 for b in copied.bindings.values():
                     replace_nested_source_ids(b, train_to_generic_id, copied.id, branch)
@@ -278,10 +287,18 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
             if not is_step_still_used(sid, branch) and sid not in final_output_ids
         ]
         for sid in to_remove:
-            print(f"🧹 Removing truly unused producer: {sid} from generic_proc_{idx+1}")
+            if branch[sid].action.id == "get_start_input":
+                continue  # 🔒 Never remove get_start_input
+            print(f"🧹 Removing truly unused producer: {sid} from generic_proc_{idx + 1}")
             branch.pop(sid)
 
         proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch)
+
+        print("\n🧪 Post-Squeeze bindings inspection:")
+        for sid, step in proc.steps.items():
+            for arg, b in step.bindings.items():
+                print(f"  🔸 {sid}.{arg} → {b.binding}, value={b.value}")
+
         generic_procs.append(proc)
 
     return generic_procs
@@ -295,26 +312,58 @@ def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
         ordered = _order_steps({s.id: s for s in p.steps.values()})
         norm.append(Procedure(id=p.id, steps=ordered))
     return norm
-
 def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
     """
-    Return a new branch dictionary that excludes any ActionInstance that has at least one binding
-    with status UNRESOLVED. These actions are considered unsolved.
-    This version adds verbose output to help debug why each step is excluded or kept.
+    Return a new branch dictionary that excludes any ActionInstance with unresolved bindings.
+    Steps marked as END=True are protected from removal.
+    Also preserves steps that are used indirectly by protected actions (transitive closure).
     """
     print("\n🔍 [remove_unresolved_actions_from_generic] Scanning branch for unsolved actions...")
-    new_branch = {}
+
+    protected = set()
+    unresolved = set()
+
+    # Étape 1 — Marquer les END=True
     for sid, step in branch.items():
-        unresolved = False
+        if getattr(step, "END", False):
+            print(f"    ✅ Step {sid} is protected (END=True)")
+            protected.add(sid)
+
+    # Étape 2 — Marquer ceux qui n'ont PAS de bindings non résolus
+    for sid, step in branch.items():
         print(f"  🔎 Inspecting step: {step.id} ({step.action.name})")
         for bname, bind in step.bindings.items():
             print(f"    • Binding '{bname}' → status: {bind.binding.name}, value: {bind.value}")
             if bind.binding == BindingStatus.UNRESOLVED:
-                print(f"    ❌ Step {step.id} will be removed due to unresolved binding: '{bname}'")
-                unresolved = True
+                print(f"    ❌ Step {step.id} has unresolved binding: '{bname}'")
+                unresolved.add(sid)
                 break
-        if not unresolved:
-            print(f"    ✅ Step {step.id} is kept.")
-            new_branch[sid] = step
-    print(f"  ✅ Final branch size: {len(new_branch)} (filtered from {len(branch)})")
+        else:
+            if sid not in protected:
+                print(f"    ✅ Step {step.id} is tentatively kept.")
+                protected.add(sid)
+
+    # Étape 3 — Propagation : protéger tous les producteurs liés aux protégés
+    def mark_dependencies(sid: str):
+        step = branch[sid]
+        for b in step.bindings.values():
+            if b.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):
+                src_id = b.source_procedure_id
+                if src_id and src_id not in protected:
+                    print(f"    🔄 Propagating protection to {src_id} (used by {sid})")
+                    protected.add(src_id)
+                    mark_dependencies(src_id)
+
+    for sid in list(protected):
+        mark_dependencies(sid)
+
+    # Étape 4 — Construction de la nouvelle branche
+    new_branch = {}
+    for sid in protected:
+        if sid not in unresolved and sid in branch:
+            new_branch[sid] = branch[sid]
+        elif sid in unresolved:
+            print(f"    ⚠️ Step {sid} was protected but contains unresolved bindings — skipped.")
+
+    print(f"  ✅ Final branch size after protection + unresolved filter: {len(new_branch)} (from {len(branch)})")
     return new_branch

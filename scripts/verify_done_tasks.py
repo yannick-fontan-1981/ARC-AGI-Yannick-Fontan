@@ -22,7 +22,9 @@ from constelize.tools.pattern_analysis import (
     generate_draft_procedure,
     evaluate_generic_procedures,
     load_arc_json,
-    print_test_results
+    print_test_results,
+    generate_submission_file,
+    compare_submission_to_arc_outputs
 )
 from constelize.tools.squeeze import (
     normalize_procedures_with_levels,
@@ -33,27 +35,18 @@ from constelize.tools.sqlite_loader import (
     build_values_by_input,
     build_attributes_by_input_and_values
 )
-from constelize.tools.pattern_analysis import (
-    generate_submission_file
-)
-from constelize.tools.pattern_analysis import (
-    compare_submission_to_arc_outputs
-)
-from scripts.verify_task import SCRIPT_DIR
+from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR
 
 # Paths configuration
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 DONE_DIR = os.path.join(PROJECT_ROOT, "pattern-finder", "data", "done")
 DB_PATH = os.path.join(PROJECT_ROOT, "db", "database.db")
-# Backup of original DB for clean resets
 ORIG_DB = DB_PATH + ".orig"
 
-# Analysis scripts to refresh the database
 FIRST_SIGHT_SCRIPT = os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py")
 OBJECT_SCRIPT = os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py")
 SPRITE_SCRIPT = os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py")
 
-# Ensure backup exists
 if not os.path.exists(ORIG_DB):
     shutil.copy(DB_PATH, ORIG_DB)
 
@@ -100,13 +93,15 @@ def test_file(json_path: str, results_path: str, submission_path: str, compariso
         proc.steps = remove_unresolved_actions_from_generic(proc.steps)
 
     train_results = evaluate_generic_procedures("train", generic_procs, data)
-    success_map = defaultdict(list)
-    for r in train_results:
-        success_map[r['procedure_id']].append(r['success'])
-    valid_ids = [pid for pid, succs in success_map.items() if all(succs)]
-    if not valid_ids:
-        return False
-    valid_procs = [p for p in generic_procs if p.id in valid_ids]
+
+    if all(r["success"] for r in train_results):
+        print("🎯 All trains passed, skipping second evaluation.")
+        valid_procs = generic_procs
+    else:
+        valid_ids = filter_successful_procedures(train_results)
+        if not valid_ids:
+            return False
+        valid_procs = [p for p in generic_procs if p.id in valid_ids]
 
     print("🎯 At least one generic procedure passed all training examples. Running on test set...")
     test_results = evaluate_generic_procedures("test", valid_procs, data)

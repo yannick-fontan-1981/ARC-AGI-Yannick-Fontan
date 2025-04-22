@@ -64,6 +64,7 @@ class Procedure:
             if binding.binding == BindingStatus.UNRESOLVED
         }
 
+
 def build_procedure_from_action_instances(action_instances, name=None):
     """
     Construit une instance de Procedure à partir d'une liste d'ActionInstance.
