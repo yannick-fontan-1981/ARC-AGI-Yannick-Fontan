@@ -9,6 +9,7 @@ import subprocess
 import sys
 import shutil
 import importlib
+import time
 from collections import defaultdict
 
 # Import necessary functions and modules
@@ -36,6 +37,8 @@ from constelize.tools.sqlite_loader import (
     build_attributes_by_input_and_values
 )
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR
+
+total_start_time = time.time()
 
 # Paths configuration
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -123,18 +126,27 @@ def main():
         submission_path = os.path.join(PROJECT_ROOT, "results", "submission.json")
         comparison_path = os.path.join(PROJECT_ROOT, "results", f"test_{task_id}_simple_comparison.txt")
 
+        start_time = time.time()
         try:
             ok = test_file(path, results_path, submission_path, comparison_path, task_id)
-        except Exception:
+        except Exception as e:
+            print(f"❌ Exception occurred during {fname}: {e}")
+            import traceback
+            traceback.print_exc()
             ok = False
-        print("SUCCESS" if ok else "FAIL")
-        results[fname] = ok
+        duration = time.time() - start_time
+        print(f"{'SUCCESS' if ok else 'FAIL'} ({duration:.2f}s)")
+        results[fname] = (ok, duration)
 
     out_path = os.path.join(PROJECT_ROOT, "results", "done_tasks_results.txt")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
-        for fname, ok in results.items():
-            f.write(f"{fname}: {'SUCCESS' if ok else 'FAIL'}\n")
+        for fname, (ok, duration) in results.items():
+            status = "SUCCESS" if ok else "FAIL"
+            f.write(f"{fname}: {status} in {duration:.2f} seconds\n")
+
+    total_time = time.time() - total_start_time
+    print(f"\n⏱️ Total verification time: {total_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()

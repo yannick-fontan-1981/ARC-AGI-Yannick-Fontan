@@ -22,6 +22,9 @@ from constelize.library.mapping_transformation import as_grid
 from typing import List, Dict, Optional, Any, Tuple
 import traceback
 
+from constelize.tools.squeeze import normalize_procedures_with_levels
+
+
 def table_for_fact(fact_name: str) -> str:
     return {
         "rotated_180": "symmetry",
@@ -643,7 +646,6 @@ def pixel_accuracy(grid1, grid2):
     accuracy = matching / total if total > 0 else 0.0
     return {"matching": matching, "total": total, "accuracy": accuracy}
 
-
 def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, allow_multiple_end=False, return_execution_trace=False):
     def get_original_step(proc: Procedure, cloned_step_id: str) -> Optional[ActionInstance]:
         return proc.steps.get(cloned_step_id)
@@ -665,6 +667,9 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
 
     results = []
     dataset = data[mode]
+
+    procedures = normalize_procedures_with_levels(procedures)
+
     for proc in procedures:
         for idx, example in enumerate(dataset):
             input_grid = example["input"]
@@ -674,7 +679,7 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
 
             proc_clone = clone_procedure(proc)
 
-            print("\n📋 Cloned Procedure Bindings Inspection:")
+            print("\n🗛 Cloned Procedure Bindings Inspection:")
             for sid, step in proc_clone.steps.items():
                 for arg_name, binding in step.bindings.items():
                     print(f"  🔸 {sid}.{arg_name} → {binding.binding}, value={binding.value}")
@@ -728,38 +733,34 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
 
                 if step.END:
                     candidate_outputs.append((step.id, output))
-                    if not grids_equal(output, expected_output):
-                        print(f"🕱 Marking step {step.id} as inactive due to wrong output")
+                    if not concrete_grids_equal(output, expected_output):
+                        print(f"🧑‍☠️ Marking step {step.id} as inactive due to wrong output")
                         step.active = False
-
-            fallback_if_no_end(proc_clone, candidate_outputs)
 
             selected_output = None
             selected_step = None
-            if allow_multiple_end:
-                for sid, output in candidate_outputs:
-                    if grids_equal(output, expected_output):
-                        selected_output = output
-                        selected_step = sid
-                        break
-                success = selected_output is not None
-                if success:
-                    print(f"   ➔ ✅ SUCCESS for procedure {proc.id} via step {selected_step}")
-                else:
-                    print(f"   ➔ ❌ FAIL for procedure {proc.id}, all END candidates incorrect")
-            else:
-                if candidate_outputs:
-                    selected_output = candidate_outputs[-1][1]
-                success = concrete_grids_equal(selected_output, expected_output)
-                if success:
-                    print(f"   ➔ ✅ SUCCESS for procedure {proc.id}")
-                else:
-                    print(f"   ➔ ❌ FAIL for procedure {proc.id}")
-                    print(f"     🔴 Expected: {expected_output}")
-                    print(f"     🔸 Got     : {selected_output}")
 
+            if not candidate_outputs:
+                for step in proc_clone.steps.values():
+                    if step.output_type == "Grid" and step.output_value is not None:
+                        if concrete_grids_equal(step.output_value, expected_output):
+                            candidate_outputs.append((step.id, step.output_value))
+                            print(f"🧠 Found matching output in {step.id} even though END=False")
+
+            if not candidate_outputs:
+                fallback_if_no_end(proc_clone, candidate_outputs)
+
+            if candidate_outputs:
+                selected_step, selected_output = candidate_outputs[-1]
+
+            success = concrete_grids_equal(selected_output, expected_output)
             if success:
+                print(f"   ➔ ✅ SUCCESS for procedure {proc.id} via step {selected_step}")
                 learn_from_success(proc, selected_step)
+            else:
+                print(f"   ➔ ❌ FAIL for procedure {proc.id}")
+                print(f"     🔴 Expected: {expected_output}")
+                print(f"     🔸 Got     : {selected_output}")
 
             accuracy_info = pixel_accuracy(selected_output, expected_output)
 
@@ -781,7 +782,6 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
             results.append(result)
 
     return results
-
 
 
 def test_generic_procs_on_trains(generic_procs, arc_json_data) -> List[dict]:

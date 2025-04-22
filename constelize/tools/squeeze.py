@@ -345,6 +345,11 @@ def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) ->
 
     # Étape 3 — Propagation : protéger tous les producteurs liés aux protégés
     def mark_dependencies(sid: str):
+        if sid in protected:
+            return
+        if sid not in branch:
+            print(f"⚠️ Skipping unknown source step: {sid}")
+            return
         step = branch[sid]
         for b in step.bindings.values():
             if b.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):

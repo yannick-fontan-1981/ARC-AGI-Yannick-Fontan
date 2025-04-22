@@ -7,6 +7,7 @@ import sys
 from collections import defaultdict
 import sqlite3
 import subprocess
+import time
 
 from constelize.core.binding import BindingStatus
 from constelize.tools.fact_to_action_mapping import load_end_outputs_from_json, load_json_inputs_from_json, \
@@ -26,6 +27,7 @@ from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_w
 import constelize.library.attribute_access as _aa_mod
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR
 
+start_time = time.time()
 
 def validate_get_start_input_usage(procedures):
     for proc in procedures:
@@ -34,7 +36,8 @@ def validate_get_start_input_usage(procedures):
                 if not step.used_by:
                     print(f"⚠️ Warning: 'get_start_input' step {step.id} is not used by any other action in {proc.id}!")
 
-# Default task ID
+
+# Training 1
 #DEFAULT_TASK_ID = "3c9b0459"
 #DEFAULT_TASK_ID = "9dfd6313"
 #DEFAULT_TASK_ID = "67a3c6ac"
@@ -50,6 +53,47 @@ def validate_get_start_input_usage(procedures):
 #DEFAULT_TASK_ID = "d511f180"
 #DEFAULT_TASK_ID = "ed36ccf7"
 
+# def solve_4c4377d9(I):
+#     x1 = hmirror(I)
+#     O = vconcat(x1, I)
+# def solve_6d0aefbc(I):
+#     x1 = vmirror(I)
+#     O = hconcat(I, x1)
+# def solve_6fa7a44f(I):
+#     x1 = hmirror(I)
+#     O = vconcat(I, x1)
+# def solve_5614dbcf(I):
+#     x1 = replace(I, FIVE, ZERO)
+#     O = downscale(x1, THREE)
+# def solve_5bd6f4ac(I):
+#     x1 = tojvec(SIX)
+#     O = crop(I, x1, THREE_BY_THREE)
+# def solve_5582e5ca(I):
+#     x1 = mostcolor(I)
+#     O = canvas(x1, THREE_BY_THREE)
+# def solve_8be77c9e(I):
+#     x1 = hmirror(I)
+#     O = vconcat(I, x1)
+# def solve_c9e6f938(I):
+#     x1 = vmirror(I)
+#     O = hconcat(I, x1)
+# def solve_2dee498d(I):
+#     x1 = hsplit(I, THREE)
+#     O = first(x1)
+
+# Training 2
+DEFAULT_TASK_ID = "4c4377d9" #TODO: sprite_computation
+#DEFAULT_TASK_ID = "6d0aefbc"
+#DEFAULT_TASK_ID = "6fa7a44f"
+#DEFAULT_TASK_ID = "5614dbcf"
+#DEFAULT_TASK_ID = "5bd6f4ac"
+#DEFAULT_TASK_ID = "5582e5ca"
+#DEFAULT_TASK_ID = "8be77c9e"
+#DEFAULT_TASK_ID = "c9e6f938"
+#DEFAULT_TASK_ID = "2dee498d"
+
+trainings_number = 2
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--task_id", help="ARC task ID, e.g., 3c9b0459")
 args = parser.parse_args()
@@ -58,7 +102,7 @@ TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 sys.path.insert(0, PROJECT_ROOT)
 
-json_path = os.path.join(PROJECT_ROOT, "pattern-finder", "data", "training-1", f"{TASK_ID}.json")
+json_path = os.path.join(PROJECT_ROOT, "pattern-finder", "data", "training-" + str(trainings_number), f"{TASK_ID}.json")
 db_path = os.path.join(PROJECT_ROOT, "db", "database.db")
 results_path = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_results.txt")
 submission_path = os.path.join(PROJECT_ROOT, "results", "submission.json")
@@ -129,6 +173,9 @@ if all(r["success"] for r in results):
     print_test_results(test_results, results_path)
     generate_submission_file(TASK_ID, valid_procs, data, submission_path, test_results)
     compare_submission_to_arc_outputs(TASK_ID, data, submission_path, comparison_path)
+
+    total_time = time.time() - start_time
+    print(f"\n⏱️ Total verification time: {total_time:.2f} seconds")
     print("✅ Evaluation completed. Results saved to", results_path)
     exit(0)
 
@@ -196,4 +243,6 @@ if valid_procs:
 else:
     print("⚠️ No fully successful generic procedure found. Skipping test execution.")
 
-print("✅ Evaluation completed. Results saved to", results_path)
+total_time = time.time() - start_time
+print(f"\n⏱️ Total verification time: {total_time:.2f} seconds")
+print("✅ Evaluation completed! Results saved to", results_path)
