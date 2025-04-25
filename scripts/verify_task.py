@@ -82,7 +82,7 @@ def validate_get_start_input_usage(procedures):
 #     O = first(x1)
 
 # Training 2
-DEFAULT_TASK_ID = "4c4377d9" #TODO: sprite_computation
+DEFAULT_TASK_ID = "4c4377d9"
 #DEFAULT_TASK_ID = "6d0aefbc"
 #DEFAULT_TASK_ID = "6fa7a44f"
 #DEFAULT_TASK_ID = "5614dbcf"

@@ -144,13 +144,13 @@ def extract_rules_from_procedure(procedure: Procedure) -> str:
         rule_descriptions.append(f"{action_id}")
     return "\n".join(rule_descriptions)
 
-
 def auto_link_by_value_and_type(action_instances: list):
     """
     Try to auto-link unresolved input bindings in action_instances
     using available producers with matching value and compatible type.
 
     Also re-inject values into action_instances for each trainId individually.
+    Supports recursive descent into COMPOUND bindings.
     """
     from copy import deepcopy
     link_stats = {}
@@ -182,23 +182,37 @@ def auto_link_by_value_and_type(action_instances: list):
                 continue
 
             print(f"\n🧩 Inspecting consumer: {consumer.id} ({consumer.action.name})")
+            if consumer.id.startswith("sprite_composition"):
+                print("Inspecting sprite_composition break point")
 
-            for arg_name, binding in consumer.bindings.items():
-                print(f"🔗 Attempting to resolve binding '{arg_name}'")
+            def recursively_process_bindings(binding: ArgumentBinding, path: str):
+                nonlocal successful_links, skipped_links, failed_links
+
+                print(f"🔗 Attempting to resolve binding '{path}'")
                 print(f"    ➤ Required type: {binding.type}, Current status: {binding.binding}, Current value: {binding.value}")
+
+                if binding.binding == BindingStatus.COMPOUND:
+                    if isinstance(binding.sub_bindings, list):
+                        for i, sub in enumerate(binding.sub_bindings):
+                            recursively_process_bindings(sub, f"{path}[{i}]")
+                    elif isinstance(binding.sub_bindings, dict):
+                        for k, sub in binding.sub_bindings.items():
+                            recursively_process_bindings(sub, f"{path}.{k}")
+                    skipped_links += 1
+                    return
 
                 if binding.binding not in (BindingStatus.UNRESOLVED, BindingStatus.INPUT_GRID, BindingStatus.VARIABLE):
                     print(f"    ⏭️ Already resolved as {binding.binding}, skipping.")
                     skipped_links += 1
-                    continue
+                    return
 
-                # Inject per-train constants if known
+                # Inject per-train constants if available
                 if hasattr(binding, "per_train_value") and trainId in binding.per_train_value:
                     binding.value = binding.per_train_value[trainId]
                     binding.binding = BindingStatus.CONSTANT
                     print(f"    💉 Injected per-train constant for trainId={trainId}: {binding.value}")
                     successful_links += 1
-                    continue
+                    return
 
                 found = False
                 for producer_id, (producer, value, out_type) in available_outputs.items():
@@ -222,20 +236,23 @@ def auto_link_by_value_and_type(action_instances: list):
 
                     if binding.binding == BindingStatus.INPUT_GRID:
                         print(f"    🛡️ INPUT_GRID detected – skipping linking but marking as resolved")
-                        # Do not change binding – just acknowledge
                         found = True
                         skipped_links += 1
                         break
 
-                    print(f"    🔗 Linking {producer.id} → {consumer.id}.{arg_name}")
+                    print(f"    🔗 Linking {producer.id} → {consumer.id}.{path}")
                     link_producer_to_consumer(binding, producer, consumer)
                     found = True
                     successful_links += 1
                     break
 
                 if not found:
-                    print(f"    ❌ No matching producer found for binding '{arg_name}' on {consumer.id}")
+                    print(f"    ❌ No matching producer found for binding '{path}' on {consumer.id}")
                     failed_links += 1
+
+            # Process each top-level binding
+            for arg_name, binding in consumer.bindings.items():
+                recursively_process_bindings(binding, arg_name)
 
         link_stats[trainId] = {
             "successful": successful_links,
@@ -580,6 +597,13 @@ def values_equal(v1, v2, type_name):
         return concrete_grids_equal(v1, v2)
     elif type_name == "FrozenSet":
         return frozenset(v1) == frozenset(v2)
+    elif type_name.startswith("Array<"):
+        subtype = type_name[6:-1]  # extrait "Grid" de "Array<Grid>"
+        if len(v1) != len(v2):
+            return False
+        return all(values_equal(a, b, subtype) for a, b in zip(v1, v2))
+    elif type_name == "Coord":
+        return v1.get("x") == v2.get("x") and v1.get("y") == v2.get("y")
     else:
         return v1 == v2
 
@@ -594,7 +618,9 @@ def link_producer_to_consumer(binding, producer, consumer):
         binding.candidates = []
     binding.candidates.append(candidate)
 
-    if len(producer.used_by) > 1:
+    if binding.source_procedure_id is not None:
+        if  binding.source_procedure_id != producer.id:
+            print(f"⚠️ Conflict: binding already linked to {binding.source_procedure_id}, now trying {producer.id}")
         binding.binding = BindingStatus.MULTIPLE
         # Do NOT change binding.value
     else:

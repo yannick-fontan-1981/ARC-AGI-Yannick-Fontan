@@ -6,6 +6,7 @@ import json
 import math
 import sys
 import time
+from collections import defaultdict
 from typing import List, Optional
 
 from constelize.dsl.grid_dsl import to_concrete_grid
@@ -1493,6 +1494,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     bulk_insert(conn, "sprite_occurrence", sprite_global_data["sprite_occ_records"])
     conn.commit()
     detect_and_store_glued_and_new(conn, data)
+    detect_and_store_sprite_computation(conn)
 
 # --- GLUED DETECTION PATCH for sprite_analysis.py ---
 # Offsets for eight neighbors
@@ -1695,6 +1697,230 @@ def detect_zoom_factors(from_sprite, to_sprite):
     #print(f"   ❌ No valid zoom factor found, returning (1,1)")
     return (1, 1)
 
+
+###############################################
+# sprite_computation function
+###############################################
+
+def clear_sprite_computation_table(conn):
+    """
+    Delete all rows from the sprite_computation table.
+    """
+    print("[clear_sprite_computation_table] Deleting all existing rows...")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sprite_computation")
+    conn.commit()
+    print("✅ Table cleared.")
+
+def insert_sprite_computation_records(conn, computation_results: list[dict]):
+    """
+    Insert only computation groups that contain more than one distinct sub_sprite_id for a given (trainId, sprite_id, computation_id).
+    """
+    print(f"[insert_sprite_computation_records] Filtering {len(computation_results)} records...")
+    cursor = conn.cursor()
+
+    # Group results by (trainId, sprite_id, computation_id)
+    grouped = defaultdict(list)
+    for r in computation_results:
+        key = (r["trainId"], r["sprite_id"], r["computation_id"])
+        grouped[key].append(r)
+
+    # Only keep groups with multiple distinct sub_sprite_ids
+    filtered_rows = [
+        r for key, group in grouped.items()
+        if len({entry["sub_sprite_id"] for entry in group}) > 1
+        for r in group
+    ]
+    print(f"✅ Retained {len(filtered_rows)} rows after filtering on unique sub_sprite_id.")
+
+    if not filtered_rows:
+        print("⚠️ No rows to insert.")
+        return
+
+    insert_sql = """
+    INSERT INTO sprite_computation (
+        trainId,
+        sprite_id,
+        computation_id,
+        sub_sprite_id,
+        sub_rel_min_x,
+        sub_rel_min_y,
+        sub_min_x,
+        sub_min_y,
+        sub_width,
+        sub_height
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    values = [
+        (
+            r["trainId"],
+            r["sprite_id"],
+            r["computation_id"],
+            r["sub_sprite_id"],
+            r["sub_rel_min_x"],
+            r["sub_rel_min_y"],
+            r["sub_min_x"],
+            r["sub_min_y"],
+            r["sub_width"],
+            r["sub_height"]
+        )
+        for r in filtered_rows
+    ]
+
+    cursor.executemany(insert_sql, values)
+    conn.commit()
+    print("✅ Insert completed.")
+
+def get_all_sprites_grouped_by_train(conn) -> dict[int, list[dict]]:
+    """
+    Retrieve all sprites from sprite_analysis, grouped by trainId,
+    with each list ordered by descending area (width * height).
+    """
+    query = """
+    SELECT *
+    FROM sprite_analysis
+    WHERE trainId != -1
+    ORDER BY trainId, (width * height) DESC
+    """
+    cursor = conn.execute(query)
+    columns = [desc[0] for desc in cursor.description]
+
+    sprite_map = defaultdict(list)
+    for row in cursor.fetchall():
+        row_dict = dict(zip(columns, row))
+        train_id = row_dict["trainId"]
+        sprite_map[train_id].append(row_dict)
+
+    return dict(sprite_map)
+
+def is_fully_inside(sub, main_bbox, main_mask):
+    """
+    Check if all pixels of the sub sprite are inside the main sprite's bounding box
+    and do not overlap -1 regions in the main_mask.
+    """
+    min_x, min_y, max_x, max_y = main_bbox
+    for val, (i, j) in json.loads(sub["data"]):
+        abs_x = sub["minX"] + j
+        abs_y = sub["minY"] + i
+        rel_x = abs_x - min_x
+        rel_y = abs_y - min_y
+
+        if not (min_x <= abs_x < max_x and min_y <= abs_y < max_y):
+            return False
+        if not (0 <= rel_y < len(main_mask) and 0 <= rel_x < len(main_mask[0])):
+            return False
+        if main_mask[rel_y][rel_x] == -1:
+            return False
+    return True
+
+def can_place_subsprite(mask, sub, offset_x, offset_y, main_sprite):
+    """
+    Check if all sub sprite pixels can be placed in the mask without
+    overlapping existing pixels, and that each pixel value matches the corresponding
+    pixel in the main_sprite.
+    """
+    main_grid = [[-1 for _ in range(main_sprite["width"])] for _ in range(main_sprite["height"])]
+    for val, (i, j) in json.loads(main_sprite["data"]):
+        main_grid[i][j] = val
+
+    for val, (i, j) in json.loads(sub["data"]):
+        abs_y = sub["minY"] + i
+        abs_x = sub["minX"] + j
+        rel_y = abs_y - offset_y
+        rel_x = abs_x - offset_x
+
+        try:
+            # Condition 1 & 2: the pixel must land on a -8 in the mask
+            if mask[rel_y][rel_x] != -8:
+                return False
+
+            # Condition 3: the pixel must match the one in the main sprite
+            if main_grid[abs_y][abs_x] != val:
+                return False
+
+        except IndexError:
+            return False
+
+    return True
+
+def place_subsprite(mask, sub, offset_x, offset_y):
+    """Write the sub sprite into the given mask."""
+    for val, (i, j) in json.loads(sub["data"]):
+        mask_i = i + (sub["minY"] - offset_y)
+        mask_j = j + (sub["minX"] - offset_x)
+        mask[mask_i][mask_j] = val
+
+def is_fully_filled(mask):
+    """Return True if there is no -8 left."""
+    return all(cell != -8 for row in mask for cell in row)
+
+def build_empty_mask_from_data(main_sprite):
+    """Create a mask grid from the sprite data, with -8 where pixels are expected, and -1 elsewhere."""
+    w, h = main_sprite["width"], main_sprite["height"]
+    mask = [[-1 for _ in range(w)] for _ in range(h)]
+    for val, (i, j) in json.loads(main_sprite["data"]):
+        if 0 <= i < h and 0 <= j < w:
+            mask[i][j] = -8
+    return mask
+
+def detect_and_store_sprite_computation(conn, data=None):
+    print("[detect_and_store_sprite_computation]")
+    clear_sprite_computation_table(conn)
+    sprites_by_train = get_all_sprites_grouped_by_train(conn)
+    computation_results = []
+
+    for trainId, sprite_list in sprites_by_train.items():
+        if not sprite_list:
+            continue
+
+        for main_sprite in sprite_list:
+            main_w, main_h = main_sprite["width"], main_sprite["height"]
+            main_bbox = (main_sprite["minX"], main_sprite["minY"], main_sprite["maxX"], main_sprite["maxY"])
+            main_mask = build_empty_mask_from_data(main_sprite)
+
+            masks = []
+            mask_maps = []
+
+            for sub in sprite_list:
+                if sub["id"] == main_sprite["id"]:
+                    continue
+                if is_fully_inside(sub, main_bbox, main_mask):
+                    placed = False
+                    for mask, mask_map in zip(masks, mask_maps):
+                        if can_place_subsprite(mask, sub, main_sprite["minX"], main_sprite["minY"], main_sprite):
+                            place_subsprite(mask, sub, main_sprite["minX"], main_sprite["minY"])
+                            mask_map.append(sub)
+                            placed = True
+                            break
+                    if not placed:
+                        new_mask = build_empty_mask_from_data(main_sprite)
+                        if can_place_subsprite(new_mask, sub, main_sprite["minX"], main_sprite["minY"], main_sprite):
+                            place_subsprite(new_mask, sub, main_sprite["minX"], main_sprite["minY"])
+                            masks.append(new_mask)
+                            mask_maps.append([sub])
+
+            # For each mask, store results if fully filled
+            computation_id = 1
+            for mask, subs in zip(masks, mask_maps):
+                if is_fully_filled(mask):
+                    for sub in subs:
+                        computation_results.append({
+                            "trainId": main_sprite["trainId"],
+                            "sprite_id": main_sprite["id"],
+                            "computation_id": computation_id,
+                            "sub_sprite_id": sub["id"],
+                            "sub_rel_min_x": sub["minX"] - main_sprite["minX"],
+                            "sub_rel_min_y": sub["minY"] - main_sprite["minY"],
+                            "sub_min_x": sub["minX"],
+                            "sub_min_y": sub["minY"],
+                            "sub_width": sub["width"],
+                            "sub_height": sub["height"]
+                        })
+                    computation_id += 1
+    print(computation_results)
+    insert_sprite_computation_records(conn, computation_results)
+    return computation_results
 
 ###############################################
 # Main function

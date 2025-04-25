@@ -640,6 +640,25 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         );
         """)
 
+    # 4) Create table: sprite_computation
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sprite_computation (
+            id INTEGER PRIMARY KEY,
+            trainId INTEGER NOT NULL DEFAULT -1,
+            sprite_id INTEGER NOT NULL,
+            computation_id INTEGER NOT NULL,
+            sub_sprite_id INTEGER NOT NULL,
+            sub_rel_min_x INTEGER NOT NULL,
+            sub_rel_min_y INTEGER NOT NULL,
+            sub_min_x INTEGER NOT NULL,
+            sub_min_y INTEGER NOT NULL,
+            sub_width INTEGER NOT NULL,
+            sub_height INTEGER NOT NULL,
+            FOREIGN KEY (sprite_id) REFERENCES sprite_analysis(id),
+            FOREIGN KEY (sub_sprite_id) REFERENCES sprite_analysis(id)
+        );
+        """)
+
     conn.commit()
 
     # Fetch and print data
@@ -675,6 +694,9 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
 
     cursor.execute("SELECT * FROM sprite_occurrence LIMIT 1")
     print("sprite_occurrence in database:", cursor.fetchall())
+
+    cursor.execute("SELECT * FROM sprite_computation LIMIT 1")
+    print("sprite_computation in database:", cursor.fetchall())
 
     # Save the in-memory database to disk
     save_memory_db_to_disk(conn)

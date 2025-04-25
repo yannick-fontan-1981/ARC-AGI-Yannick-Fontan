@@ -629,6 +629,144 @@ class CropSpriteFactToAction(FactToActionMapping):
             isToOutput=True
         )
 
+class SpriteComputationFactToAction:
+    def __init__(self):
+        self.fact_name = "sprite_computation"
+        self.action_id = "sprite_computation_paint"
+        self.action = registry.get_by_id(self.action_id)
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn):
+        query = """
+        SELECT
+            sc.trainId,
+            sc.sprite_id,
+            sc.computation_id,
+            main.width  AS width,
+            main.height AS height,
+            main.data   AS canvas_data,
+            sub.data    AS sprite_data,
+            sc.sub_rel_min_x AS x,
+            sc.sub_rel_min_y AS y
+        FROM sprite_computation sc
+        JOIN sprite_analysis main ON main.id = sc.sprite_id
+        JOIN sprite_analysis sub ON sub.id = sc.sub_sprite_id
+        ORDER BY sc.trainId, sc.sprite_id, sc.computation_id
+        """
+        cursor = conn.execute(query)
+        cols = [desc[0] for desc in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        # Group rows manually by (trainId, sprite_id, computation_id)
+        from collections import defaultdict
+        grouped = defaultdict(lambda: {
+            "trainId": None, "sprite_id": None, "computation_id": None,
+            "canvas_data": None, "width": None, "height": None,
+            "sub_sprites": []
+        })
+
+        for row in rows:
+            key = (row["trainId"], row["sprite_id"], row["computation_id"])
+            group = grouped[key]
+            group["trainId"] = row["trainId"]
+            group["sprite_id"] = row["sprite_id"]
+            group["computation_id"] = row["computation_id"]
+            group["canvas_data"] = row["canvas_data"]
+            group["width"] = row["width"]
+            group["height"] = row["height"]
+            group["sub_sprites"].append({
+                "sprite_data": row["sprite_data"],
+                "x": row["x"],
+                "y": row["y"]
+            })
+
+        return list(grouped.values())
+
+    def _build_function(self, row):
+        from constelize.dsl.grid_dsl import to_concrete_grid, paint, grids_equal
+
+        trainId = row["trainId"]
+        sub_sprites_info = row["sub_sprites"]
+        canvas_data = json.loads(row["canvas_data"])
+        h, w = int(row["height"]), int(row["width"])
+
+        # 🧱 Create anonymized mask: -8 for each pixel in the canvas
+        coords = [coord for val, coord in canvas_data]
+        mask = [[-1 for _ in range(w)] for _ in range(h)]
+        for i, j in coords:
+            if 0 <= i < h and 0 <= j < w:
+                mask[i][j] = -8
+        mask_sprite = tuple(tuple(row) for row in mask)
+
+        sprite_grids = []
+        painted = mask_sprite
+        position_bindings = []
+
+        for idx, sub in enumerate(sub_sprites_info):
+            sprite = to_concrete_grid(json.loads(sub["sprite_data"]))
+            sprite = tuple(tuple(cell for cell in row) for row in sprite)  # ensure copy
+            x, y = sub["x"], sub["y"]
+            painted = paint(painted, sprite, (y, x))
+            sprite_grids.append(sprite)
+
+            coord_binding = ArgumentBinding(
+                name=f"coord_{idx}",
+                type="Coord",
+                binding=BindingStatus.COMPOUND,
+                sub_bindings={
+                    "x": ArgumentBinding(name="x", type="Integer", binding=BindingStatus.UNRESOLVED, value=x),
+                    "y": ArgumentBinding(name="y", type="Integer", binding=BindingStatus.UNRESOLVED, value=y),
+                },
+                sub_bindings_length_status=BindingStatus.CONSTANT,
+                sub_bindings_length_value=2
+            )
+            position_bindings.append(coord_binding)
+
+        return ActionInstance(
+            id=f"sprite_composition_{trainId}_{row['sprite_id']}#{getUniqueId()}",
+            action=self.action,
+            bindings={
+                "canvas": ArgumentBinding(
+                    name="canvas",
+                    type="Grid",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=mask_sprite
+                ),
+                "sub_sprites": ArgumentBinding(
+                    name="sub_sprites",
+                    type="Array<Grid>",
+                    binding=BindingStatus.COMPOUND,
+                    sub_bindings=[
+                        ArgumentBinding(
+                            name=f"sprite_{i}",
+                            type="Grid",
+                            binding=BindingStatus.UNRESOLVED,
+                            value=tuple(tuple(cell for cell in row) for row in sprite_grids[i])  # deepcopy défensif ici
+                        )
+                        for i in range(len(sprite_grids))
+                    ],
+                    sub_bindings_length_status=BindingStatus.CONSTANT,
+                    sub_bindings_length_value=len(sprite_grids)
+                ),
+                "positions": ArgumentBinding(
+                    name="positions",
+                    type="Array<Coord>",
+                    binding=BindingStatus.COMPOUND,
+                    sub_bindings=position_bindings,
+                    sub_bindings_length_status=BindingStatus.CONSTANT,
+                    sub_bindings_length_value=len(position_bindings)
+                )
+            },
+            output_var="sprite_composed_grid",
+            output_value=painted,
+            output_type=self.action.output_type,
+            trainId=trainId,
+            testId=-1,
+            isTrain=True,
+            isToOutput=True,
+            END=grids_equal(painted, END_OUTPUTS_BY_TRAINID.get(trainId))
+        )
 
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
@@ -645,6 +783,7 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     RepeatedSpriteFactToAction(),
     CanvasByRatioFactToAction(),
     RecolorSpriteFactToAction(),
-    CropSpriteFactToAction()
+    CropSpriteFactToAction(),
+    SpriteComputationFactToAction()
 ]
 

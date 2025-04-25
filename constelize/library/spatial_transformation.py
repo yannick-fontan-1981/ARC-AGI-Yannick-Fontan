@@ -44,6 +44,17 @@ def canvas_by_ratio_fn(grid, ratio_width: int, ratio_height: int):
     new_height = height * ratio_height
     return tuple(tuple(-8 for _ in range(new_width)) for _ in range(new_height))
 
+def sprite_computation_paint(canvas: Grid, sub_sprites: Grid, positions: List[Dict[str, int]]) -> Grid:
+    """
+    Paint a sprite at each (x, y) coordinate in positions onto the canvas.
+    """
+    from constelize.dsl.grid_dsl import paint
+    result = canvas
+    for pos in positions:
+        x, y = pos["x"], pos["y"]
+        result = paint(result, sub_sprites, (y, x))
+    return result
+
 ACTIONS = [
     Action(
         id="shift_patch",
@@ -199,5 +210,18 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=crop
+    ),
+    Action(
+        id="sprite_computation_paint",
+        name="Sprite Computation Paint",
+        description="Paint a sprite multiple times at specified (x, y) locations inside a canvas.",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="canvas", type="Grid"),
+            ArgumentBinding(name="sub_sprites", type="Array<Grid>"),
+            ArgumentBinding(name="positions", type="Array<Coord>")  # List of {x, y}
+        ],
+        output_type="Grid",
+        function=sprite_computation_paint
     )
 ]

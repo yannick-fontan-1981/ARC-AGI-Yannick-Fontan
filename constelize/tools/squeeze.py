@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Union
 
 from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
 from constelize.core.procedure import ActionInstance, Procedure
+from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING
 
 
 ###############################################################################
@@ -294,15 +295,32 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
 
         proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch)
 
-        print("\n🧪 Post-Squeeze bindings inspection:")
-        for sid, step in proc.steps.items():
-            for arg, b in step.bindings.items():
-                print(f"  🔸 {sid}.{arg} → {b.binding}, value={b.value}")
+        print_bindings_recursive(proc)
 
         generic_procs.append(proc)
 
     return generic_procs
 
+
+def print_bindings_recursive(proc):
+    print("\n🧪 Post-Squeeze bindings inspection:")
+
+    def print_binding(path, binding, level=1):
+        indent = "    " * level
+        src = f", source → {binding.source_procedure_id}" if binding.source_procedure_id else ""
+        print(f"{indent}🔸 {path} → {binding.binding}, value={binding.value}{src}")
+
+        if binding.binding == BindingStatus.COMPOUND:
+            if isinstance(binding.sub_bindings, list):
+                for i, sub in enumerate(binding.sub_bindings):
+                    print_binding(f"{path}[{i}]", sub, level + 1)
+            elif isinstance(binding.sub_bindings, dict):
+                for k, sub in binding.sub_bindings.items():
+                    print_binding(f"{path}.{k}", sub, level + 1)
+
+    for sid, step in proc.steps.items():
+        for arg, b in step.bindings.items():
+            print_binding(f"{sid}.{arg}", b)
 
 
 def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
@@ -312,6 +330,7 @@ def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
         ordered = _order_steps({s.id: s for s in p.steps.values()})
         norm.append(Procedure(id=p.id, steps=ordered))
     return norm
+
 def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
     """
     Return a new branch dictionary that excludes any ActionInstance with unresolved bindings.
@@ -319,6 +338,16 @@ def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) ->
     Also preserves steps that are used indirectly by protected actions (transitive closure).
     """
     print("\n🔍 [remove_unresolved_actions_from_generic] Scanning branch for unsolved actions...")
+
+    def has_unresolved_binding(binding) -> bool:
+        if binding.binding == BindingStatus.UNRESOLVED:
+            return True
+        if binding.binding == BindingStatus.COMPOUND:
+            if isinstance(binding.sub_bindings, list):
+                return any(has_unresolved_binding(sub) for sub in binding.sub_bindings)
+            elif isinstance(binding.sub_bindings, dict):
+                return any(has_unresolved_binding(sub) for sub in binding.sub_bindings.values())
+        return False
 
     protected = set()
     unresolved = set()
@@ -334,7 +363,7 @@ def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) ->
         print(f"  🔎 Inspecting step: {step.id} ({step.action.name})")
         for bname, bind in step.bindings.items():
             print(f"    • Binding '{bname}' → status: {bind.binding.name}, value: {bind.value}")
-            if bind.binding == BindingStatus.UNRESOLVED:
+            if has_unresolved_binding(bind):
                 print(f"    ❌ Step {step.id} has unresolved binding: '{bname}'")
                 unresolved.add(sid)
                 break
