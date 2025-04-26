@@ -10,7 +10,7 @@ from typing import Dict, List, Tuple, Union
 from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
 from constelize.core.procedure import ActionInstance, Procedure
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING
-
+import constelize.tools.binding_train_map as btm
 
 ###############################################################################
 # Utilities
@@ -169,11 +169,12 @@ def is_step_still_used(step_id: str, branch: dict) -> bool:
                 return True
     return False
 
+
 def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
     from copy import deepcopy
     from collections import defaultdict
 
-    print("\n🎨 squeeze_with_unresolved – updating producer/candidate ids")
+    print("\n🎨 squeeze_with_unresolved – starting")
 
     if not train_procs:
         return []
@@ -182,32 +183,124 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
     action_counters: Dict[str, int] = defaultdict(int)
     train_to_generic_id: Dict[str, str] = {}
 
-    def replace_nested_source_ids(binding: Union[ArgumentBinding, dict, list], mapping: dict, current_consumer_id: str, branch: dict):
+    def _const_signature(step):
+        return tuple(
+            (k, repr(b.value))
+            for k, b in sorted(step.bindings.items())
+            if b.binding == BindingStatus.CONSTANT
+        )
+
+    def _binding_signature(step: ActionInstance) -> tuple:
+        """
+        Build a signature for an ActionInstance based on all its bindings' hashes.
+        """
+        signature = []
+        for name, binding in sorted(step.bindings.items()):
+            if binding.binding_hash:
+                signature.append((name, binding.binding_hash))
+            else:
+                # fallback: if no binding_hash exists, use the raw value
+                signature.append((name, repr(binding.value)))
+        return tuple(signature)
+
+    def replace_nested_source_ids(
+            binding: Union[ArgumentBinding, dict, list],
+            mapping: dict,
+            current_consumer_id: str,
+            branch: dict
+    ):
+        # Si c'est un ArgumentBinding
         if isinstance(binding, ArgumentBinding):
-            if binding.source_procedure_id in mapping:
+
+            # 1) On gère d'abord le statut MULTIPLE
+            if binding.binding == BindingStatus.MULTIPLE and binding.candidates:
+                print("🛠️ [ replace_nested_source_ids MULTIPLE ]")
+                # On ne conserve que les candidats présents dans tous les trains
+                print("binding.candidates")
+                print(binding.candidates)
+                print("btm.bindingTrainMap")
+                print(btm.bindingTrainMap)
+                print("btm.ALL_TRAIN_IDS")
+                print(btm.ALL_TRAIN_IDS)
+                valid_cands = [
+                    cand for cand in binding.candidates
+                    if btm.bindingTrainMap.get(cand.binding_hash, set()) == btm.ALL_TRAIN_IDS
+                ]
+                print("valid_cands")
+                print(valid_cands)
+
+                if len(valid_cands) == 0:
+                    # aucun candidat valable → on repasse en UNRESOLVED
+                    print("⚠️ MULTIPLE→UNRESOLVED: aucun candidat présent dans tous les trains")
+                    binding.binding = BindingStatus.UNRESOLVED
+                    binding.source_procedure_id = None
+                    binding.candidates = None
+
+                elif len(valid_cands) == 1:
+                    # unique candidat → on bascule en VARIABLE
+                    cand = valid_cands[0]
+                    new_id = mapping.get(cand.producer_id, cand.producer_id)
+                    print(f"🛠️ MULTIPLE→VARIABLE: choix unique {cand.producer_id} → {new_id}")
+                    binding.binding = BindingStatus.VARIABLE
+                    binding.source_procedure_id = new_id
+                    binding.candidates = None
+                    if new_id in branch and current_consumer_id not in branch[new_id].used_by:
+                        branch[new_id].used_by.append(current_consumer_id)
+
+                else:
+                    # plusieurs candidats → on cherche d'abord un get_start_input
+                    print(f"🛡️ MULTIPLE reste MULTIPLE ({len(valid_cands)} candidats)")
+                    # recherche d'un candidat 'get_start_input'
+                    gi = [c for c in valid_cands if c.producer_id.startswith("start_input")]
+                    print(f"gi: {gi}")
+                    if gi:
+                        cand = gi[0]
+                        new_id = mapping.get(cand.producer_id, cand.producer_id)
+                        print(f"🌟 Priorité get_start_input → bascule en INPUT_GRID sur {cand.producer_id} → {new_id}")
+                        binding.binding = BindingStatus.INPUT_GRID
+                        binding.source_procedure_id = new_id
+                        binding.candidates = None
+                        if new_id in branch and current_consumer_id not in branch[new_id].used_by:
+                            branch[new_id].used_by.append(current_consumer_id)
+                    else:
+                        # on ne garde que les candidats valides
+                        binding.candidates = valid_cands
+                        print(f"🛡️ Conserve candidats valides: {[c.producer_id for c in valid_cands]}")
+
+            # 2) Ensuite, si on est en VARIABLE, on remplace l’ID via mapping
+            if binding.binding == BindingStatus.VARIABLE and binding.source_procedure_id in mapping:
                 old_id = binding.source_procedure_id
                 new_id = mapping[old_id]
-                print(f"🔁 Replacing source_procedure_id {old_id} → {new_id}")
+                print(f"🔁 Replacing source_procedure_id {old_id} → {new_id} for consumer {current_consumer_id}")
                 binding.source_procedure_id = new_id
-                if new_id in branch:
-                    if current_consumer_id not in branch[new_id].used_by:
-                        branch[new_id].used_by.append(current_consumer_id)
+                if new_id in branch and current_consumer_id not in branch[new_id].used_by:
+                    branch[new_id].used_by.append(current_consumer_id)
+
+            # 3) Descente récursive dans les sub_bindings
             replace_nested_source_ids(binding.sub_bindings, mapping, current_consumer_id, branch)
+
+        # Si c'est un dict de sub-bindings
         elif isinstance(binding, dict):
             for sub in binding.values():
                 replace_nested_source_ids(sub, mapping, current_consumer_id, branch)
+
+        # Si c'est une liste de sub-bindings
         elif isinstance(binding, list):
             for item in binding:
                 replace_nested_source_ids(item, mapping, current_consumer_id, branch)
 
     for proc in train_procs:
+        print(f"\n🚂 Processing train procedure {proc.id} with {len(proc.steps)} steps")
         for step in proc.steps.values():
+            print(f"\n🔧 Analyzing step {step.id} ({step.action.id})")
+
             new_branches = []
             for branch in branches:
                 for bind in step.bindings.values():
                     if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):
                         old_id = bind.source_procedure_id
                         if old_id and old_id in train_to_generic_id:
+                            print(f"🔗 Updating binding source_procedure_id {old_id} → {train_to_generic_id[old_id]}")
                             bind.source_procedure_id = train_to_generic_id[old_id]
                         if bind.candidates:
                             for cand in bind.candidates:
@@ -218,36 +311,40 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
                 found = None
                 for b in branch.values():
                     if b.action.id == step.action.id:
-                        const_match = all(
-                            b.bindings[k].value == step.bindings[k].value
-                            for k in b.bindings
-                            if b.bindings[k].binding == BindingStatus.CONSTANT
-                        )
-                        if const_match:
+                        b_sig = _binding_signature(b)
+                        s_sig = _binding_signature(step)
+                        print(f"🧪 Comparing with existing {b.id} ({b.action.id})")
+                        print(f"    sig_existing: {b_sig}")
+                        print(f"    sig_current : {s_sig}")
+                        if b_sig == s_sig:
+                            print(f"✅ Found matching action by signature: {b.id}")
                             found = b
                             break
 
                 if found:
                     train_to_generic_id[step.id] = found.id
+                    print(f"✅ Mapped {step.id} to existing generic {found.id}")
                     new_branches.append(branch)
                     continue
 
+                # No match → create a new instance
                 copied = deepcopy(step)
                 action_counters[copied.action.id] += 1
                 copied.id = f"{copied.action.id}#{action_counters[copied.action.id]}"
+                print(f"🆕 Creating new generic step {copied.id} from {step.id}")
                 train_to_generic_id[step.id] = copied.id
+                print(f" copied.bindings.values ")
+                print(copied.bindings.values())
 
-                # 🔁 Met à jour les source ids + restaure manuellement les constantes si absentes
+
                 for b in copied.bindings.values():
                     replace_nested_source_ids(b, train_to_generic_id, copied.id, branch)
+                    # Restore constants if missing
                     if b.binding == BindingStatus.CONSTANT and b.value is None:
                         original_bind = step.bindings.get(b.name)
                         if original_bind and original_bind.binding == BindingStatus.CONSTANT:
                             b.value = original_bind.value
-                            print(f"💾 Restored constant value for {b.name} = {b.value}")
-
-                for b in copied.bindings.values():
-                    replace_nested_source_ids(b, train_to_generic_id, copied.id, branch)
+                            print(f"💾 Restored constant value {b.name} = {b.value}")
                     if b.candidates:
                         for cand in b.candidates:
                             if cand.producer_id in train_to_generic_id:
@@ -261,12 +358,15 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
                     for b in copied.bindings.values():
                         if b.binding == BindingStatus.INPUT_GRID and b.value is None and copied.output_value:
                             b.value = copied.output_value
+                            print(f"📥 Injected input grid for {copied.id}")
 
                 branch2 = branch.copy()
                 branch2[copied.id] = copied
                 new_branches.append(branch2)
+
             branches = new_branches
 
+    # Final pass
     generic_procs = []
     for idx, branch in enumerate(branches):
         for s in branch.values():
@@ -275,13 +375,11 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
                 if b.binding == BindingStatus.UNRESOLVED:
                     b.value = None
 
-        # 🧹 Clean up unused 'used_by' references pointing to removed steps
         step_ids = set(branch.keys())
         for s in branch.values():
             if s.used_by:
                 s.used_by = [uid for uid in s.used_by if uid in step_ids]
 
-        # 🧹 Remove truly unused steps unless they produce final output
         final_output_ids = {s.id for s in branch.values() if s.END or s.isToOutput}
         to_remove = [
             sid for sid in branch
@@ -289,17 +387,19 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
         ]
         for sid in to_remove:
             if branch[sid].action.id == "get_start_input":
-                continue  # 🔒 Never remove get_start_input
-            print(f"🧹 Removing truly unused producer: {sid} from generic_proc_{idx + 1}")
+                continue
+            print(f"🧹 Removing unused step: {sid}")
             branch.pop(sid)
 
         proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch)
-
-        print_bindings_recursive(proc)
-
+        print(f"\n🧬 Final generic_proc_{idx+1}")
+        for sid, step in proc.steps.items():
+            print(f"   {sid} ({step.action.id})")
         generic_procs.append(proc)
 
     return generic_procs
+
+
 
 
 def print_bindings_recursive(proc):

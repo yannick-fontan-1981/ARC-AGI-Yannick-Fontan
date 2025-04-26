@@ -26,6 +26,7 @@ from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_w
     remove_unresolved_actions_from_generic
 import constelize.library.attribute_access as _aa_mod
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR
+import constelize.tools.binding_train_map as btm
 
 start_time = time.time()
 
@@ -124,6 +125,10 @@ load_end_outputs_from_json(json_path)
 load_json_inputs_from_json(json_path)
 data = load_arc_json(json_path)
 procedures = generate_draft_procedure(db_path, json_path, name=f"{TASK_ID}_procedure")
+
+# the number of trains :
+btm.TOTAL_TRAINS = len(procedures)
+btm.ALL_TRAIN_IDS = set(range(btm.TOTAL_TRAINS))
 
 print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
 for proc_id, proc in procedures.items():

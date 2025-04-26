@@ -21,6 +21,7 @@ from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
 from typing import List, Dict, Optional, Any, Tuple
 import traceback
+import constelize.tools.binding_train_map as btm
 
 from constelize.tools.squeeze import normalize_procedures_with_levels
 
@@ -152,10 +153,14 @@ def auto_link_by_value_and_type(action_instances: list):
     Also re-inject values into action_instances for each trainId individually.
     Supports recursive descent into COMPOUND bindings.
     """
-    from copy import deepcopy
-    link_stats = {}
 
-    # Step 0: Group action_instances by trainId
+    avoid_map = {
+        a.action.id: set(getattr(a, "avoid_similar_as_source", []))
+        for a in FACT_TO_ACTION_MAPPING
+        if getattr(a, "avoid_similar_as_source", None)
+    }
+
+    link_stats = {}
     grouped_by_train = defaultdict(list)
     for instance in action_instances:
         grouped_by_train[instance.trainId].append(instance)
@@ -166,8 +171,7 @@ def auto_link_by_value_and_type(action_instances: list):
         skipped_links = 0
         failed_links = 0
 
-        # Step 1: Gather available producers
-        available_outputs = {}  # producer.id -> (producer_instance, value, type)
+        available_outputs = {}
         for producer in instances:
             if getattr(producer, "END", False) or producer.action is None:
                 continue
@@ -175,15 +179,12 @@ def auto_link_by_value_and_type(action_instances: list):
                 output_type = getattr(producer.action, "output_type", "Any")
                 available_outputs[producer.id] = (producer, producer.output_value, output_type)
 
-        # Step 2: Try to resolve bindings for each consumer
         for consumer in instances:
             if consumer.action is None:
                 print(f"⛔ Skipping consumer {consumer.id} because consumer.action is None")
                 continue
 
             print(f"\n🧩 Inspecting consumer: {consumer.id} ({consumer.action.name})")
-            if consumer.id.startswith("sprite_composition"):
-                print("Inspecting sprite_composition break point")
 
             def recursively_process_bindings(binding: ArgumentBinding, path: str):
                 nonlocal successful_links, skipped_links, failed_links
@@ -206,7 +207,6 @@ def auto_link_by_value_and_type(action_instances: list):
                     skipped_links += 1
                     return
 
-                # Inject per-train constants if available
                 if hasattr(binding, "per_train_value") and trainId in binding.per_train_value:
                     binding.value = binding.per_train_value[trainId]
                     binding.binding = BindingStatus.CONSTANT
@@ -214,19 +214,36 @@ def auto_link_by_value_and_type(action_instances: list):
                     successful_links += 1
                     return
 
+                print( "available_outputs.items()" )
+                print( available_outputs.items() )
                 found = False
-                for producer_id, (producer, value, out_type) in available_outputs.items():
+                sorted_producers = sorted(
+                    available_outputs.items(),
+                    key=lambda item: 0 if consumer.bindings.get(path.split(".")[0], binding).type == "Grid" and item[1][0].action.id == "get_start_input" else 1
+                )
+                for producer_id, (producer, value, out_type) in sorted_producers:
                     if producer.id == consumer.id:
                         print(f"    ⚠️ Skipping self-link: {producer.id}")
                         continue
 
+                    if consumer.action.id in avoid_map and producer.action.id in avoid_map[consumer.action.id]:
+                        print(f"    ⛔ Avoiding link from {producer.action.id} to {consumer.action.id} due to avoid_map")
+                        continue
+
                     if binding.value is not None and not values_equal(value, binding.value, binding.type):
                         print(f"    ❌ Value mismatch with producer {producer.id}")
-                        print(f"       ↪ Consumer value: {binding.value}")
-                        print(f"       ↪ Producer value: {value}")
+                        print(f"       value {value}")
+                        print(f"       binding.value {binding.value}")
+                        print(f"       binding.type {binding.type}")
+
                         continue
                     else:
-                        print(f"    ✅ Value matches (or not specified) with producer {producer.id}")
+                        print("-----------------------")
+                        print("value")
+                        print(value)
+                        print("binding.value")
+                        print(binding.value)
+                        print(f"    ✅ Value matches (or not specified) with producer {producer.id}, binding.type {binding.type} ")
 
                     if not can_convert(out_type, binding.type):
                         print(f"    ❌ Type {out_type} not compatible with required {binding.type}")
@@ -241,16 +258,15 @@ def auto_link_by_value_and_type(action_instances: list):
                         break
 
                     print(f"    🔗 Linking {producer.id} → {consumer.id}.{path}")
-                    link_producer_to_consumer(binding, producer, consumer)
+                    link_producer_to_consumer(binding, producer, consumer, path)
                     found = True
                     successful_links += 1
-                    break
+                    continue
 
                 if not found:
                     print(f"    ❌ No matching producer found for binding '{path}' on {consumer.id}")
                     failed_links += 1
 
-            # Process each top-level binding
             for arg_name, binding in consumer.bindings.items():
                 recursively_process_bindings(binding, arg_name)
 
@@ -260,7 +276,6 @@ def auto_link_by_value_and_type(action_instances: list):
             "failed": failed_links,
         }
 
-    # 📊 Final Synthesis
     print("\n📊 Link Summary:")
     for trainId, stats in link_stats.items():
         print(f"  ▶️ trainId={trainId}: ✅ {stats['successful']} linked, 🛑 {stats['skipped']} skipped, ❌ {stats['failed']} unresolved")
@@ -607,12 +622,18 @@ def values_equal(v1, v2, type_name):
     else:
         return v1 == v2
 
-def link_producer_to_consumer(binding, producer, consumer):
+def link_producer_to_consumer(binding, producer, consumer, path):
     # Register consumer as dependent of this producer
     producer.used_by.append(consumer.id)
 
+    # Calculez le hash en fournissant les deux action IDs
+    bh = btm.make_binding_hash(binding,
+                           producer.action.id,
+                           consumer.action.id,
+                           path)
+
     # Add a candidate reference to the producer (using its ID)
-    candidate = LinkCandidate(producer_id=producer.id, var_name=producer.id)
+    candidate = LinkCandidate(producer_id=producer.id, var_name=producer.id, binding_hash=bh)
 
     if binding.candidates is None:
         binding.candidates = []
@@ -627,6 +648,12 @@ def link_producer_to_consumer(binding, producer, consumer):
         binding.binding = BindingStatus.VARIABLE
         # Do NOT change binding.value
         binding.source_procedure_id = producer.id
+
+    # Enregistrez le trainId
+    if consumer.trainId is not None and consumer.trainId > -1:
+        btm.bindingTrainMap[bh].add(consumer.trainId)
+
+    print(f"📍 binding-hash={bh} pour producer={producer.action.id} → consumer={consumer.action.id}, train={consumer.trainId}")
 
     print(f"🔁 Link created: {producer.id} → {consumer.id}.{binding.name} | status = {binding.binding}")
 

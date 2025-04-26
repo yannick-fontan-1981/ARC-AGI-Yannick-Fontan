@@ -2,7 +2,7 @@ from typing import List, Tuple, Dict
 from copy import deepcopy
 from itertools import product
 from constelize.core.scenario import Scenario
-from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate, CandidateStatus
+from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
 
 
 def collect_multi_bindings(scenario: Scenario) -> List[Tuple[str, str, str, str, ArgumentBinding]]:
@@ -53,7 +53,7 @@ def generate_all_scenario_variants(draft: Scenario, max_variants: int = 1000) ->
             var_binding.source_procedure_id = selected_candidate.producer_id
 
             # Optionally mark candidate as being used
-            selected_candidate.status = CandidateStatus.PENDING
+            # selected_candidate.status = CandidateStatus.PENDING
 
         variants.append(variant)
 

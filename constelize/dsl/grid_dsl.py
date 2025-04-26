@@ -92,6 +92,13 @@ def normalize(grid: Grid) -> Grid:
 
 
 def paint(base: Grid, patch: Grid, top_left: Tuple[int, int]) -> Grid:
+    print("base")
+    print(base)
+    print("patch")
+    print(patch)
+    print("top_left")
+    print(top_left)
+
     bi, bj = top_left
     result = [list(row) for row in base]
 
@@ -133,7 +140,6 @@ def to_concrete_grid(data) -> Tuple[Tuple[int]]:
     if isinstance(data, str):
         data = json.loads(data)
 
-
     if isinstance(data, list) and all(isinstance(x, (list, tuple))
         and len(x) == 2
         and isinstance(x[0], int)
@@ -149,10 +155,8 @@ def to_concrete_grid(data) -> Tuple[Tuple[int]]:
 
         if isinstance(sample, tuple):
             if isinstance(sample[0], int):
-                # Objet coloré : (val, (i, j))
                 pixels = {(i, j): val for val, (i, j) in data}
             elif isinstance(sample[0], tuple):
-                # Shape : ((i, j))
                 pixels = {(i, j): -8 for (i, j) in data}
             else:
                 raise ValueError("Unsupported tuple format in frozenset.")

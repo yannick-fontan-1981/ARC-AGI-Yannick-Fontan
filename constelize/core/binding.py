@@ -17,6 +17,7 @@ class LinkCandidate:
     producer_id: str        # ID of the step or rule that can supply the value.
     var_name: str           # The output variable name in that producer.
     status: Optional[str] = None  # Optionally track candidate status.
+    binding_hash: Optional[str] = None   # ← nouveau champ
 
 @dataclass
 class ArgumentBinding:
@@ -34,3 +35,5 @@ class ArgumentBinding:
     sub_bindings_length_status: BindingStatus = BindingStatus.UNRESOLVED
     # 2. sub_bindings_length_value holds the concrete integer value once resolved.
     sub_bindings_length_value: Optional[int] = None
+    # hash representing the sub-bidding path, the producer and the consumer
+    binding_hash: Optional[str] = field(default=None, init=False)

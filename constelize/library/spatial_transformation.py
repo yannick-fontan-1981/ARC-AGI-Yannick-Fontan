@@ -44,15 +44,15 @@ def canvas_by_ratio_fn(grid, ratio_width: int, ratio_height: int):
     new_height = height * ratio_height
     return tuple(tuple(-8 for _ in range(new_width)) for _ in range(new_height))
 
-def sprite_computation_paint(canvas: Grid, sub_sprites: Grid, positions: List[Dict[str, int]]) -> Grid:
-    """
-    Paint a sprite at each (x, y) coordinate in positions onto the canvas.
-    """
+def sprite_computation_paint(canvas: Grid, sub_sprites: List[Grid], positions: List[Dict[str, int]]) -> Grid:
     from constelize.dsl.grid_dsl import paint
     result = canvas
-    for pos in positions:
+    for sprite, pos in zip(sub_sprites, positions):
+        if sprite is None:
+            print(f"⚠️ Skipping paint: sprite is None at position {pos}")
+            continue
         x, y = pos["x"], pos["y"]
-        result = paint(result, sub_sprites, (y, x))
+        result = paint(result, sprite, (y, x))
     return result
 
 ACTIONS = [

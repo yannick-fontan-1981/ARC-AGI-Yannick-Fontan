@@ -59,6 +59,14 @@ class FactToActionMapping:
         self.action = registry.get_by_id(action_id)
         self.test_function = self._test_function
         self.build_function = self._build_function
+        similar_actions = {
+            "rotate_90", "rotate_180", "rotate_270",
+            "mirror_vertical", "mirror_horizontal",
+            "flipped_horiz_90", "flipped_vert_90"
+        }
+        self.avoid_similar_as_source = (
+            list(similar_actions) if action_id in similar_actions else []
+        )
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = f"""
@@ -80,26 +88,30 @@ class FactToActionMapping:
         AND COALESCE(st.zoom_y, 1) = 1
         AND (st.recolored IS NULL OR st.recolored = '[]')
         AND so.sprite_id IS NOT NULL
+        AND st.sprite_unique_id != st.sprite_produce_id
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
 
-        #if self.column_name == "flipped_horiz":
-        #    print("_test_function flipped_horiz")
+        #if self.column_name == "rotated_180":
+        #    print("[ test rotated_180 ]")
         #    print([dict(zip(columns, row)) for row in cursor.fetchall()])
 
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def _build_function(self, row: dict) -> ActionInstance:
-        raw_data = json.loads(row["source_data"])
-        input_grid = to_concrete_grid(raw_data)
-        output_grid = self.action.function(input_grid)
+        source_raw_data = json.loads(row["source_data"])
+        input_grid = to_concrete_grid(source_raw_data)
 
-        #if self.column_name == "flipped_horiz":
-        #   print("input_grid")
-        #   print(grid_to_pretty_string(input_grid))
-        #   print("output_grid")
-        #   print(grid_to_pretty_string(output_grid))
+        produced_raw_data = json.loads(row["produced_data"])
+        output_grid = to_concrete_grid(produced_raw_data)
+
+        if self.column_name == "rotated_180":
+           print("[ rotated_180 ]")
+           print("input_grid")
+           print(grid_to_pretty_string(input_grid))
+           print("output_grid")
+           print(grid_to_pretty_string(output_grid))
 
         trainId = row["trainId"]
         return ActionInstance(
@@ -110,7 +122,7 @@ class FactToActionMapping:
                     name="grid",
                     type="Grid",
                     binding=BindingStatus.VARIABLE,
-                    value=None  # value will be injected during evaluation
+                    value=input_grid
                 )
             },
             output_var=f"{self.action_id}_grid",
@@ -722,6 +734,9 @@ class SpriteComputationFactToAction:
                 sub_bindings_length_value=2
             )
             position_bindings.append(coord_binding)
+
+        #sprite_computation_paint(mask_sprite, )
+        print(f"[ painted: {painted} ]")
 
         return ActionInstance(
             id=f"sprite_composition_{trainId}_{row['sprite_id']}#{getUniqueId()}",
