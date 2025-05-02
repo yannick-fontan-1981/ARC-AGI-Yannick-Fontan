@@ -7,6 +7,7 @@ class BindingStatus(Enum):
     CONSTANT = auto()       # Fixed across all training examples.
     VARIABLE = auto()       # Computed from another step.
     UNRESOLVED = auto()     # Not yet bound.
+    INSTANCE = auto()       # attribute of the action instance
     MULTIPLE = auto()       # Requires candidate expansion.
     INPUT_GRID = auto()     # To be injected from JSON input.
     CONTEXT = auto()        # Externally provided metadata, e.g. trainId/testId.

@@ -92,14 +92,20 @@ def normalize(grid: Grid) -> Grid:
 
 
 def paint(base: Grid, patch: Grid, top_left: Tuple[int, int]) -> Grid:
-    print("base")
-    print(base)
-    print("patch")
-    print(patch)
-    print("top_left")
-    print(top_left)
+    #print("base")
+    #print(base)
+    #print("patch")
+    #print(patch)
+    #print("top_left")
+    #print(top_left)
 
     bi, bj = top_left
+
+    # If either coordinate is None (or not an int), just skip painting:
+    if not isinstance(bi, int) or not isinstance(bj, int):
+        print(f"⚠️ paint: invalid top_left={top_left!r}, skipping patch")
+        return base
+
     result = [list(row) for row in base]
 
     for i in range(len(patch)):

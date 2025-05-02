@@ -6,16 +6,16 @@ import sqlite3
 from collections import defaultdict
 from itertools import product
 
+import constelize.tools.globals as GLOBAL
 from constelize.core.binding import BindingStatus, LinkCandidate, ArgumentBinding
+from constelize.core.scenario import Scenario
 from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
-from constelize.library.attribute_access import build_get_attribute_instance
 
-from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input
-from constelize.core.procedure import Procedure, evaluate_procedure, build_procedure_from_action_instances, \
-    ActionInstance
+from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, build_get_attribute_instance
+from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
 from constelize.tools.sqlite_loader import load_sqlite_to_dict, common_attributes_by_train_value_pairs
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
@@ -33,7 +33,7 @@ def table_for_fact(fact_name: str) -> str:
         "flipped_vertical": "symmetry",
     }.get(fact_name, fact_name)
 
-def generate_action_instances_from_db(db_path: str) -> List:
+def generate_action_instances_from_db(db_path: str, scenarioId: str, ruleId: str) -> List:
     conn = sqlite3.connect(db_path)
 
     action_instances = []
@@ -43,6 +43,8 @@ def generate_action_instances_from_db(db_path: str) -> List:
             rows = mapping.test_function(conn)
             for row in rows:
                 try:
+                    row["scenarioId"] = scenarioId
+                    row["ruleId"] = ruleId
                     instance = mapping.build_function(row)
                     action_instances.append(instance)
                 except Exception as e:
@@ -64,25 +66,23 @@ def generate_action_instances_from_db(db_path: str) -> List:
     conn.close()
     return action_instances
 
-def generate_draft_procedure(db_path: str, json_path: str, name: str = "generated_procedure") -> List[Procedure]:
-    print(f"\n📥 [generate_draft_procedure] Loading from DB: {db_path} and JSON: {json_path}")
-    action_instances = generate_action_instances_from_db(db_path)
+def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str, ruleId: str) -> List[Procedure]:
     print(f"🔍 Loaded {len(action_instances)} action instances from DB.")
 
-    with open(json_path, "r") as f:
-        json_data = json.load(f)
+    #with open(json_path, "r") as f:
+    #    json_data = json.load(f)
 
     # TRAIN
     for trainId, item in enumerate(json_data.get("train", [])):
         input_grid = item["input"]
-        ai = build_start_input(trainId, input_grid, isTrain=True)
+        ai = build_start_input(trainId, input_grid, True, scenarioId, ruleId)
         print(f"📥 Added get_start_input for trainId={trainId}: {ai.id}")
         action_instances.append(ai)
 
     # TEST
     for testId, item in enumerate(json_data.get("test", [])):
         input_grid = item["input"]
-        ai = build_start_input(testId, input_grid, isTrain=False)
+        ai = build_start_input(testId, input_grid, False, scenarioId, ruleId)
         print(f"📥 Added get_start_input for testId={testId}: {ai.id}")
         action_instances.append(ai)
 
@@ -95,7 +95,7 @@ def generate_draft_procedure(db_path: str, json_path: str, name: str = "generate
     auto_link_by_value_and_type(action_instances)
 
     print("\n🔗 Linking by common attributes...")
-    action_instances = auto_link_by_common_attribute(action_instances)
+    action_instances = auto_link_by_common_attribute(action_instances, scenarioId, ruleId)
 
     print("\n🧹 Filtering unresolved bindings...")
     before = len(action_instances)
@@ -128,7 +128,7 @@ def generate_draft_procedure(db_path: str, json_path: str, name: str = "generate
             print(line)
 
     print("\n🧩 Generating procedures by trainId...")
-    procedures = generate_procedures_by_train(action_instances)
+    procedures = generate_procedures_by_train(action_instances, scenarioId, ruleId)
     for train_id, proc in procedures.items():
         print(f"  🔧 Procedure for trainId={train_id} has {len(proc.steps)} steps:")
         for step in proc.steps.values():
@@ -214,8 +214,8 @@ def auto_link_by_value_and_type(action_instances: list):
                     successful_links += 1
                     return
 
-                print( "available_outputs.items()" )
-                print( available_outputs.items() )
+                #print( "available_outputs.items()" )
+                #print( available_outputs.items() )
                 found = False
                 sorted_producers = sorted(
                     available_outputs.items(),
@@ -280,7 +280,7 @@ def auto_link_by_value_and_type(action_instances: list):
     for trainId, stats in link_stats.items():
         print(f"  ▶️ trainId={trainId}: ✅ {stats['successful']} linked, 🛑 {stats['skipped']} skipped, ❌ {stats['failed']} unresolved")
 
-def auto_link_by_common_attribute(action_instances: list) -> list:
+def auto_link_by_common_attribute(action_instances: list, scenarioId: str, ruleId: str) -> list:
     """
     Try to resolve any UNRESOLVED Integer binding by detecting a common attribute
     across training examples for that argument's value.
@@ -308,7 +308,8 @@ def auto_link_by_common_attribute(action_instances: list) -> list:
         print(f"\n🔍 Trying to resolve bindings at path: {path}")
         print(f"   value_pairs = {pairs}")
 
-        common_attrs = common_attributes_by_train_value_pairs(_aa_mod._attributes_by_input_and_values, pairs)
+        attributes_by_input_and_values = GLOBAL.get_attributes_by_scenario_rule(scenarioId, ruleId)
+        common_attrs = common_attributes_by_train_value_pairs(attributes_by_input_and_values, pairs)
         if not common_attrs:
             print(f"   ❌ No common attribute found for path {path}.")
             continue
@@ -329,7 +330,9 @@ def auto_link_by_common_attribute(action_instances: list) -> list:
                 trainId=consumer.trainId,
                 testId=consumer.testId,
                 attribute_name=chosen_attr,
-                output_value=value
+                output_value=value,
+                scenarioId=consumer.scenarioId,
+                ruleId=consumer.ruleId
             )
 
             #instance.bindings["trainId"].binding = BindingStatus.CONTEXT
@@ -407,7 +410,12 @@ def auto_find_constant_for_signature(action_instances: List[ActionInstance]) -> 
 
     # 2) group instances by action.id and trainId
     by_action: Dict[str, Dict[int, List[ActionInstance]]] = defaultdict(lambda: defaultdict(list))
+
+    #print(action_instances)
+
     for inst in action_instances:
+        if inst.action is None:
+            continue
         tid = inst.trainId
         if tid is None or tid == -1:
             continue
@@ -533,24 +541,47 @@ def auto_find_constant_without_compound(action_instances: List[ActionInstance]) 
 def auto_find_constant_for_compound(action_instances: List[ActionInstance]) -> None:
     print("[auto_find_constant_for_compound] Starting recursive processing for compound bindings.")
 
+    # Étape 1 : identifier tous les trainId utilisés
+    global_train_ids = {inst.trainId for inst in action_instances if inst.trainId is not None and inst.trainId != -1}
+    print(f"[auto_find_constant_for_compound] Global trainIds = {sorted(global_train_ids)}")
+
+    # Étape 2 : regrouper les actions par ID
     actions_by_id = defaultdict(list)
     for inst in action_instances:
-        if inst.action is None:
-            continue
-        actions_by_id[inst.action.id].append(inst)
+        if inst.action is not None:
+            actions_by_id[inst.action.id].append(inst)
 
     for action_id, instances in actions_by_id.items():
-        train_instances = [inst for inst in instances if hasattr(inst, "trainId") and inst.trainId != -1]
-        if not train_instances:
+        # Étape 3 : sélectionner uniquement les instances de train
+        train_instances = [inst for inst in instances if inst.trainId in global_train_ids]
+
+        # Vérifie si toutes les trainId sont couvertes
+        instance_train_ids = {inst.trainId for inst in train_instances}
+        if instance_train_ids != global_train_ids:
+            print(f"⚠️ [SKIP] Action '{action_id}' is missing train instances. Expected {sorted(global_train_ids)}, found {sorted(instance_train_ids)}")
             continue
 
-        print(
-            f"[auto_find_constant_for_compound] Processing action '{action_id}' with {len(train_instances)} training instances.")
+        print(f"[auto_find_constant_for_compound] Processing action '{action_id}' with {len(train_instances)} training instances.")
+        print(f"✅ All expected trainIds present: {sorted(instance_train_ids)}")
 
+        # Traitement des arguments
         for arg_name in train_instances[0].bindings.keys():
-            bindings = [inst.bindings[arg_name] for inst in train_instances if arg_name in inst.bindings]
+            bindings_by_train = {
+                inst.trainId: inst.bindings[arg_name]
+                for inst in train_instances
+                if arg_name in inst.bindings
+            }
 
-            # Recursive processing of compound bindings
+            if action_id == "unzoom":
+                print("🧪 [DEBUG] arg_name =", arg_name)
+                print("🧪 [DEBUG] train_ids =", list(bindings_by_train.keys()))
+                print("🧪 [DEBUG] bindings =", list(bindings_by_train.values()))
+
+            if set(bindings_by_train.keys()) != global_train_ids:
+                print(f"⚠️ [SKIP] arg '{arg_name}' missing train bindings — expected={global_train_ids}, got={bindings_by_train.keys()}")
+                continue
+
+            bindings = list(bindings_by_train.values())
             process_compound_binding_recursive(bindings, arg_name)
 
     print("[auto_find_constant_for_compound] Finished recursive processing for compound bindings.")
@@ -657,7 +688,7 @@ def link_producer_to_consumer(binding, producer, consumer, path):
 
     print(f"🔁 Link created: {producer.id} → {consumer.id}.{binding.name} | status = {binding.binding}")
 
-def generate_procedures_by_train(action_instances: list) -> dict:
+def generate_procedures_by_train(action_instances: list, scenarioId: str, ruleId: str) -> dict:
     """
     Crée une procédure par trainId pour les actions issues des données d'entraînement uniquement.
     """
@@ -670,7 +701,7 @@ def generate_procedures_by_train(action_instances: list) -> dict:
     procedures_by_train = {}
     for train_id, instances in grouped.items():
         steps = {f"step_{i+1}": inst for i, inst in enumerate(instances)}
-        proc = Procedure(id=f"proc_train_{train_id}", steps=steps)
+        proc = Procedure(id=f"proc_train_{train_id}", steps=steps, scenarioId=scenarioId, ruleId=ruleId)
         procedures_by_train[train_id] = proc
 
     return procedures_by_train
@@ -699,7 +730,130 @@ def pixel_accuracy(grid1, grid2):
     accuracy = matching / total if total > 0 else 0.0
     return {"matching": matching, "total": total, "accuracy": accuracy}
 
-def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, allow_multiple_end=False, return_execution_trace=False):
+
+def preprocess_arc_with_action(arc_data: dict,
+                               action_inst) -> dict:
+    """
+    Apply `generic_proc.action_producing_output.action.function`
+    to every train‐ and test‐input in arc_data, returning a fresh
+    in-memory ARC dict with those transformed inputs.
+    """
+    fn = action_inst.action.function                     # the raw Python function
+    # figure out the function's single argument name (e.g. "grid")
+    arg_name = next(iter(action_inst.bindings.keys()))
+
+    # transform the train set
+    new_train = []
+    for ex in arc_data["train"]:
+        inp = ex["input"]
+        # call fn as either fn(inp) or fn(**{arg_name: inp})
+        try:
+            out = fn(inp)
+        except TypeError:
+            out = fn(**{arg_name: inp})
+        new_train.append({
+            "input": out,
+            "output": ex["output"]
+        })
+
+    # transform the test set (if any)
+    new_test = []
+    for ex in arc_data.get("test", []):
+        inp = ex["input"]
+        try:
+            out = fn(inp)
+        except TypeError:
+            out = fn(**{arg_name: inp})
+        new_test.append({"input": out})
+
+    return {"train": new_train, "test": new_test}
+
+def evaluate_generic_procedures_on_scenarios(mode: str, data: dict, scenarios: list):
+    """
+    Évalue un lot de procédures génériques par scénario.
+
+    Args:
+        mode: "train" ou "test"
+        data: données ARC (JSON)
+        scenarios: liste d’objets Scenario
+
+    Returns:
+        Dict[scenario_id] → liste des résultats d’évaluation
+    """
+    results_by_scenario = {}
+
+    for scenario in scenarios:
+        print(f"\n🔍 Evaluating scenario '{scenario.id}' with {len(scenario.rules)} rules.")
+
+        if hasattr(scenario, "rule_to_launch_before") and scenario.rule_to_launch_before:
+            pre_rule = scenario.rule_to_launch_before
+            generic_proc = pre_rule.proc_producing_output
+            action_inst = generic_proc.action_producing_output
+
+            print(f"⚙️ Preprocessing scenario with action from rule '{pre_rule.id}'...")
+            new_arc_data = preprocess_arc_with_action(data, action_inst)
+
+            main_rule = scenario.rule_to_analyse
+            print(f"➡️  Evaluating main rule '{main_rule.id}' with {len(main_rule.generic_procs)} procs")
+
+            results = evaluate_generic_procedures(
+                mode=mode,
+                procedures=main_rule.generic_procs,
+                data=new_arc_data,
+                scenarioId=scenario.id,
+                ruleId="*",
+            )
+            results_by_scenario[scenario.id] = results
+
+            # 🔁 Répartition dans le rule cible uniquement
+            proc_result_map = defaultdict(list)
+            for r in results:
+                proc_result_map[r["procedure_id"]].append(r)
+            main_rule.train_results = []
+            for proc in main_rule.generic_procs:
+                main_rule.train_results.extend(proc_result_map.get(proc.id, []))
+
+        else:
+            all_generic_procs = []
+            for rule in scenario.rules.values():
+                all_generic_procs.extend(rule.generic_procs)
+
+            if not all_generic_procs:
+                print(f"⚠️ No generic procedures in scenario '{scenario.id}'")
+                continue
+
+            print(f"➡️  Evaluating all rules with {len(all_generic_procs)} generic procedures...")
+            results = evaluate_generic_procedures(
+                mode=mode,
+                procedures=all_generic_procs,
+                data=data,
+                scenarioId=scenario.id,
+                ruleId="*",
+            )
+            results_by_scenario[scenario.id] = results
+
+            # 🔁 Répartition dans chaque règle du scénario
+            proc_result_map = defaultdict(list)
+            for r in results:
+                proc_result_map[r["procedure_id"]].append(r)
+
+            for rule_id, rule in scenario.rules.items():
+                rule.train_results = []
+                for proc in rule.generic_procs:
+                    rule.train_results.extend(proc_result_map.get(proc.id, []))
+                print(f"📌 Rule '{rule_id}' received {len(rule.train_results)} result(s).")
+
+    return results_by_scenario
+
+def evaluate_generic_procedures(
+    mode: str,
+    procedures: List[Procedure],
+    data,
+    scenarioId: str,
+    ruleId: str,
+    allow_multiple_end=False,
+    return_execution_trace=False
+):
     def get_original_step(proc: Procedure, cloned_step_id: str) -> Optional[ActionInstance]:
         return proc.steps.get(cloned_step_id)
 
@@ -720,33 +874,29 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
 
     results = []
     dataset = data[mode]
-
-    procedures = normalize_procedures_with_levels(procedures)
+    procedures = normalize_procedures_with_levels(procedures, scenarioId, ruleId)
 
     for proc in procedures:
         for idx, example in enumerate(dataset):
-            input_grid = example["input"]
-            expected_output = example["output"]
+            input_grid = example.get("input")
+            expected_output = example.get("output")  # can be missing
+
             trainId = idx if mode == "train" else -1
             testId = -1 if mode == "train" else idx
 
+            # skip if missing output in training mode (must compare)
+            if expected_output is None and mode == "train":
+                print(f"⚠️ Skipping trainId={trainId}: no output available.")
+                continue
+
             proc_clone = clone_procedure(proc)
 
-            print("\n🗛 Cloned Procedure Bindings Inspection:")
-            for sid, step in proc_clone.steps.items():
-                for arg_name, binding in step.bindings.items():
-                    print(f"  🔸 {sid}.{arg_name} → {binding.binding}, value={binding.value}")
-
             print(f"\n🔍 Testing {'trainId' if trainId != -1 else 'testId'}={trainId if trainId != -1 else testId}")
-            print(f"[DEBUG] original_proc.steps: {proc_clone.steps}")
-
             context = {
                 "input_grid": input_grid,
                 "trainId": trainId,
                 "testId": testId,
             }
-
-            print(f"[DEBUG] context= trainId:{trainId}, testId:{testId}, input_grid:{input_grid} ")
 
             candidate_outputs = []
             trace = []
@@ -755,26 +905,22 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
             for step in proc_clone.steps.values():
                 resolved_args = {}
                 skip = False
-                arg_name_skipped = None
-                print(f"[DEBUG] Resolving input_arguments for: {step.id} ")
                 for arg_name, binding in step.bindings.items():
-                    resolved = resolve_binding_recursive(binding, context, input_grid)
+                    resolved = resolve_binding_recursive(binding, context, input_grid, step)
                     if resolved is None:
+                        print(f"Unresolved '{arg_name}' → skipping {step.id}")
                         skip = True
-                        arg_name_skipped = arg_name
                         break
                     resolved_args[arg_name] = resolved
 
                 if skip:
-                    print(f"Unresolved '{arg_name_skipped}' skip this action: {step.id}")
                     continue
 
-                print(f"Evaluating {step.action.name} with args: {resolved_args}")
+                print(f"⚙️  Evaluating {step.action.name} with args: {resolved_args}")
                 output = step.action.function(**resolved_args)
                 step.output_value = output
                 context[step.id] = output
                 executed_steps.append(step.id)
-                print(f"Execution succeeded and stored in context: {step.id} produced {output}")
 
                 if return_execution_trace:
                     trace.append({
@@ -786,8 +932,8 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
 
                 if step.END:
                     candidate_outputs.append((step.id, output))
-                    if not concrete_grids_equal(output, expected_output):
-                        print(f"🧑‍☠️ Marking step {step.id} as inactive due to wrong output")
+                    if expected_output is not None and not concrete_grids_equal(output, expected_output):
+                        print(f"🧑‍☠️ {step.id} marked inactive due to wrong output")
                         step.active = False
 
             selected_output = None
@@ -796,9 +942,9 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
             if not candidate_outputs:
                 for step in proc_clone.steps.values():
                     if step.output_type == "Grid" and step.output_value is not None:
-                        if concrete_grids_equal(step.output_value, expected_output):
+                        if expected_output is not None and concrete_grids_equal(step.output_value, expected_output):
                             candidate_outputs.append((step.id, step.output_value))
-                            print(f"🧠 Found matching output in {step.id} even though END=False")
+                            print(f"🧠 Matching output in {step.id} even though END=False")
 
             if not candidate_outputs:
                 fallback_if_no_end(proc_clone, candidate_outputs)
@@ -806,14 +952,29 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
             if candidate_outputs:
                 selected_step, selected_output = candidate_outputs[-1]
 
+            if expected_output is None:
+                print(f"📝 No expected output: storing raw result for testId={testId}")
+                results.append({
+                    "procedure_id": proc.id,
+                    "trainId": trainId,
+                    "testId": testId,
+                    "evaluated_output": selected_output,
+                    "success": None,
+                    "reason": "No expected output",
+                    "executed_steps": executed_steps if return_execution_trace else None,
+                    "execution_trace": trace if return_execution_trace else None,
+                })
+                continue
+
+            # Else: standard evaluation
             success = concrete_grids_equal(selected_output, expected_output)
             if success:
-                print(f"   ➔ ✅ SUCCESS for procedure {proc.id} via step {selected_step}")
+                print(f"✅ SUCCESS for procedure {proc.id} via step {selected_step}")
                 learn_from_success(proc, selected_step)
             else:
-                print(f"   ➔ ❌ FAIL for procedure {proc.id}")
-                print(f"     🔴 Expected: {expected_output}")
-                print(f"     🔸 Got     : {selected_output}")
+                print(f"❌ FAIL for procedure {proc.id}")
+                print(f"   🔴 Expected: {expected_output}")
+                print(f"   🔸 Got     : {selected_output}")
 
             accuracy_info = pixel_accuracy(selected_output, expected_output)
 
@@ -835,7 +996,6 @@ def evaluate_generic_procedures(mode: str, procedures: List[Procedure], data, al
             results.append(result)
 
     return results
-
 
 def test_generic_procs_on_trains(generic_procs, arc_json_data) -> List[dict]:
     """
@@ -927,7 +1087,7 @@ def evaluate_step_with_multiple(step, input_grid, context):
 
     args = {}
     for arg_name, binding in step.bindings.items():
-        resolved_value = resolve_binding_recursive(binding, context, input_grid)
+        resolved_value = resolve_binding_recursive(binding, context, input_grid, step)
         args[arg_name] = resolved_value
         if resolved_value is None:
             print(f"Unresolved '{arg_name}' skip this action: {step.id}")
@@ -984,7 +1144,7 @@ def clone_procedure(original_proc: Procedure) -> Procedure:
             binding.value = None
         cloned_steps[cloned_step.id] = cloned_step
 
-    return Procedure(steps=cloned_steps, id=f"{original_proc.id}_clone")
+    return Procedure(steps=cloned_steps, id=f"{original_proc.id}_clone", scenarioId=original_proc.scenarioId, ruleId=original_proc.ruleId)
 
 
 def run_generic_procs_on_tests(generic_procs: List[Procedure], arc_json_data: dict) -> list:
@@ -1022,6 +1182,79 @@ def run_generic_procs_on_tests(generic_procs: List[Procedure], arc_json_data: di
                 "expected_output": expected_output
             })
     return results
+
+def generate_submission_file_from_scenarios(
+    task_id: str,
+    valid_scenarios: List[Scenario],
+    arc_data: dict,
+    output_path: str,
+    results_by_scenario: Optional[dict] = None
+) -> None:
+    """
+    Generate a submission.json file using predictions from valid_scenarios.
+    Picks best result (highest pixel accuracy) for each test input.
+    """
+    submission = {task_id: []}
+    num_tests = len(arc_data.get("test", []))
+
+    if results_by_scenario is not None:
+        # Collect best predictions per testId
+        best_outputs_by_testId = {}
+
+        for scenario in valid_scenarios:
+            scenario_id = scenario.id
+            results = results_by_scenario.get(scenario_id, [])
+
+            for r in results:
+                tid = r.get("testId", -1)
+                if tid < 0:
+                    continue
+                acc = r.get("pixel_accuracy", 0.0)
+                current_best = best_outputs_by_testId.get(tid)
+
+                if current_best is None or acc > current_best["pixel_accuracy"]:
+                    best_outputs_by_testId[tid] = {
+                        "evaluated_output": r.get("evaluated_output"),
+                        "pixel_accuracy": acc,
+                        "procedure_id": r.get("procedure_id"),
+                    }
+
+        for tid in range(num_tests):
+            best = best_outputs_by_testId.get(tid)
+            if best is None:
+                print(f"⚠️ No result for testId={tid}, fallback to [[0],[0],[0]]")
+                best_output = [[0], [0], [0]]
+            else:
+                best_output = best["evaluated_output"]
+                print(f"✅ testId={tid} uses proc={best['procedure_id']} with accuracy={best['pixel_accuracy']:.2f}")
+
+            # Convert tuple to list if needed
+            if isinstance(best_output, tuple):
+                best_output = [list(row) for row in best_output]
+            elif not isinstance(best_output, list) or not all(isinstance(row, list) for row in best_output):
+                print(f"⚠️ Invalid output format for testId={tid}, fallback to default.")
+                best_output = [[0], [0], [0]]
+
+            submission[task_id].append({
+                "attempt_1": best_output,
+                "attempt_2": best_output
+            })
+    else:
+        test_data = arc_data.get("test", [])
+        if isinstance(test_data, dict):
+            test_data = list(test_data.values())
+
+        for test_entry in test_data:
+            expected_output = test_entry.get("output", [[0]])
+            best_output = [[0] for _ in expected_output] if isinstance(expected_output, list) else [[0], [0], [0]]
+            submission[task_id].append({
+                "attempt_1": best_output,
+                "attempt_2": best_output
+            })
+
+    with open(output_path, "w") as f:
+        json.dump(submission, f)
+    print(f"📤 Submission file written to {output_path}")
 
 
 def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_data: dict, output_path: str, test_results: Optional[List[dict]] = None) -> None:
@@ -1074,6 +1307,54 @@ def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_d
     with open(output_path, "w") as f:
         json.dump(submission, f)
     print(f"📤 Submission file written to {output_path}")
+
+def print_test_results_by_scenario(results_by_scenario: dict, output_path: str, arc_data: Optional[dict] = None) -> None:
+    def compute_pixel_accuracy(pred, expected):
+        if not pred or not expected or len(pred) != len(expected) or len(pred[0]) != len(expected[0]):
+            return 0, 0, 0.0
+        matching = sum(
+            1 for i in range(len(pred))
+            for j in range(len(pred[0]))
+            if pred[i][j] == expected[i][j]
+        )
+        total = len(pred) * len(pred[0])
+        return matching, total, matching / total if total > 0 else 0.0
+
+    with open(output_path, "a") as f:
+        print("\n✅ TEST RESULTS BY SCENARIO:\n")
+        f.write("\n✅ TEST RESULTS BY SCENARIO:\n")
+
+        for scenario_id, results in results_by_scenario.items():
+            print(f"\n📦 Scenario: {scenario_id}")
+            f.write(f"\n📦 Scenario: {scenario_id}\n")
+
+            for r in results:
+                if r.get("testId", -1) == -1:
+                    continue  # skip non-test entries
+                pred = r.get("evaluated_output")
+                if pred is None:
+                    print(f"⚠️ No evaluated_output for testId={r['testId']}, skipping.")
+                    continue
+
+                # Recompute accuracy if missing
+                expected = None
+                if arc_data is not None:
+                    test_set = arc_data.get("test", [])
+                    if isinstance(test_set, dict):
+                        expected = test_set.get(str(r["testId"]), {}).get("output")
+                    elif isinstance(test_set, list) and r["testId"] < len(test_set):
+                        expected = test_set[r["testId"]].get("output")
+
+                if expected is not None:
+                    matching, total, acc = compute_pixel_accuracy(pred, expected)
+                    status = "✅" if matching == total else "❌"
+                    acc_str = f"{acc * 100:.2f}%"
+                    line = f"{status} testId={r['testId']}, proc={r['procedure_id']}, accuracy={acc_str} ({matching}/{total})"
+                else:
+                    line = f"⚠️ testId={r['testId']}, proc={r['procedure_id']}, no expected output"
+
+                print(line)
+                f.write(line + "\n")
 
 def print_test_results(test_results: List[dict], output_path: str) -> None:
     with open(output_path, "a") as f:
@@ -1156,13 +1437,13 @@ def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_p
     print(f"📊 Comparison report written to {output_path}")
 
 
-def resolve_binding_recursive(binding, context, input_grid):
+def resolve_binding_recursive(binding, context, input_grid, step):
     """
     Recursively resolve an ArgumentBinding into its concrete value.
     """
-    print(f"resolve_binding_recursive: binding={binding}")
-    print(f"resolve_binding_recursive: context={context}")
-    print(f"resolve_binding_recursive: input_grid={input_grid}")
+    #print(f"resolve_binding_recursive: binding={binding}")
+    #print(f"resolve_binding_recursive: context={context}")
+    #print(f"resolve_binding_recursive: input_grid={input_grid}")
 
     print(f"🧠 Resolving binding: name={binding.name}, status={binding.binding}, value={binding.value}, source={binding.source_procedure_id}")
 
@@ -1170,6 +1451,9 @@ def resolve_binding_recursive(binding, context, input_grid):
         print(f"  📌 Constant binding resolved to: {binding.value}")
         return binding.value
 
+    elif binding.binding == BindingStatus.INSTANCE:
+        print(f"  📌 instance binding resolved to: {getattr(step, binding.name, None)}")
+        return getattr(step, binding.name, None)
 
     elif binding.binding == BindingStatus.INPUT_GRID:
         if "input_grid" in context:
@@ -1195,6 +1479,9 @@ def resolve_binding_recursive(binding, context, input_grid):
     elif binding.binding == BindingStatus.MULTIPLE:
         for candidate in binding.candidates or []:
             resolved_id = candidate.producer_id
+            if "get_start_input" in resolved_id:
+                print(f"✩ {resolved_id} return the input grid !")
+                return input_grid
             if resolved_id == binding.source_procedure_id:
                 print(f"⛔ Skipping self-link for {resolved_id} on MULTIPLE")
                 continue
@@ -1209,13 +1496,13 @@ def resolve_binding_recursive(binding, context, input_grid):
         if isinstance(binding.sub_bindings, dict):
             print(f"  🔄 Resolving compound dict for {binding.name}")
             return {
-                key: resolve_binding_recursive(sub_binding, context, input_grid)
+                key: resolve_binding_recursive(sub_binding, context, input_grid, step)
                 for key, sub_binding in binding.sub_bindings.items()
             }
         elif isinstance(binding.sub_bindings, list):
             print(f"  🔄 Resolving compound list for {binding.name} with {len(binding.sub_bindings)} elements")
             return [
-                resolve_binding_recursive(sub_binding, context, input_grid)
+                resolve_binding_recursive(sub_binding, context, input_grid, step)
                 for sub_binding in binding.sub_bindings
             ]
         else:

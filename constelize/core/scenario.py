@@ -1,5 +1,7 @@
+#constelize/core/scenario.py
+
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from constelize.core.rule import Rule  # You'll need to create rule.py
 
 @dataclass
@@ -9,6 +11,9 @@ class Scenario:
     input_data: Dict[str, Any] = field(default_factory=dict)
     output_targets: Dict[str, Any] = field(default_factory=dict)
     comment: Optional[str] = None
+    rule_to_launch_before: Rule = None
+    rule_to_analyse: Rule = None
+    to_launch_next: List["Scenario"] = field(default_factory=list)
 
     def run(self) -> Dict[str, Any]:
         scope: Dict[str, Any] = dict(self.input_data)

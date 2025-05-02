@@ -35,6 +35,10 @@ def as_grid(pixels: List[tuple]) -> List[List[int]]:
 
     return grid
 
+
+
+
+
 ACTIONS = [
     Action(
         id="apply_function",

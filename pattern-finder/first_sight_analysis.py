@@ -1,5 +1,5 @@
 # first_sight_analysis.py
-
+import argparse
 import os
 import sqlite3
 import json
@@ -83,34 +83,79 @@ def insert_first_sight_row(conn, row):
     conn.execute(sql, [row[col] for col in columns])
 
 
-def process_single_file(json_filepath, db_path="../db/database.db"):
-    filename = os.path.basename(json_filepath)
-
-    conn = sqlite3.connect(db_path)
+def process_single_file(filename: str, data: dict, conn: sqlite3.Connection):
+    """
+    Clears and repopulates the first_sight_analysis table
+    using the given filename label and already-loaded JSON data.
+    """
     cursor = conn.cursor()
-
-    # Clear table
     cursor.execute("DELETE FROM first_sight_analysis;")
 
-    with open(json_filepath, 'r') as file:
-        data = json.load(file)
-
-    # Process train
+    # TRAIN rows (output known)
     for trainId, item in enumerate(data.get("train", [])):
-        row = compute_first_sight_row(filename, trainId, -1, item["input"], item["output"])
+        row = compute_first_sight_row(
+            filename,
+            trainId,
+            -1,
+            item["input"],
+            item["output"],
+        )
         insert_first_sight_row(conn, row)
 
-    # Process test (output is None)
+    # TEST rows (no expected output)
     for testId, item in enumerate(data.get("test", [])):
-        row = compute_first_sight_row(filename, -1, testId, item["input"], None)
+        row = compute_first_sight_row(
+            filename,
+            -1,
+            testId,
+            item["input"],
+            None,
+        )
         insert_first_sight_row(conn, row)
 
     conn.commit()
+
+
+def main(json_source: str, *, inline: bool = False, name: str | None = None):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path    = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
+    conn       = sqlite3.connect(db_path)
+
+    # decide what label we pass as "filename"
+    if name:
+        filename = name
+    elif inline:
+        filename = "<in-memory-json>"
+    else:
+        filename = os.path.basename(json_source)
+
+    # load JSON
+    if inline:
+        data = json.loads(json_source)
+    else:
+        with open(json_source, "r") as f:
+            data = json.load(f)
+
+    process_single_file(filename, data, conn)
     conn.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("❌ Please provide a path to a JSON file.")
-    else:
-        process_single_file(sys.argv[1])
+    parser = argparse.ArgumentParser(
+        description="Compute first_sight_analysis from an ARC JSON (file or inline)."
+    )
+    parser.add_argument(
+        "json_input",
+        help="Path to an ARC JSON file, or (with --inline) a raw JSON string"
+    )
+    parser.add_argument(
+        "--inline",
+        action="store_true",
+        help="Treat json_input as the full JSON text, not a file path"
+    )
+    parser.add_argument(
+        "--name", "-n",
+        help="Override the “filename” label (e.g. 'scenario_with_denoise')"
+    )
+    args = parser.parse_args()
+    main(args.json_input, inline=args.inline, name=args.name)

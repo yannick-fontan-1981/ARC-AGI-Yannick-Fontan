@@ -1,5 +1,31 @@
 # constelize/tools/globals.py
 
-TRAIN_ID: int = -1
-TEST_ID: int = -1
-INPUT_GRID = None
+from typing import List, Dict
+
+from constelize.core.scenario import Scenario
+
+all_scenarios: List[Scenario] = []
+
+def get_values_by_scenario_rule(scenarioId: str, ruleId: str) -> Dict[str, Dict[str, int]]:
+    """
+    Look up the Scenario with the given ID, then return that Rule’s
+    `values_by_input` map.  If not found, return an empty dict.
+    """
+    for scen in all_scenarios:
+        if scen.id == scenarioId:
+            rule = scen.rules.get(ruleId)
+            if rule is not None:
+                return rule.values_by_input
+    return {}
+
+def get_attributes_by_scenario_rule(scenarioId: str, ruleId: str) -> Dict[str, Dict[int, List[str]]]:
+    """
+    Look up the Scenario with the given ID, then return that Rule’s
+    `attributes_by_input_and_values` map.  If not found, return an empty dict.
+    """
+    for scen in all_scenarios:
+        if scen.id == scenarioId:
+            rule = scen.rules.get(ruleId)
+            if rule is not None:
+                return rule.attributes_by_input_and_values
+    return {}

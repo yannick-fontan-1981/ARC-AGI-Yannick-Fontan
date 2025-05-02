@@ -1,5 +1,5 @@
 # sprite_analysis.py
-
+import argparse
 import os
 import sqlite3
 import json
@@ -375,7 +375,7 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
             )
 
             # Insert only if not present
-            if tkey not in global_data["sprite_trans_map"]:
+            if (tkey not in global_data["sprite_trans_map"]) and (base_id != produced_id):
                 trans_id = global_data["next_sprite_trans_id"]
                 global_data["next_sprite_trans_id"] += 1
                 global_data["sprite_trans_map"][tkey] = trans_id
@@ -395,7 +395,9 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
                     "zoom_y": zy,
                     "recolored": json.dumps(rec_pairs)
                 })
-            matched_trans_ids.add(global_data["sprite_trans_map"][tkey])
+            if (base_id != produced_id):
+                matched_trans_ids.add(global_data["sprite_trans_map"][tkey])
+            #matched_trans_ids.add(global_data["sprite_trans_map"][tkey])
 
     # Ensure default identity if no other found
     if not found_any:
@@ -1925,20 +1927,46 @@ def detect_and_store_sprite_computation(conn, data=None):
 ###############################################
 # Main function
 ###############################################
-
-def main(json_filepath):
+def main(json_source, *, inline=False, name=None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
-    conn = sqlite3.connect(db_path)
-    with open(json_filepath, "r") as file:
-        data = json.load(file)
-    process_sprites_from_json(os.path.basename(json_filepath), data, conn)
+    db_path    = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
+    conn       = sqlite3.connect(db_path)
+
+    # Determine the “filename” label for the run:
+    if name:
+        filename = name
+    elif inline:
+        filename = "<in-memory-json>"
+    else:
+        filename = os.path.basename(json_source)
+
+    # Load the JSON data
+    if inline:
+        data = json.loads(json_source)
+    else:
+        with open(json_source, "r") as f:
+            data = json.load(f)
+
+    process_sprites_from_json(filename, data, conn)
     conn.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        #print("❌ Please provide a path to a JSON file.")
-        main("D:\\dev\\ARC-AGI\\ARC-AGI-Yannick-Fontan\\pattern-finder\\data\\training-1\\9172f3a0.json")
-    else:
-        main(sys.argv[1])
+    parser = argparse.ArgumentParser(
+        description="Compute sprite_analysis from an ARC JSON — either by file or by raw JSON string."
+    )
+    parser.add_argument(
+        "json_input",
+        help="Path to an ARC JSON file, or (with --inline) a raw JSON string"
+    )
+    parser.add_argument(
+        "--inline",
+        action="store_true",
+        help="Treat json_input as raw JSON text rather than a file path"
+    )
+    parser.add_argument(
+        "--name", "-n",
+        help="If provided, use this as the scenario name instead of the file basename"
+    )
+    args = parser.parse_args()
+    main(args.json_input, inline=args.inline, name=args.name)

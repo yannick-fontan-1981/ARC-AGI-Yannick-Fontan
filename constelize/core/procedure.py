@@ -9,6 +9,8 @@ from constelize.core.binding import BindingStatus, ArgumentBinding
 class ActionInstance:
     id: str
     action: Action
+    scenarioId: Optional[str] = None
+    ruleId: Optional[str] = None
     trainId: Optional[int] = None
     testId: Optional[int] = None
     isTrain: Optional[bool] = None
@@ -22,6 +24,7 @@ class ActionInstance:
     comment: Optional[str] = None
     active: bool = True
     END: Optional[bool] = False
+    IN_SEPARATE_RULE: Optional[bool] = False
 
     def get_unresolved_bindings(self) -> set[str]:
         return {
@@ -33,11 +36,12 @@ class ActionInstance:
 @dataclass
 class Procedure:
     id: str
-    input_vars: Dict[str, ArgumentBinding] = field(default_factory=dict)
-    output_vars: List[str] = field(default_factory=list)
+    scenarioId: Optional[str] = None
+    ruleId: Optional[str] = None
     steps: Dict[str, ActionInstance] = field(default_factory=dict)
     active: bool = True
     comment: Optional[str] = None
+    action_producing_output: ActionInstance = None
 
     def run(self, scope: Dict[str, Any]) -> Dict[str, Any]:
         local_scope = {k: scope[k] for k in self.input_vars if k in scope}
@@ -63,22 +67,6 @@ class Procedure:
             for name, binding in self.input_vars.items()
             if binding.binding == BindingStatus.UNRESOLVED
         }
-
-
-def build_procedure_from_action_instances(action_instances, name=None):
-    """
-    Construit une instance de Procedure à partir d'une liste d'ActionInstance.
-    Les steps sont nommés automatiquement.
-    """
-    steps = {}
-    for i, action_instance in enumerate(action_instances):
-        step_id = f"step_{i+1}"
-        steps[step_id] = action_instance
-
-    return Procedure(
-        id=name or str(uuid.uuid4()),
-        steps=steps
-    )
 
 def evaluate_procedure(procedure: Procedure, expected_output=None) -> bool:
     for step in procedure.steps.values():

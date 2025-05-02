@@ -1,5 +1,5 @@
 # object_analysis.py
-
+import argparse
 import os
 import sqlite3
 import json
@@ -363,13 +363,20 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
     def process_items(items, is_input):
         nonlocal next_object_id
         for idx, item in enumerate(items):
-            grid = item["input"] if is_input else item["output"]
-            # For train items, use idx as trainId (or output id) and -1 otherwise.
-            rows = compute_object_analysis(filename, idx if is_input else -1,
-                                           -1 if is_input else idx,
-                                           grid, is_input, global_data, conn)
+            if is_input:
+                grid = item.get("input")
+            else:
+                grid = item.get("output")
+                if grid is None:
+                    print(f"⚠️ Skipping test[{idx}] output: no 'output' field.")
+                    continue  # skip this item if no output
+
+            # Determine train or test index
+            train_id = idx if is_input and "train" in filename else -1
+            test_id = idx if is_input is False and "test" in filename else -1
+
+            rows = compute_object_analysis(filename, train_id, test_id, grid, is_input, global_data, conn)
             for obj_row, occ_row in rows:
-                # Assign programmatically managed id.
                 obj_row["id"] = next_object_id
                 occ_row["object_id"] = next_object_id
                 next_object_id += 1
@@ -390,18 +397,49 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
     conn.commit()
 
 
-def main(json_filepath):
+###############################################
+# Main function
+###############################################
+def main(json_source, *, inline=False, name=None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
-    conn = sqlite3.connect(db_path)
-    with open(json_filepath, "r") as file:
-        data = json.load(file)
-    process_objects_from_json(os.path.basename(json_filepath), data, conn)
+    db_path    = os.path.abspath(os.path.join(script_dir, "..", "db", "database.db"))
+    conn       = sqlite3.connect(db_path)
+
+    # Determine the “filename” label for the run:
+    if name:
+        filename = name
+    elif inline:
+        filename = "<in-memory-json>"
+    else:
+        filename = os.path.basename(json_source)
+
+    # Load the JSON data
+    if inline:
+        data = json.loads(json_source)
+    else:
+        with open(json_source, "r") as f:
+            data = json.load(f)
+
+    process_objects_from_json(filename, data, conn)
     conn.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("❌ Please provide a path to a JSON file.")
-    else:
-        main(sys.argv[1])
+    parser = argparse.ArgumentParser(
+        description="Compute sprite_analysis from an ARC JSON — either by file or by raw JSON string."
+    )
+    parser.add_argument(
+        "json_input",
+        help="Path to an ARC JSON file, or (with --inline) a raw JSON string"
+    )
+    parser.add_argument(
+        "--inline",
+        action="store_true",
+        help="Treat json_input as raw JSON text rather than a file path"
+    )
+    parser.add_argument(
+        "--name", "-n",
+        help="If provided, use this as the scenario name instead of the file basename"
+    )
+    args = parser.parse_args()
+    main(args.json_input, inline=args.inline, name=args.name)

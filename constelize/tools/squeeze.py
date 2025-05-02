@@ -170,7 +170,7 @@ def is_step_still_used(step_id: str, branch: dict) -> bool:
     return False
 
 
-def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
+def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleId: str) -> List[Procedure]:
     from copy import deepcopy
     from collections import defaultdict
 
@@ -391,7 +391,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure]) -> List[Procedure]:
             print(f"🧹 Removing unused step: {sid}")
             branch.pop(sid)
 
-        proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch)
+        proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch, scenarioId=scenarioId, ruleId=ruleId)
         print(f"\n🧬 Final generic_proc_{idx+1}")
         for sid, step in proc.steps.items():
             print(f"   {sid} ({step.action.id})")
@@ -423,12 +423,12 @@ def print_bindings_recursive(proc):
             print_binding(f"{sid}.{arg}", b)
 
 
-def normalize_procedures_with_levels(procs: List[Procedure]) -> List[Procedure]:
+def normalize_procedures_with_levels(procs: List[Procedure], scenarioId: str, ruleId: str) -> List[Procedure]:
     """Return copies of *procs* whose steps are sorted topologically."""
     norm = []
     for p in procs:
         ordered = _order_steps({s.id: s for s in p.steps.values()})
-        norm.append(Procedure(id=p.id, steps=ordered))
+        norm.append(Procedure(id=p.id, steps=ordered, scenarioId=scenarioId, ruleId=ruleId))
     return norm
 
 def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:

@@ -1,9 +1,10 @@
+#constelize/library/attribute_access.py
+
+import constelize.tools.globals as GLOBAL
 from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
 from constelize.core.procedure import ActionInstance
-from constelize.core.registry import ActionRegistry
-from constelize.tools.registry_singleton import registry
 
 _values_by_input = {}
 _attributes_by_input_and_values = {}
@@ -33,42 +34,22 @@ def get_start_input_fn(**kwargs):
     # (You may choose to prefer the externally injected grid over the stored output_value.)
     return kwargs.get("grid") or kwargs.get("output_value")
 
-def get_attribute_fn(trainId: int, testId: int, attribute_name: str) -> int:
+def get_attribute_fn(scenarioId: str, ruleId: str, trainId: int, testId: int, attribute_name: str) -> int:
     """
     Retrieve a numeric attribute by trainId/testId
     using the pre‑computed attrs map in attribute_access.
     """
+    values_by_input = GLOBAL.get_values_by_scenario_rule(scenarioId, ruleId)
     key = f"{trainId}#{testId}"
-    return _values_by_input.get(key, {}).get(attribute_name)
-
-def build_get_attribute_instance(
-    trainId: int,
-    testId:  int,
-    attribute_name: str,
-    output_value: int
-) -> ActionInstance:
-    """
-    Build an ActionInstance for the `get_attribute` action,
-    with all three bindings set as CONSTANT.
-    """
-    # Grab the action from the registry (we assume it’s already registered)
-    action   = registry.get_by_id("get_attribute")
-
-    return ActionInstance(
-        id=f"get_attribute_{trainId}_{testId}_{attribute_name}",
-        action=action,
-        bindings={
-            "trainId":        ArgumentBinding("trainId",        "Integer", binding=BindingStatus.CONTEXT, value=trainId),
-            "testId":         ArgumentBinding("testId",         "Integer", binding=BindingStatus.CONTEXT, value=testId),
-            "attribute_name": ArgumentBinding("attribute_name", "String",  binding=BindingStatus.CONSTANT, value=attribute_name),
-        },
-        output_var=f"attr_{attribute_name}",
-        output_value=output_value,
-        trainId=trainId,
-        testId=testId,
-        isTrain=(trainId != -1),
-        isToOutput=True
-    )
+    #if(attribute_name == "first_sight_analysis.widthInput"):
+    #    print("[ get_attribute_fn ]")
+    #    print(f"scenarioId: {scenarioId}")
+    #    print(f"ruleId: {ruleId}")
+    #    print(f"trainId: {trainId}")
+    #    print(f"testId: {testId}")
+    #    print(f"attribute_name: {attribute_name}")
+    #    print(f"return: {values_by_input.get(key, {}).get(attribute_name)}")
+    return values_by_input.get(key, {}).get(attribute_name)
 
 ACTIONS = [
     Action(
@@ -145,6 +126,8 @@ ACTIONS = [
         description="Retrieve a single numeric attribute by trainId/testId from first_sight_analysis.",
         category=ActionCategory.ATTRIBUTE_ACCESS,
         input_arguments=[
+            ArgumentBinding("scenarioId",    "String",  binding=BindingStatus.INSTANCE),
+            ArgumentBinding("ruleId",        "String",  binding=BindingStatus.INSTANCE),
             ArgumentBinding("trainId",       "Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding("testId",        "Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding("attribute_name","String",  binding=BindingStatus.UNRESOLVED)

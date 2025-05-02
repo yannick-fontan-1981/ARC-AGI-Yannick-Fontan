@@ -36,7 +36,8 @@ def prune_procedure(proc: Procedure, executed_steps: List[str]) -> bool:
 
     return True
 
-def iterative_prune(generic_procs: list[Procedure], data: dict) -> list[Procedure]:
+# todo: remove this unused method
+def iterative_prune(generic_procs: list[Procedure], data: dict, scenarioId: str, ruleId: str) -> list[Procedure]:
     """
     Répète l’évaluation des procédures génériques sur les données d’entraînement.
     À chaque itération :
@@ -55,7 +56,9 @@ def iterative_prune(generic_procs: list[Procedure], data: dict) -> list[Procedur
             mode="train",                       # Évalue uniquement sur les exemples d'entraînement
             procedures=generic_procs,           # Liste des procédures génériques à tester
             data=data,                          # Contenu du fichier ARC (JSON)
-            return_execution_trace=True         # Demande le détail des étapes exécutées
+            return_execution_trace=True,        # Demande le détail des étapes exécutées
+            scenarioId=scenarioId,
+            ruleId=ruleId
         )
 
         pruned = False

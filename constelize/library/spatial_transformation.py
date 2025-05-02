@@ -5,7 +5,7 @@ from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
-    zoom, paint, Grid, crop
+    zoom, paint, Grid, crop, unzoom
 from typing import Tuple, Any, List, Dict
 
 
@@ -223,5 +223,18 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=sprite_computation_paint
+    ),
+    Action(
+        id="unzoom",
+        name="Unzoom",
+        description="Shrink a grid by integer factors zoom_x, zoom_y by sampling the top-left pixel of each block",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="grid",   type="Grid",    binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="zoom_x", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="zoom_y", type="Integer", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=unzoom
     )
 ]

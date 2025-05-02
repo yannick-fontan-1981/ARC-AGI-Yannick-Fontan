@@ -1,8 +1,0 @@
-✅ TRAINING RESULTS:
-✅ trainId=0, proc=generic_proc_1
-✅ trainId=1, proc=generic_proc_1
-✅ trainId=2, proc=generic_proc_1
-✅ trainId=3, proc=generic_proc_1
-
-✅ TEST RESULTS:
-✅ testId=0, proc=generic_proc_1, accuracy=100.00% (9/9)

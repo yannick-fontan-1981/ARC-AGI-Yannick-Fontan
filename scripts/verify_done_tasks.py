@@ -1,41 +1,12 @@
 # scripts/verify_done_tasks.py
 
 #!/usr/bin/env python3
-import copy
-import json
 import os
-import sqlite3
 import subprocess
 import sys
 import shutil
-import importlib
 import time
-from collections import defaultdict
 
-# Import necessary functions and modules
-from constelize.tools.fact_to_action_mapping import (
-    load_end_outputs_from_json,
-    load_json_inputs_from_json
-)
-import constelize.tools.fact_to_action_mapping as ftam_mod
-import constelize.library.attribute_access as aa_mod
-from constelize.tools.pattern_analysis import (
-    generate_draft_procedure,
-    evaluate_generic_procedures,
-    load_arc_json,
-    print_test_results,
-    generate_submission_file,
-    compare_submission_to_arc_outputs
-)
-from constelize.tools.squeeze import (
-    normalize_procedures_with_levels,
-    squeeze_with_unresolved,
-    remove_unresolved_actions_from_generic
-)
-from constelize.tools.sqlite_loader import (
-    build_values_by_input,
-    build_attributes_by_input_and_values
-)
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR
 
 # **NEW**: import the shared test_file from verify_task

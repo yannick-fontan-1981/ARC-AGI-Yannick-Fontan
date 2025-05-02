@@ -1,3 +1,5 @@
+#constelize/core/rule.py
+
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 
@@ -7,11 +9,15 @@ from constelize.core.procedure import Procedure
 @dataclass
 class Rule:
     id: str
-    input_vars: Dict[str, ArgumentBinding] = field(default_factory=dict)
-    output_vars: List[str] = field(default_factory=list)
-    procedures: Dict[str, Procedure] = field(default_factory=dict)
-    active: bool = True
     comment: Optional[str] = None
+    values_by_input: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    attributes_by_input_and_values: Dict[str, Dict[int, List[str]]] = field(default_factory=dict)
+    procedures: List[Procedure] = field(default_factory=list)
+    generic_procs: List[Procedure] = field(default_factory=list)
+    train_results: List[Dict[str, str]] = field(default_factory=list)
+    active: bool = True
+    rule_producing_input: "Rule" = None
+    proc_producing_output: Procedure = None
 
     def run(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         local_scope = dict(inputs)

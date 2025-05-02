@@ -33,12 +33,12 @@ def make_binding_hash(binding: ArgumentBinding,
     h = hashlib.md5(raw).hexdigest()
     binding.binding_hash = h
 
-    print(f"[make_binding_hash producer_action_id: {producer_action_id}]")
-    print(f"[make_binding_hash consumer_action_id: {consumer_action_id}]")
-    print(f"[make_binding_hash path: {path}]")
-    print(f"[make_binding_hash binding.type: {binding.type}]")
+    #print(f"[make_binding_hash producer_action_id: {producer_action_id}]")
+    #print(f"[make_binding_hash consumer_action_id: {consumer_action_id}]")
+    #print(f"[make_binding_hash path: {path}]")
+    #print(f"[make_binding_hash binding.type: {binding.type}]")
     #print(f"[make_binding_hash binding.binding.name: {binding.binding.name}]")
     #print(f"[make_binding_hash repr(binding.value): {repr(binding.value)}]")
-    print(f"[make_binding_hash hash: {h}]")
+    #print(f"[make_binding_hash hash: {h}]")
 
     return h

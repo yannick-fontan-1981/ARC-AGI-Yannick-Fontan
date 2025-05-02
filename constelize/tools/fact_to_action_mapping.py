@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from collections import defaultdict
 from itertools import product
 
@@ -10,6 +10,7 @@ from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop
+from constelize.library.pattern_detection import detect_noise, denoise_grid
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
 from constelize.tools.registry_singleton import registry
 
@@ -128,6 +129,8 @@ class FactToActionMapping:
             output_var=f"{self.action_id}_grid",
             output_value=output_grid,
             output_type=self.action.output_type,
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=trainId,
             testId=row["testId"],
             isTrain=trainId != -1,
@@ -219,6 +222,8 @@ class ZoomFactToAction(FactToActionMapping):
             output_var="zoomed_grid",
             output_value=output_grid,
             output_type=self.action.output_type,
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=trainId,
             testId=row["testId"],
             isTrain=trainId != -1,
@@ -393,6 +398,8 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             output_var="repeated_grid",
             output_value=painted_canvas,
             output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=trainId,
             testId=testId,
             isTrain=(trainId != -1),
@@ -499,6 +506,8 @@ class CanvasByRatioFactToAction(FactToActionMapping):
             output_var="canvas_grid",
             output_value=output_grid,
             output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=trainId,
             testId=row.get("testId", -1),
             isTrain=(trainId != -1),
@@ -509,10 +518,13 @@ class CanvasByRatioFactToAction(FactToActionMapping):
 # =============================================================================
 # build_start_input: Now modified to use BindingStatus.INPUT_GRID
 # =============================================================================
-def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_grid") -> ActionInstance:
+def build_start_input(id: int, grid, isTrain: bool, scenarioId: str = "scenario_1", ruleId: str = "rule_1") -> ActionInstance:
+    print("[ build_start_input ] registry.get_by_id(get_start_input)")
+    action = registry.get_by_id("get_start_input")
+    print(action)
     return ActionInstance(
         id=f"start_input_{'train' if isTrain else 'test'}_{id}#{getUniqueId()}",
-        action=registry.get_by_id("get_start_input"),
+        action=action,
         bindings={
             "grid": ArgumentBinding(
                 name="grid",
@@ -521,14 +533,53 @@ def build_start_input(id: int, grid, isTrain: bool, output_var: str = "input_gri
                 value=None
             )
         },
-        output_var=output_var,
+        output_var="input_grid",
         output_value=grid,
+        scenarioId=scenarioId,
+        ruleId=ruleId,
         trainId=id if isTrain else -1,
         testId=-1 if isTrain else id,
         isTrain=isTrain,
         isFromInput=True,
         isToOutput=False
     )
+
+
+def build_get_attribute_instance(
+    scenarioId: str,
+    ruleId: str,
+    trainId: int,
+    testId:  int,
+    attribute_name: str,
+    output_value: int
+) -> ActionInstance:
+    """
+    Build an ActionInstance for the `get_attribute` action,
+    with all three bindings set as CONSTANT.
+    """
+    # Grab the action from the registry (we assume it’s already registered)
+    action   = registry.get_by_id("get_attribute")
+
+    return ActionInstance(
+        id=f"get_attribute_{scenarioId}_{ruleId}_{trainId}_{testId}_{attribute_name}",
+        action=action,
+        bindings={
+            "scenarioId":     ArgumentBinding("scenarioId",     "String", binding=BindingStatus.INSTANCE, value=scenarioId),
+            "ruleId":         ArgumentBinding("ruleId",         "String", binding=BindingStatus.INSTANCE, value=ruleId),
+            "trainId":        ArgumentBinding("trainId",        "Integer", binding=BindingStatus.CONTEXT, value=trainId),
+            "testId":         ArgumentBinding("testId",         "Integer", binding=BindingStatus.CONTEXT, value=testId),
+            "attribute_name": ArgumentBinding("attribute_name", "String",  binding=BindingStatus.CONSTANT, value=attribute_name),
+        },
+        output_var=f"attr_{attribute_name}",
+        output_value=output_value,
+        scenarioId=scenarioId,
+        ruleId=ruleId,
+        trainId=trainId,
+        testId=testId,
+        isTrain=(trainId != -1),
+        isToOutput=True
+    )
+
 
 class RecolorSpriteFactToAction(FactToActionMapping):
     def __init__(self):
@@ -573,6 +624,8 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             output_var="recolored_grid",
             output_value=output_grid,
             output_type=self.action.output_type,
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=trainId,
             testId=row["testId"],
             isTrain=(trainId != -1),
@@ -635,6 +688,8 @@ class CropSpriteFactToAction(FactToActionMapping):
             output_var="cropped_sprite",
             output_value=cropped,
             output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=row["trainId"],
             testId=row["testId"],
             isTrain=(row["trainId"] != -1),
@@ -776,12 +831,195 @@ class SpriteComputationFactToAction:
             output_var="sprite_composed_grid",
             output_value=painted,
             output_type=self.action.output_type,
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
             trainId=trainId,
             testId=-1,
             isTrain=True,
             isToOutput=True,
             END=grids_equal(painted, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
+
+# =============================================================================
+# DenoiseFactToAction: mapping to denoise a noised grid
+# =============================================================================
+class DenoiseFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("denoise", "denoise")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        rows: List[Dict[str, Any]] = []
+        threshold_ratio = 0.07
+
+        for trainId, grid in TRAIN_INPUT_GRIDS.items():
+            # compute noise map
+            noise_map = detect_noise(grid)
+            total_pixels = len(grid) * len(grid[0])
+            # require at least 7% noisy pixels
+            if len(noise_map) < threshold_ratio * total_pixels:
+                return []
+            # compute the denoised output
+            denoised = denoise_grid(grid, noise_map)
+            rows.append({
+                "trainId": trainId,
+                "testId": -1,
+                # pass the raw grid and maps as JSON strings
+                "input_grid": json.dumps(grid),
+                "output_grid": json.dumps(denoised),
+                "noise_map": json.dumps([[i, j, c] for (i, j), c in noise_map.items()]),
+            })
+
+        return rows
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        print("[ DenoiseFactToAction ] _build_function")
+        input_grid = json.loads(row["input_grid"])
+        noise_list = json.loads(row["noise_map"])  # [[i,j,color], ...]
+        noise_map = {(i, j): color for i, j, color in noise_list}
+        output_grid = json.loads(row["output_grid"])
+
+        print(f"[ DenoiseFactToAction ] input_grid : {grid_to_pretty_string(input_grid)}")
+        print(f"[ DenoiseFactToAction ] output_grid : {grid_to_pretty_string(output_grid)}")
+
+        trainId = row["trainId"]
+        testId = row["testId"]
+
+        # 2. Look up the action
+        action = registry.get_by_id(self.action_id)
+
+        # 3. Build the ActionInstance
+        inst = ActionInstance(
+            id=f"{self.action_id}_{trainId}#{getUniqueId()}",
+            action=action,
+            bindings={
+                "grid": ArgumentBinding(
+                    name="grid",
+                    type="Grid",
+                    binding=BindingStatus.INPUT_GRID,
+                    value=input_grid
+                )
+            },
+            output_var="denoised_grid",
+            output_value=output_grid,
+            output_type=action.output_type,
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
+            trainId=trainId,
+            testId=testId,
+            isTrain=(trainId != -1),
+            isToOutput=True
+        )
+
+        # 4. Mark this instance as needing its own rule
+        inst.IN_SEPARATE_RULE = True
+
+        return inst
+
+class ZoomOutFactToAction(FactToActionMapping):
+    def __init__(self):
+        # We assume you've registered an 'unzoom' action in your ActionRegistry
+        super().__init__("zoom_out", "unzoom")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn) -> list[dict]:
+        # Find all cases where input→output is a clean integer shrink
+        query = """
+        SELECT
+          inp.trainId,
+          inp.testId,
+          inp.id   AS input_sprite_id,
+          outp.id  AS output_sprite_id,
+          inp.width  AS in_w,
+          inp.height AS in_h,
+          outp.width  AS out_w,
+          outp.height AS out_h,
+          (inp.width  / outp.width)  AS zoom_x,
+          (inp.height / outp.height) AS zoom_y,
+          inp.data   AS input_data,
+          outp.data  AS output_data
+        FROM sprite_analysis AS inp
+        JOIN sprite_analysis AS outp
+          ON inp.trainId = outp.trainId
+         AND inp.testId  = outp.testId
+        WHERE
+          inp.isInsideInput  = 1
+          AND outp.isInsideOutput = 1
+          /* integer shrink factors */
+          AND inp.width  % outp.width  = 0
+          AND inp.height % outp.height = 0
+          /* skip trivial 1×1 */
+          AND (inp.width  != outp.width
+            OR  inp.height != outp.height)
+        """
+        cursor = conn.execute(query)
+        cols = [d[0] for d in cursor.description]
+        candidates = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        # now filter by actual unzoom()
+        valid = []
+        for r in candidates:
+            inp_grid = to_concrete_grid(json.loads(r["input_data"]))
+            out_grid = to_concrete_grid(json.loads(r["output_data"]))
+            zx = int(r["zoom_x"])
+            zy = int(r["zoom_y"])
+            # only keep if unzoom really matches
+            if unzoom(inp_grid, zx, zy) == out_grid:
+                valid.append(r)
+
+        return valid
+
+    def _build_function(self, row: dict) -> ActionInstance:
+
+        # Parse grids and factors
+        input_grid = to_concrete_grid(json.loads(row["input_data"]))
+        output_grid = to_concrete_grid(json.loads(row["output_data"]))
+        zx = int(row["zoom_x"])
+        zy = int(row["zoom_y"])
+
+        print("[ Zoom Out build ]")
+        print("input_grid")
+        print(grid_to_pretty_string(input_grid))
+        print("output_grid")
+        print(grid_to_pretty_string(output_grid))
+
+        return ActionInstance(
+            id=f"zoom_out_{row['input_sprite_id']}#{getUniqueId()}",
+            action=self.action,  # the 'unzoom' action
+            bindings={
+                "grid": ArgumentBinding(
+                    name="grid",
+                    type="Grid",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=input_grid
+                ),
+                "zoom_x": ArgumentBinding(
+                    name="zoom_x",
+                    type="Integer",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=zx
+                ),
+                "zoom_y": ArgumentBinding(
+                    name="zoom_y",
+                    type="Integer",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=zy
+                ),
+            },
+            output_var="unzoomed_grid",
+            output_value=output_grid,
+            output_type=self.action.output_type,
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=(row["trainId"] != -1),
+            isToOutput=True,
+            END=(unzoom(input_grid, zx, zy) == output_grid)
+        )
+
 
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
@@ -799,6 +1037,8 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     CanvasByRatioFactToAction(),
     RecolorSpriteFactToAction(),
     CropSpriteFactToAction(),
-    SpriteComputationFactToAction()
+    SpriteComputationFactToAction(),
+    DenoiseFactToAction(),
+    ZoomOutFactToAction()
 ]
 
