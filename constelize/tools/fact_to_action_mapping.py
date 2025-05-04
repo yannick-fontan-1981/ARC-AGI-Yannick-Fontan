@@ -9,7 +9,8 @@ from itertools import product
 from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
-from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop
+from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
+    Grid, fill_grid
 from constelize.library.pattern_detection import detect_noise, denoise_grid
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
 from constelize.tools.registry_singleton import registry
@@ -548,6 +549,7 @@ def build_start_input(id: int, grid, isTrain: bool, scenarioId: str = "scenario_
 def build_get_attribute_instance(
     scenarioId: str,
     ruleId: str,
+    binding_type: str,
     trainId: int,
     testId:  int,
     attribute_name: str,
@@ -560,15 +562,18 @@ def build_get_attribute_instance(
     # Grab the action from the registry (we assume it’s already registered)
     action   = registry.get_by_id("get_attribute")
 
+    print(f"build_get_attribute_instance binding_type: {binding_type}")
+
     return ActionInstance(
         id=f"get_attribute_{scenarioId}_{ruleId}_{trainId}_{testId}_{attribute_name}",
         action=action,
         bindings={
-            "scenarioId":     ArgumentBinding("scenarioId",     "String", binding=BindingStatus.INSTANCE, value=scenarioId),
-            "ruleId":         ArgumentBinding("ruleId",         "String", binding=BindingStatus.INSTANCE, value=ruleId),
-            "trainId":        ArgumentBinding("trainId",        "Integer", binding=BindingStatus.CONTEXT, value=trainId),
-            "testId":         ArgumentBinding("testId",         "Integer", binding=BindingStatus.CONTEXT, value=testId),
-            "attribute_name": ArgumentBinding("attribute_name", "String",  binding=BindingStatus.CONSTANT, value=attribute_name),
+            "scenarioId":     ArgumentBinding("scenarioId",     "String",     binding=BindingStatus.INSTANCE, value=scenarioId),
+            "ruleId":         ArgumentBinding("ruleId",         "String",     binding=BindingStatus.INSTANCE, value=ruleId),
+            "binding_type":   ArgumentBinding("binding_type",   binding_type, binding=BindingStatus.INSTANCE, value=binding_type),
+            "trainId":        ArgumentBinding("trainId",        "Integer",    binding=BindingStatus.CONTEXT,  value=trainId),
+            "testId":         ArgumentBinding("testId",         "Integer",    binding=BindingStatus.CONTEXT,  value=testId),
+            "attribute_name": ArgumentBinding("attribute_name", "String",     binding=BindingStatus.CONSTANT, value=attribute_name),
         },
         output_var=f"attr_{attribute_name}",
         output_value=output_value,
@@ -1020,25 +1025,118 @@ class ZoomOutFactToAction(FactToActionMapping):
             END=(unzoom(input_grid, zx, zy) == output_grid)
         )
 
+# =============================================================================
+# CreateObjectFactToAction: mapping for newly created output‐only objects
+# =============================================================================
+class CreateObjectFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("create_object", "create_object")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        query = """
+        SELECT
+          so.object_id    AS object_id,
+          so.trainId      AS trainId,
+          so.testId       AS testId,
+          oa.data         AS data,
+          oa.color        AS color
+        FROM object_analysis AS oa
+        JOIN shape_occurrence AS so
+          ON so.object_id = oa.id
+        WHERE so.isInsideOutput = 1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM shape_occurrence AS so_in
+            WHERE so_in.object_id     = oa.id
+              AND so_in.isInsideInput = 1
+          )
+        """
+        cursor = conn.execute(query)
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        # Load list of pixel coords for this object
+        coords: List[List[int]] = json.loads(row["data"])
+        coords_set = {(r, c) for r, c in coords}
+
+        # Compute bounding box
+        rows = [r for r, _ in coords]
+        cols = [c for _, c in coords]
+        min_r, max_r = min(rows), max(rows)
+        min_c, max_c = min(cols), max(cols)
+        height = max_r - min_r + 1
+        width = max_c - min_c + 1
+
+        # Build mask grid as list of lists, then convert to tuple of tuples
+        mask_grid_list = [
+            [-8 if (min_r + y, min_c + x) in coords_set else -1
+             for x in range(width)]
+            for y in range(height)
+        ]
+        mask_grid: Grid = tuple(tuple(row) for row in mask_grid_list)
+
+        # Build output grid: replace -8 with color, keep -1 as background
+        color = row["color"]
+        output_grid: Grid = fill_grid(mask_grid,color)
+
+        print(f" [ CreateObjectFactToAction ] color: {color}")
+        print(f"mask_grid")
+        print(grid_to_pretty_string(mask_grid))
+        print(f"output_grid")
+        print(grid_to_pretty_string(output_grid))
+
+        action = registry.get_by_id(self.action_id)
+        return ActionInstance(
+            id=f"{self.action_id}_{row['object_id']}#{getUniqueId()}",
+            action=action,
+            bindings={
+                "mask": ArgumentBinding(
+                    name="mask",
+                    type="Grid",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=mask_grid
+                ),
+                "color": ArgumentBinding(
+                    name="color",
+                    type="Color",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=color
+                )
+            },
+            output_var="new_object",
+            output_value=output_grid,
+            output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=(row["trainId"] != -1),
+            isToOutput=True,
+            END=False
+        )
 
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
-    FactToActionMapping("rotated_90", "rotate_90"),
-    FactToActionMapping("rotated_180", "rotate_180"),
-    FactToActionMapping("rotated_270", "rotate_270"),
-    FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
-    FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
-    FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
-    FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
-    ZoomFactToAction(),
-    RepeatedSpriteFactToAction(),
-    CanvasByRatioFactToAction(),
-    RecolorSpriteFactToAction(),
+    #FactToActionMapping("rotated_90", "rotate_90"),
+    #FactToActionMapping("rotated_180", "rotate_180"),
+    #FactToActionMapping("rotated_270", "rotate_270"),
+    #FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
+    #FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
+    #FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
+    #FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
+    #ZoomFactToAction(),
+    #RepeatedSpriteFactToAction(),
+    #CanvasByRatioFactToAction(),
+    #RecolorSpriteFactToAction(),
     CropSpriteFactToAction(),
-    SpriteComputationFactToAction(),
-    DenoiseFactToAction(),
-    ZoomOutFactToAction()
+    #SpriteComputationFactToAction(),
+    #DenoiseFactToAction(),
+    #ZoomOutFactToAction(),
+    #CreateObjectFactToAction()
 ]
 

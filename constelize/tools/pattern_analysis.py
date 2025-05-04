@@ -232,17 +232,17 @@ def auto_link_by_value_and_type(action_instances: list):
 
                     if binding.value is not None and not values_equal(value, binding.value, binding.type):
                         print(f"    ❌ Value mismatch with producer {producer.id}")
-                        print(f"       value {value}")
-                        print(f"       binding.value {binding.value}")
-                        print(f"       binding.type {binding.type}")
+                        #print(f"       value {value}")
+                        #print(f"       binding.value {binding.value}")
+                        #print(f"       binding.type {binding.type}")
 
                         continue
                     else:
-                        print("-----------------------")
-                        print("value")
-                        print(value)
-                        print("binding.value")
-                        print(binding.value)
+                        #print("-----------------------")
+                        #print("value")
+                        #print(value)
+                        #print("binding.value")
+                        #print(binding.value)
                         print(f"    ✅ Value matches (or not specified) with producer {producer.id}, binding.type {binding.type} ")
 
                     if not can_convert(out_type, binding.type):
@@ -282,34 +282,43 @@ def auto_link_by_value_and_type(action_instances: list):
 
 def auto_link_by_common_attribute(action_instances: list, scenarioId: str, ruleId: str) -> list:
     """
-    Try to resolve any UNRESOLVED Integer binding by detecting a common attribute
+    Try to resolve any UNRESOLVED Integer or Color binding by detecting a common attribute
     across training examples for that argument's value.
     Returns a new list of action instances including any new get_attribute steps.
     """
-    print("\n🔎 Starting auto_link_by_common_attribute...")
-    print(f"len(_attributes_by_input_and_values) : {len(_aa_mod._attributes_by_input_and_values)}")
+    print("\n🔎 auto_link_by_common_attribute...")
+    unresolved_by_path = defaultdict(list)    # path -> [(consumer, binding), ...]
+    trainval_by_path   = defaultdict(list)    # path -> [(trainId, value), ...]
 
-    # Step 1: Collect unresolved integer bindings by path across all consumers
-    unresolved_by_path = defaultdict(list)  # path -> list of (consumer, binding)
-    trainval_by_path = defaultdict(list)    # path -> list of (trainId, value)
-
+    # 1) Collect all unresolved Integer *and* Color bindings
     for consumer in action_instances:
-        if consumer.action is None:
-            continue
         for path, binding in _iter_all_bindings(consumer.bindings):
-            if binding.binding == BindingStatus.UNRESOLVED and binding.type == "Integer" and binding.value is not None:
+            if binding.binding == BindingStatus.UNRESOLVED \
+            and binding.value is not None \
+            and binding.type in ("Integer", "Color"):
                 unresolved_by_path[path].append((consumer, binding))
                 if consumer.trainId != -1:
                     trainval_by_path[path].append((consumer.trainId, binding.value))
 
-    # Step 2: Resolve all at once per path
     new_instances = []
+    # 2) For each binding‐path, pick the correct map and resolve
     for path, pairs in trainval_by_path.items():
-        print(f"\n🔍 Trying to resolve bindings at path: {path}")
+        binding_type = unresolved_by_path[path][0][1].type
+        print(f"\n🔍 Trying to resolve bindings at path: {path} binding_type: {binding_type}")
         print(f"   value_pairs = {pairs}")
 
-        attributes_by_input_and_values = GLOBAL.get_attributes_by_scenario_rule(scenarioId, ruleId)
-        common_attrs = common_attributes_by_train_value_pairs(attributes_by_input_and_values, pairs)
+        # choose the right attribute→value map
+        if binding_type == "Integer":
+            # integer bindings come from rule.values_by_input
+            attr_map = GLOBAL.get_attributes_by_scenario_rule(scenarioId, ruleId)
+        elif binding_type == "Color":
+            # color bindings come from rule.attributes_by_input_and_colors
+            attr_map = GLOBAL.get_attributes_colors_by_scenario_rule(scenarioId, ruleId)
+        else:
+            continue
+        #print(f"attr_map {attr_map}")
+
+        common_attrs = common_attributes_by_train_value_pairs(attr_map, pairs, path)
         if not common_attrs:
             print(f"   ❌ No common attribute found for path {path}.")
             continue
@@ -319,7 +328,11 @@ def auto_link_by_common_attribute(action_instances: list, scenarioId: str, ruleI
 
         for consumer, binding in unresolved_by_path[path]:
             key = f"{consumer.trainId}#{consumer.testId}"
-            value = _aa_mod._values_by_input.get(key, {}).get(chosen_attr)
+            value = None
+            if binding_type == "Integer":
+                value = GLOBAL.get_values_by_scenario_rule(scenarioId, ruleId).get(key, {}).get(chosen_attr)
+            elif binding_type == "Color":
+                value = GLOBAL.get_colors_by_scenario_rule(scenarioId, ruleId).get(key, {}).get(chosen_attr)
             if value is None:
                 print(f"      ⚠️ Skipping {consumer.id}.{path} → attribute missing in {key}")
                 continue
@@ -329,6 +342,7 @@ def auto_link_by_common_attribute(action_instances: list, scenarioId: str, ruleI
             instance = build_get_attribute_instance(
                 trainId=consumer.trainId,
                 testId=consumer.testId,
+                binding_type=binding_type,
                 attribute_name=chosen_attr,
                 output_value=value,
                 scenarioId=consumer.scenarioId,
@@ -501,7 +515,7 @@ def auto_find_constant_without_compound(action_instances: List[ActionInstance]) 
         # Iterate over each argument name
         for arg_name, binding_example in train_instances[0].bindings.items():
             # Only consider pure Integer arguments
-            if binding_example.type != "Integer":
+            if binding_example.type != "Integer" and binding_example.type != "Color":
                 continue
 
             # Gather all train‐instance values for this argument
@@ -1128,7 +1142,7 @@ def load_arc_json(json_path: str) -> dict:
 
 
 def clone_procedure(original_proc: Procedure) -> Procedure:
-    print(f"[DEBUG] original_proc.steps: {original_proc.steps}")
+    #print(f"[DEBUG] original_proc.steps: {original_proc.steps}")
 
     cloned_steps = {}
     for step in original_proc.steps.values():
@@ -1452,8 +1466,16 @@ def resolve_binding_recursive(binding, context, input_grid, step):
         return binding.value
 
     elif binding.binding == BindingStatus.INSTANCE:
-        print(f"  📌 instance binding resolved to: {getattr(step, binding.name, None)}")
-        return getattr(step, binding.name, None)
+        if binding.name.startswith("binding_"):
+            attr = binding.name.split("_", 1)[1]
+            value = getattr(binding, attr, None)
+            #print(step)
+            print(f"  📌 special instance binding from binding.{attr} → {value}")
+            return value
+        else:
+            value = getattr(step, binding.name, None)
+            print(f"  📌 instance binding resolved to: {value}")
+            return value
 
     elif binding.binding == BindingStatus.INPUT_GRID:
         if "input_grid" in context:

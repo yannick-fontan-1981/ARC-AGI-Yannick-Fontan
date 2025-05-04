@@ -593,6 +593,11 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             nbOrange,
             nbTeal,
             nbBrown,
+            colorPresent,
+            colorAbsent,
+            colorOrder,
+            colorMost,
+            colorLeast,
             data TEXT NOT NULL
         );
         """)

@@ -24,7 +24,7 @@ from constelize.tools.pattern_analysis import (
     generate_submission_file_from_scenarios, preprocess_arc_with_action,
 )
 from constelize.tools.sqlite_loader import build_values_by_input, \
-    build_attributes_by_input_and_values
+    build_attributes_by_input_and_values, build_colors_by_input, build_attributes_by_input_and_colors
 from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR, filter_successful_scenarios
 
@@ -185,9 +185,19 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     _attrs = build_attributes_by_input_and_values(_values)
     _aa_mod._values_by_input = _values
     _aa_mod._attributes_by_input_and_values = _attrs
+    _colors = build_colors_by_input(db_path)
+    _attrs_color = build_attributes_by_input_and_colors(_colors)
+    _aa_mod._colors_by_input = _colors
+    _aa_mod._attributes_by_input_and_colors = _attrs_color
     print(f"[verify_task] Injected attributes: {len(_attrs)} entries")
     current_rule.values_by_input = _values
     current_rule.attributes_by_input_and_values = _attrs
+    current_rule.colors_by_input = _colors
+    current_rule.attributes_by_input_and_colors = _attrs_color
+    print("_colors")
+    print(_colors)
+    print("_attrs_color")
+    print(_attrs_color)
     print(f"\n📥 [generate_draft_procedure] Loading from DB: {db_path} and JSON: {json_path}")
     action_instances = generate_action_instances_from_db(db_path, scenarioId, ruleId)
     rest_action_instances = split_action_instances_in_scenarios(action_instances, current_scenario)
@@ -255,6 +265,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "c8f0f002"
     #DEFAULT_TASK_ID = "c59eb873"
     #DEFAULT_TASK_ID = "d10ecb37"
+    #DEFAULT_TASK_ID = "d10ecb37_crop"
     #DEFAULT_TASK_ID = "d511f180"
     #DEFAULT_TASK_ID = "ed36ccf7"
 
@@ -263,12 +274,12 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "6d0aefbc"
     #DEFAULT_TASK_ID = "6fa7a44f"
     #DEFAULT_TASK_ID = "5614dbcf_zoom_out"
-    DEFAULT_TASK_ID = "5614dbcf"
+    #DEFAULT_TASK_ID = "5614dbcf"
     #DEFAULT_TASK_ID = "5bd6f4ac"
     #DEFAULT_TASK_ID = "5582e5ca"
     #DEFAULT_TASK_ID = "8be77c9e"
     #DEFAULT_TASK_ID = "c9e6f938"
-    #DEFAULT_TASK_ID = "2dee498d"
+    DEFAULT_TASK_ID = "2dee498d_mini"
 
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
     trainings_number = 2

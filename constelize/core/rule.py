@@ -12,6 +12,8 @@ class Rule:
     comment: Optional[str] = None
     values_by_input: Dict[str, Dict[str, int]] = field(default_factory=dict)
     attributes_by_input_and_values: Dict[str, Dict[int, List[str]]] = field(default_factory=dict)
+    colors_by_input: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    attributes_by_input_and_colors: Dict[str, Dict[int, List[str]]] = field(default_factory=dict)
     procedures: List[Procedure] = field(default_factory=list)
     generic_procs: List[Procedure] = field(default_factory=list)
     train_results: List[Dict[str, str]] = field(default_factory=list)

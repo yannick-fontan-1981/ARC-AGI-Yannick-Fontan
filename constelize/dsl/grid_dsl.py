@@ -1,6 +1,6 @@
 # grid_dsl.py
 
-from typing import Union, Tuple, List
+from typing import Union, Tuple, List, Sequence
 import json
 
 from typing import Tuple, List, Union
@@ -254,3 +254,27 @@ def crop(grid: Grid, minX: int, minY: int, width: int, height: int) -> Grid:
         tuple(grid[minY + i][minX + j] for j in range(width))
         for i in range(height)
     )
+
+def fill_grid(mask: Grid, color: int) -> Grid:
+    """
+    Given a mask grid where object pixels are marked with -8 and background with -1,
+    return a new grid where all -8 entries are replaced by the specified color,
+    and all other entries (background) remain unchanged (-1).
+
+    Args:
+        mask: Grid of ints, with -8 for object mask, -1 for background
+        color: Integer color value to fill into the mask locations
+
+    Returns:
+        A new Grid where each -8 is replaced by `color`, others unchanged.
+    """
+    # Collect each filled row in a list
+    filled_rows: List[Tuple[int, ...]] = []
+    for row in mask:
+        filled_row = tuple(
+            (color if cell == -8 else cell)
+            for cell in row
+        )
+        filled_rows.append(filled_row)
+    # Convert list of rows to a Grid (tuple of tuples)
+    return tuple(filled_rows)

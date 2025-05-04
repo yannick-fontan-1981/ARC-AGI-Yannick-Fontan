@@ -190,17 +190,23 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
             if b.binding == BindingStatus.CONSTANT
         )
 
-    def _binding_signature(step: ActionInstance) -> tuple:
+    def _binding_signature(step: ActionInstance, step_lookup: dict[str, ActionInstance]) -> tuple:
         """
-        Build a signature for an ActionInstance based on all its bindings' hashes.
+        Build a signature for an ActionInstance based on all its bindings' hashes,
+        using make_binding_hash when needed.
         """
         signature = []
         for name, binding in sorted(step.bindings.items()):
-            if binding.binding_hash:
-                signature.append((name, binding.binding_hash))
-            else:
-                # fallback: if no binding_hash exists, use the raw value
-                signature.append((name, repr(binding.value)))
+            if binding.binding_hash is None:
+                producer_id = binding.source_procedure_id
+                producer_action_id = (
+                    step_lookup[producer_id].action.id
+                    if producer_id in step_lookup else "?"
+                )
+                consumer_action_id = step.action.id
+                path = name
+                btm.make_binding_hash(binding, producer_action_id, consumer_action_id, path)
+            signature.append((name, binding.binding_hash))
         return tuple(signature)
 
     def replace_nested_source_ids(
@@ -216,12 +222,12 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
             if binding.binding == BindingStatus.MULTIPLE and binding.candidates:
                 print("🛠️ [ replace_nested_source_ids MULTIPLE ]")
                 # On ne conserve que les candidats présents dans tous les trains
-                print("binding.candidates")
-                print(binding.candidates)
-                print("btm.bindingTrainMap")
-                print(btm.bindingTrainMap)
-                print("btm.ALL_TRAIN_IDS")
-                print(btm.ALL_TRAIN_IDS)
+                #print("binding.candidates")
+                #print(binding.candidates)
+                #print("btm.bindingTrainMap")
+                #print(btm.bindingTrainMap)
+                #print("btm.ALL_TRAIN_IDS")
+                #print(btm.ALL_TRAIN_IDS)
                 valid_cands = [
                     cand for cand in binding.candidates
                     if btm.bindingTrainMap.get(cand.binding_hash, set()) == btm.ALL_TRAIN_IDS
@@ -311,8 +317,8 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
                 found = None
                 for b in branch.values():
                     if b.action.id == step.action.id:
-                        b_sig = _binding_signature(b)
-                        s_sig = _binding_signature(step)
+                        b_sig = _binding_signature(b, proc.steps)
+                        s_sig = _binding_signature(step, proc.steps)
                         print(f"🧪 Comparing with existing {b.id} ({b.action.id})")
                         print(f"    sig_existing: {b_sig}")
                         print(f"    sig_current : {s_sig}")
@@ -333,8 +339,8 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
                 copied.id = f"{copied.action.id}#{action_counters[copied.action.id]}"
                 print(f"🆕 Creating new generic step {copied.id} from {step.id}")
                 train_to_generic_id[step.id] = copied.id
-                print(f" copied.bindings.values ")
-                print(copied.bindings.values())
+                #print(f" copied.bindings.values ")
+                #print(copied.bindings.values())
 
 
                 for b in copied.bindings.values():

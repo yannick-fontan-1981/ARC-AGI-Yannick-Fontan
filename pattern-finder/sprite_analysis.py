@@ -81,32 +81,42 @@ def canonical_sprite_representation(sprite_grid):
     return json.dumps(sorted_list)
 
 def color_counts_in_sprite(sprite_grid):
-    """
-    Return a dict with nbBlack, nbBlue, nbRed, etc.
-    Adjust color indexes as you wish.
-    """
-    nbBlack    = sum(cell == 0 for row in sprite_grid for cell in row)
-    nbBlue     = sum(cell == 1 for row in sprite_grid for cell in row)
-    nbRed      = sum(cell == 2 for row in sprite_grid for cell in row)
-    nbGreen    = sum(cell == 3 for row in sprite_grid for cell in row)
-    nbYellow   = sum(cell == 4 for row in sprite_grid for cell in row)
-    nbGrey     = sum(cell == 5 for row in sprite_grid for cell in row)
-    nbFuchsia  = sum(cell == 6 for row in sprite_grid for cell in row)
-    nbOrange   = sum(cell == 7 for row in sprite_grid for cell in row)
-    nbTeal     = sum(cell == 8 for row in sprite_grid for cell in row)
-    nbBrown    = sum(cell == 9 for row in sprite_grid for cell in row)
-    return {
-        "nbBlack": nbBlack,
-        "nbBlue": nbBlue,
-        "nbRed": nbRed,
-        "nbGreen": nbGreen,
-        "nbYellow": nbYellow,
-        "nbGrey": nbGrey,
-        "nbFuchsia": nbFuchsia,
-        "nbOrange": nbOrange,
-        "nbTeal": nbTeal,
-        "nbBrown": nbBrown
-    }
+    color_names = [
+        "Black", "Blue", "Red", "Green", "Yellow",
+        "Grey", "Fuchsia", "Orange", "Teal", "Brown"
+    ]
+    counts = [0] * 10
+    for row in sprite_grid:
+        for cell in row:
+            if 0 <= cell <= 9:
+                counts[cell] += 1
+
+    count_dict = {f"nb{color_names[i]}": counts[i] for i in range(10)}
+
+    # Determine presence
+    color_present = [i for i, count in enumerate(counts) if count > 0]
+    color_absent = [i for i, count in enumerate(counts) if count == 0]
+
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for i, count in enumerate(counts):
+        if count > 0:
+            groups[count].append(i)
+    color_order = [sorted(groups[k]) for k in sorted(groups)]
+
+    color_most = color_order[-1][-1] if color_order else None
+    color_least = color_order[0][0] if color_order else None
+
+    # Convert problematic fields to JSON strings
+    count_dict.update({
+        "colorPresent": json.dumps(color_present),
+        "colorAbsent": json.dumps(color_absent),
+        "colorOrder": json.dumps(color_order),
+        "colorMost": color_most,
+        "colorLeast": color_least
+    })
+
+    return count_dict
 
 def find_existing_sprite(sprite_grid, global_data):
     """
@@ -290,6 +300,7 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
         rec = {
             "id": produced_id,
             "trainId": attr_dict["trainId"],
+            "testId": attr_dict["testId"],
             "filename": attr_dict.get("filename"),
             "height": h,
             "width": w,
@@ -375,7 +386,7 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
             )
 
             # Insert only if not present
-            if (tkey not in global_data["sprite_trans_map"]) and (base_id != produced_id):
+            if (tkey not in global_data["sprite_trans_map"]): # and (base_id != produced_id):
                 trans_id = global_data["next_sprite_trans_id"]
                 global_data["next_sprite_trans_id"] += 1
                 global_data["sprite_trans_map"][tkey] = trans_id
@@ -395,8 +406,8 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
                     "zoom_y": zy,
                     "recolored": json.dumps(rec_pairs)
                 })
-            if (base_id != produced_id):
-                matched_trans_ids.add(global_data["sprite_trans_map"][tkey])
+            #if (base_id != produced_id):
+            matched_trans_ids.add(global_data["sprite_trans_map"][tkey])
             #matched_trans_ids.add(global_data["sprite_trans_map"][tkey])
 
     # Ensure default identity if no other found
@@ -1353,11 +1364,11 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     all_sprite_analysis_rows = []
     next_sprite_analysis_id = 1
 
-    def process_item(item, is_input, index):
+    def process_item(item, is_input, index, isTrain):
         nonlocal next_sprite_analysis_id
         # 0. Basic info
         grid = item["input"] if is_input else item["output"]
-        if "train" in data:
+        if isTrain:
             trainId = index
             testId = -1
         else:
@@ -1376,10 +1387,6 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
             "isFromHole": False,
             "isFromCut": False
         }
-
-        canon = canonical_sprite_representation(grid)
-        if canon=="[[0, [1, 1]], [3, [0, 1]], [4, [0, 0]], [6, [1, 0]]]":
-           print(f"→ Canonical representation: {canon}")
 
         bbox = compute_bounding_box(grid)
         sprite_entire = fill_sprite_attributes(grid, filename, trainId, testId, flags, grid, bbox)
@@ -1484,11 +1491,11 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
 
     for index, item in enumerate(data.get("train", [])):
         if index < 30:
-            process_item(item, True, index)  # Process input grid.
-            process_item(item, False, index)  # Process output grid.
+            process_item(item, True, index, True)  # Process input grid.
+            process_item(item, False, index, True)  # Process output grid.
 
-    #for index, item in enumerate(data.get("test", [])):
-    #    process_item(item, True, index)
+    for index, item in enumerate(data.get("test", [])):
+        process_item(item, True, index, False)
 
     bulk_insert(conn, "sprite_analysis", all_sprite_analysis_rows)
     bulk_insert(conn, "sprite_unique", sprite_global_data["sprite_unique_records"])
@@ -1577,7 +1584,7 @@ def detect_and_store_glued_and_new(conn, data):
 
     # load train inputs
     train_inputs = {i: item['input'] for i, item in enumerate(data.get('train', []))}
-    #print(f"[GLUED] Starting glued detection on {len(train_inputs)} train inputs.")
+    print(f"[GLUED] Starting glued detection on {len(train_inputs)} train inputs.")
 
     # fetch sprites by joining sprite_analysis -> sprite_occurrence to get sprite_unique_id
     cur.execute(
@@ -1590,10 +1597,10 @@ def detect_and_store_glued_and_new(conn, data):
         """
     )
     sprites = cur.fetchall()
-    #print(f"[GLUED] Loaded {len(sprites)} sprites from sprite_analysis join.")
+    print(f"[GLUED] Loaded {len(sprites)} sprites from sprite_analysis join.")
 
     for uid, data_json in sprites:
-        #print(f"[GLUED] Processing sprite_unique id={uid}")
+        print(f"[GLUED] Processing sprite_unique id={uid}")
         try:
             grid = to_concrete_grid(json.loads(data_json))
         except Exception as e:
@@ -1602,7 +1609,7 @@ def detect_and_store_glued_and_new(conn, data):
 
         h_s, w_s = len(grid), len(grid[0]) if grid else 0
         if h_s < 2 or w_s < 2:
-            #print(f"[GLUED] Skipping sprite {uid}: dimension < 2")
+            print(f"[GLUED] Skipping sprite {uid}: dimension < 2")
             continue
 
         # identity transform
@@ -1643,7 +1650,7 @@ def detect_and_store_glued_and_new(conn, data):
             # === SPECIAL CASE ===
             # if the sprite is the same size as this input grid, skip scanning
             if H == h_s and W == w_s:
-                #print(f"[GLUED] Skipping sprite {uid} on input {idx}: sprite and canvas are same size ({H}×{W})")
+                print(f"[GLUED] Skipping sprite {uid} on input {idx}: sprite and canvas are same size ({H}×{W})")
                 continue
 
             if H < h_s or W < w_s:
@@ -1667,10 +1674,10 @@ def detect_and_store_glued_and_new(conn, data):
                         (uid, tid, 1, 0, 1, 0, idx, -1, y0, x0, int(glued))
                     )
                     new_oid = cur.lastrowid
-                    #print(f"[GLUED] Inserted occurrence id={new_oid} for sprite {uid}, input {idx}, glued={glued}")
+                    print(f"[GLUED] Inserted occurrence id={new_oid} for sprite {uid}, input {idx}, glued={glued}")
 
     conn.commit()
-    #print(f"[GLUED] Completed in {time.time() - start:.3f}s")
+    print(f"[GLUED] Completed in {time.time() - start:.3f}s")
 
 
 # At end of process_sprites_from_json():
@@ -1822,9 +1829,16 @@ def can_place_subsprite(mask, sub, offset_x, offset_y, main_sprite):
     overlapping existing pixels, and that each pixel value matches the corresponding
     pixel in the main_sprite.
     """
-    main_grid = [[-1 for _ in range(main_sprite["width"])] for _ in range(main_sprite["height"])]
+    height = main_sprite["height"]
+    width = main_sprite["width"]
+    main_grid = [[-1 for _ in range(width)] for _ in range(height)]
+
     for val, (i, j) in json.loads(main_sprite["data"]):
-        main_grid[i][j] = val
+        if 0 <= i < height and 0 <= j < width:
+            main_grid[i][j] = val
+        else:
+            #print(f"⚠️ Skipping out-of-bounds main_sprite pixel at ({i}, {j})")
+            continue
 
     for val, (i, j) in json.loads(sub["data"]):
         abs_y = sub["minY"] + i
@@ -1833,14 +1847,12 @@ def can_place_subsprite(mask, sub, offset_x, offset_y, main_sprite):
         rel_x = abs_x - offset_x
 
         try:
-            # Condition 1 & 2: the pixel must land on a -8 in the mask
             if mask[rel_y][rel_x] != -8:
                 return False
-
-            # Condition 3: the pixel must match the one in the main sprite
+            if not (0 <= abs_y < height and 0 <= abs_x < width):
+                return False
             if main_grid[abs_y][abs_x] != val:
                 return False
-
         except IndexError:
             return False
 

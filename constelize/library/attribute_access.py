@@ -8,6 +8,8 @@ from constelize.core.procedure import ActionInstance
 
 _values_by_input = {}
 _attributes_by_input_and_values = {}
+_colors_by_input = {}
+_attributes_by_input_and_colors = {}
 
 def height(piece) -> int:
     if isinstance(piece, tuple):
@@ -34,13 +36,17 @@ def get_start_input_fn(**kwargs):
     # (You may choose to prefer the externally injected grid over the stored output_value.)
     return kwargs.get("grid") or kwargs.get("output_value")
 
-def get_attribute_fn(scenarioId: str, ruleId: str, trainId: int, testId: int, attribute_name: str) -> int:
+def get_attribute_fn(scenarioId: str, ruleId: str, binding_type: str, trainId: int, testId: int, attribute_name: str) -> int:
     """
     Retrieve a numeric attribute by trainId/testId
     using the pre‑computed attrs map in attribute_access.
     """
-    values_by_input = GLOBAL.get_values_by_scenario_rule(scenarioId, ruleId)
     key = f"{trainId}#{testId}"
+    if binding_type == "Color":
+        values_by_input = GLOBAL.get_colors_by_scenario_rule(scenarioId, ruleId)
+    else:
+        values_by_input = GLOBAL.get_values_by_scenario_rule(scenarioId, ruleId)
+    return values_by_input.get(key, {}).get(attribute_name)
     #if(attribute_name == "first_sight_analysis.widthInput"):
     #    print("[ get_attribute_fn ]")
     #    print(f"scenarioId: {scenarioId}")
@@ -49,7 +55,6 @@ def get_attribute_fn(scenarioId: str, ruleId: str, trainId: int, testId: int, at
     #    print(f"testId: {testId}")
     #    print(f"attribute_name: {attribute_name}")
     #    print(f"return: {values_by_input.get(key, {}).get(attribute_name)}")
-    return values_by_input.get(key, {}).get(attribute_name)
 
 ACTIONS = [
     Action(
@@ -126,11 +131,12 @@ ACTIONS = [
         description="Retrieve a single numeric attribute by trainId/testId from first_sight_analysis.",
         category=ActionCategory.ATTRIBUTE_ACCESS,
         input_arguments=[
-            ArgumentBinding("scenarioId",    "String",  binding=BindingStatus.INSTANCE),
-            ArgumentBinding("ruleId",        "String",  binding=BindingStatus.INSTANCE),
-            ArgumentBinding("trainId",       "Integer", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding("testId",        "Integer", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding("attribute_name","String",  binding=BindingStatus.UNRESOLVED)
+            ArgumentBinding("scenarioId",     "String",  binding=BindingStatus.INSTANCE),
+            ArgumentBinding("ruleId",         "String",  binding=BindingStatus.INSTANCE),
+            ArgumentBinding("binding_type",   "String",  binding=BindingStatus.INSTANCE),
+            ArgumentBinding("trainId",        "Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("testId",         "Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("attribute_name", "String",  binding=BindingStatus.UNRESOLVED)
         ],
         output_type="Integer",
         function=get_attribute_fn

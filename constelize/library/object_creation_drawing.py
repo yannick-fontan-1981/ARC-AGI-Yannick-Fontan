@@ -1,6 +1,8 @@
 from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
+from constelize.dsl.grid_dsl import fill_grid
+
 
 def canvas(value: int, dimensions: tuple) -> tuple:
     return tuple(tuple(value for _ in range(dimensions[1])) for _ in range(dimensions[0]))
@@ -63,5 +65,17 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=fill
+    ),
+    Action(
+        id="create_object",
+        name="create_object",
+        description="Fill the object mask with its color to produce the output grid.",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="mask", type="Grid", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="color", type="Color", binding=BindingStatus.UNRESOLVED)
+        ],
+        output_type="Grid",
+        function=fill_grid
     )
 ]

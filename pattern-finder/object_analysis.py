@@ -360,7 +360,7 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
     all_occ_rows = []  # For shape_occurrence rows.
     next_object_id = 1  # We assign object_analysis ids programmatically.
 
-    def process_items(items, is_input):
+    def process_items(items, is_input, isTrain):
         nonlocal next_object_id
         for idx, item in enumerate(items):
             if is_input:
@@ -372,8 +372,8 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
                     continue  # skip this item if no output
 
             # Determine train or test index
-            train_id = idx if is_input and "train" in filename else -1
-            test_id = idx if is_input is False and "test" in filename else -1
+            train_id = idx if isTrain else -1
+            test_id = idx if isTrain is False else -1
 
             rows = compute_object_analysis(filename, train_id, test_id, grid, is_input, global_data, conn)
             for obj_row, occ_row in rows:
@@ -384,10 +384,10 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
                 all_occ_rows.append(occ_row)
 
     # Process train and test items, both for input and output.
-    process_items(data.get("train", []), True)
-    process_items(data.get("train", []), False)
-    process_items(data.get("test", []), True)
-    process_items(data.get("test", []), False)
+    process_items(data.get("train", []), True, True)
+    process_items(data.get("train", []), False, True)
+    process_items(data.get("test", []), True, False)
+    # process_items(data.get("test", []), False, False)
 
     # Bulk insert in the order: shape, shape_transformation, object_analysis, shape_occurrence.
     bulk_insert(conn, "shape", global_data["shape_records"])

@@ -1,6 +1,7 @@
+import json
 import sqlite3
 from collections import defaultdict
-from typing import Dict, Any
+from typing import Dict, Any, List, Iterable
 
 # Ajout facultatif d’un alias plus explicite
 def load_sqlite_to_dict(db_path: str):
@@ -147,8 +148,11 @@ def build_attributes_by_input_and_values(values_by_input: dict[str, dict[str, in
 
 def common_attributes_by_train_value_pairs(
     attributes_by_input_and_values: dict[str, dict[int, list[str]]],
-    pairs: list[tuple[int, int]]
+    pairs: list[tuple[int, int]],
+    path: str
 ) -> list[str]:
+    if( path == "minX"):
+        print("common_attributes_by_train_value_pairs")
     common_attrs = None
 
     for train_id, value in pairs:
@@ -187,3 +191,124 @@ if __name__ == "__main__":
     print(f"\n✅ Common attributes for: {test_pairs}")
     for attr in common_attrs:
         print(f"   • {attr}")
+
+
+def build_colors_by_input(db_path: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Returns a dict:
+      key = "trainId#testId"
+      value = { attribute_name: attribute_value, ... }
+    Aggregates from:
+      - first_sight_analysis (the 4 most/least‐color columns)
+      - object_analysis via shape_occurrence
+      - sprite_analysis
+      - sprite_transformation
+      - sprite_unique via sprite_occurrence
+    """
+    tables = load_all_tables_from_sqlite(db_path)
+    colors_by_input = defaultdict(dict)
+
+    # 1) first_sight_analysis: grab the 8 color metrics
+    fsa = tables.get("first_sight_analysis", {})
+    color_cols = [
+        "firstMostColorInput", "secondMostColorInput",
+        "firstLeastColorInput","secondLeastColorInput"
+    ]
+    for row_id, row in fsa.items():
+        train_id, test_id = row.get("trainId", -1), row.get("testId", -1)
+        if train_id == -1 and test_id == -1:
+            continue
+        key = f"{train_id}#{test_id}"
+        for col in color_cols:
+            if col in row and row[col] is not None:
+                colors_by_input[key][f"first_sight_analysis.{col}"] = row[col]
+
+    # 2) object_analysis via shape_occurrence (to filter by isInsideInput & get train/test)
+    object_rows = tables.get("object_analysis", {})
+    for so_id, so in tables.get("shape_occurrence", {}).items():
+        if not so.get("isInsideInput"):
+            continue
+        key = f"{so['trainId']}#{so['testId']}"
+        obj_id = so["object_id"]                  # this is the object_analysis row id
+        oa = object_rows.get(obj_id, {})
+        for col in ("color","orthoNeighborColorList","diagNeighborColorList","neighborColorList"):
+            if col in oa:
+                colors_by_input[key][f"object_analysis#{obj_id}.{col}"] = oa[col]
+
+    # 3) sprite_analysis
+    for row_id, row in tables.get("sprite_analysis", {}).items():
+        if not row.get("isInsideInput"):
+            continue
+        key = f"{row['trainId']}#{row['testId']}"
+        if 'bgColor' in row:
+            colors_by_input[key][f"sprite_analysis#{row_id}.bgColor"] = row['bgColor']
+
+    # 4) sprite_transformation
+    for row_id, row in tables.get("sprite_transformation", {}).items():
+        if "recolored" not in row:
+            continue
+        t_train, t_test = row.get("trainId"), row.get("testId")
+        if t_train is None or t_test is None:
+            continue
+        key = f"{t_train}#{t_test}"
+        colors_by_input[key][f"sprite_transformation#{row_id}.recolored"] = row["recolored"]
+
+    # 5) sprite_unique via sprite_occurrence
+    sprite_unique_rows = tables.get("sprite_unique", {})
+    for so_id, so in tables.get("sprite_occurrence", {}).items():
+        if not so.get("isInsideInput"):
+            continue
+        key = f"{so['trainId']}#{so['testId']}"
+        su = sprite_unique_rows.get(so["sprite_unique_id"], {})
+        for col in ("colorPresent","colorAbsent","colorOrder","colorMost","colorLeast"):
+            if col in su:
+                colors_by_input[key][f"sprite_unique#{so_id}.{col}"] = su[col]
+
+    #print("colors_by_input")
+    #print(colors_by_input)
+
+    return colors_by_input
+
+
+def build_attributes_by_input_and_colors(
+    colors_by_input: Dict[str, Dict[str, Any]]
+) -> Dict[str, Dict[Any, List[str]]]:
+    def _flatten(vals: Iterable) -> Iterable:
+        for v in vals:
+            if isinstance(v, (list, tuple)):
+                yield from _flatten(v)
+            else:
+                yield v
+
+    attributes_by_input_and_colors: Dict[str, Dict[Any, List[str]]] = {}
+
+    for input_key, color_map in colors_by_input.items():
+        value_to_attrs: Dict[Any, List[str]] = defaultdict(list)
+
+        # same parsing / flattening you already have:
+        for attr_name, color_val in color_map.items():
+            if isinstance(color_val, str):
+                try:
+                    parsed = json.loads(color_val)
+                except json.JSONDecodeError:
+                    parsed = color_val
+            else:
+                parsed = color_val
+
+            if isinstance(parsed, (list, tuple)):
+                for cv in _flatten(parsed):
+                    value_to_attrs[cv].append(attr_name)
+            else:
+                value_to_attrs[parsed].append(attr_name)
+
+        # *** NEW: prioritize sprite_unique.colorMost ***
+        PRIORITY = "sprite_unique.colorMost"
+        for cv, attrs in value_to_attrs.items():
+            if PRIORITY in attrs:
+                idx = attrs.index(PRIORITY)
+                # move it to front
+                attrs.insert(0, attrs.pop(idx))
+
+        attributes_by_input_and_colors[input_key] = dict(value_to_attrs)
+
+    return attributes_by_input_and_colors

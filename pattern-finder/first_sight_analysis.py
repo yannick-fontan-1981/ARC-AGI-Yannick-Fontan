@@ -4,8 +4,9 @@ import os
 import sqlite3
 import json
 import sys
-from solver.dsl import *
+from collections import Counter
 
+from solver.dsl import *
 
 def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, grid_out=None):
     grid_in = convert_to_tuple_of_tuples(grid_in)
@@ -18,6 +19,32 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
     count_zones_in = len(zones(grid_in))
     count_colors_in = numcolors(grid_in)
 
+    # Color frequency metrics for input
+    flat_in = [cell for r in grid_in for cell in r]
+    cnt_in = Counter(flat_in)
+    most_common_in = cnt_in.most_common()
+    if most_common_in:
+        firstMostColorInput, countFirstMostColorInput = most_common_in[0]
+        if len(most_common_in) > 1:
+            secondMostColorInput, countSecondMostColorInput = most_common_in[1]
+        else:
+            secondMostColorInput, countSecondMostColorInput = None, 0
+        diffFirstSecondMostColorInput = (firstMostColorInput - secondMostColorInput) if secondMostColorInput is not None else None
+    else:
+        firstMostColorInput = countFirstMostColorInput = secondMostColorInput = countSecondMostColorInput = diffFirstSecondMostColorInput = None
+
+    # Least frequent metrics input
+    least_common_in = sorted(cnt_in.items(), key=lambda x: x[1])
+    if least_common_in:
+        firstLeastColorInput, countFirstLeastColorInput = least_common_in[0]
+        if len(least_common_in) > 1:
+            secondLeastColorInput, countSecondLeastColorInput = least_common_in[1]
+        else:
+            secondLeastColorInput, countSecondLeastColorInput = None, 0
+        diffFirstSecondLeastColorInput = (firstLeastColorInput - secondLeastColorInput) if secondLeastColorInput is not None else None
+    else:
+        firstLeastColorInput = countFirstLeastColorInput = secondLeastColorInput = countSecondLeastColorInput = diffFirstSecondLeastColorInput = None
+
     row.update({
         "widthInput": w_in,
         "heightInput": h_in,
@@ -26,7 +53,17 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
         "areaInput": area_in,
         "countBlocksInput": count_blocks_in,
         "countZonesInput": count_zones_in,
-        "countColorsInput": count_colors_in
+        "countColorsInput": count_colors_in,
+        "firstMostColorInput": firstMostColorInput,
+        "countFirstMostColorInput": countFirstMostColorInput,
+        "secondMostColorInput": secondMostColorInput,
+        "countSecondMostColorInput": countSecondMostColorInput,
+        "diffFirstSecondMostColorInput": diffFirstSecondMostColorInput,
+        "firstLeastColorInput": firstLeastColorInput,
+        "countFirstLeastColorInput": countFirstLeastColorInput,
+        "secondLeastColorInput": secondLeastColorInput,
+        "countSecondLeastColorInput": countSecondLeastColorInput,
+        "diffFirstSecondLeastColorInput": diffFirstSecondLeastColorInput,
     })
 
     if grid_out is not None:
@@ -38,6 +75,37 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
         count_blocks_out = len(blocks(grid_out))
         count_zones_out = len(zones(grid_out))
         count_colors_out = numcolors(grid_out)
+
+        # Color frequency metrics for output
+        flat_out = [cell for r in grid_out for cell in r]
+        cnt_out = Counter(flat_out)
+        most_common_out = cnt_out.most_common()
+        if most_common_out:
+            firstMostColorOutput, countFirstMostColorOutput = most_common_out[0]
+            if len(most_common_out) > 1:
+                secondMostColorOutput, countSecondMostColorOutput = most_common_out[1]
+            else:
+                secondMostColorOutput, countSecondMostColorOutput = None, 0
+            diffFirstSecondMostColorOutput = (firstMostColorOutput - secondMostColorOutput) if secondMostColorOutput is not None else None
+        else:
+            firstMostColorOutput = countFirstMostColorOutput = secondMostColorOutput = countSecondMostColorOutput = diffFirstSecondMostColorOutput = None
+
+        least_common_out = sorted(cnt_out.items(), key=lambda x: x[1])
+        if least_common_out:
+            firstLeastColorOutput, countFirstLeastColorOutput = least_common_out[0]
+            if len(least_common_out) > 1:
+                secondLeastColorOutput, countSecondLeastColorOutput = least_common_out[1]
+            else:
+                secondLeastColorOutput, countSecondLeastColorOutput = None, 0
+            diffFirstSecondLeastColorOutput = (firstLeastColorOutput - secondLeastColorOutput) if secondLeastColorOutput is not None else None
+        else:
+            firstLeastColorOutput = countFirstLeastColorOutput = secondLeastColorOutput = countSecondLeastColorOutput = diffFirstSecondLeastColorOutput = None
+
+        # Differences between input and output color values
+        diffFirstMostColorInputOutput = (firstMostColorInput - firstMostColorOutput) if None not in (firstMostColorInput, firstMostColorOutput) else None
+        diffSecondMostColorInputOutput = (secondMostColorInput - secondMostColorOutput) if None not in (secondMostColorInput, secondMostColorOutput) else None
+        diffFirstLeastColorInputOutput = (firstLeastColorInput - firstLeastColorOutput) if None not in (firstLeastColorInput, firstLeastColorOutput) else None
+        diffSecondLeastColorInputOutput = (secondLeastColorInput - secondLeastColorOutput) if None not in (secondLeastColorInput, secondLeastColorOutput) else None
 
         row.update({
             "widthOutput": w_out,
@@ -58,22 +126,44 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
             "ratioZonesInputOutput": safe_divide(count_zones_in, count_zones_out),
             "diffZonesInputOutput": diff(count_zones_in, count_zones_out),
             "countColorsOutput": count_colors_out,
-            "diffColorsInputOutput": diff(count_colors_in, count_colors_out)
+            "diffColorsInputOutput": diff(count_colors_in, count_colors_out),
+            "firstMostColorOutput": firstMostColorOutput,
+            "countFirstMostColorOutput": countFirstMostColorOutput,
+            "secondMostColorOutput": secondMostColorOutput,
+            "countSecondMostColorOutput": countSecondMostColorOutput,
+            "diffFirstSecondMostColorOutput": diffFirstSecondMostColorOutput,
+            "firstLeastColorOutput": firstLeastColorOutput,
+            "countFirstLeastColorOutput": countFirstLeastColorOutput,
+            "secondLeastColorOutput": secondLeastColorOutput,
+            "countSecondLeastColorOutput": countSecondLeastColorOutput,
+            "diffFirstSecondLeastColorOutput": diffFirstSecondLeastColorOutput,
+            "diffFirstMostColorInputOutput": diffFirstMostColorInputOutput,
+            "diffSecondMostColorInputOutput": diffSecondMostColorInputOutput,
+            "diffFirstLeastColorInputOutput": diffFirstLeastColorInputOutput,
+            "diffSecondLeastColorInputOutput": diffSecondLeastColorInputOutput,
         })
     else:
         # Set output-related columns to None
-        output_columns = [
+        output_cols = [
             "widthOutput", "ratioWidthInputOutput", "diffWidthInputOutput",
             "heightOutput", "ratioHeightInputOutput", "diffHeightInputOutput",
             "diffWidthHeightOutput", "ratioWidthHeightOutput", "areaOutput",
             "ratioAreaInputOutput", "diffAreaInputOutput", "countBlocksOutput",
             "ratioBlocksInputOutput", "diffBlocksInputOutput", "countZonesOutput",
             "ratioZonesInputOutput", "diffZonesInputOutput", "countColorsOutput",
-            "diffColorsInputOutput"
+            "diffColorsInputOutput",
+            "firstMostColorOutput", "countFirstMostColorOutput",
+            "secondMostColorOutput", "countSecondMostColorOutput",
+            "diffFirstSecondMostColorOutput", "firstLeastColorOutput",
+            "countFirstLeastColorOutput", "secondLeastColorOutput",
+            "countSecondLeastColorOutput", "diffFirstSecondLeastColorOutput",
+            "diffFirstMostColorInputOutput", "diffSecondMostColorInputOutput",
+            "diffFirstLeastColorInputOutput", "diffSecondLeastColorInputOutput"
         ]
-        row.update({col: None for col in output_columns})
+        row.update({col: None for col in output_cols})
 
     return row
+
 
 
 def insert_first_sight_row(conn, row):
