@@ -10,6 +10,7 @@ from constelize.core.procedure import Procedure
 class Rule:
     id: str
     comment: Optional[str] = None
+    tables: Dict[str, Dict[int, Dict[str, Any]]] = field(default_factory=dict)
     values_by_input: Dict[str, Dict[str, int]] = field(default_factory=dict)
     attributes_by_input_and_values: Dict[str, Dict[int, List[str]]] = field(default_factory=dict)
     colors_by_input: Dict[str, Dict[str, int]] = field(default_factory=dict)

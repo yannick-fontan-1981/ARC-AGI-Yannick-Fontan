@@ -6,6 +6,23 @@ from constelize.core.scenario import Scenario
 
 all_scenarios: List[Scenario] = []
 
+
+def load_sprite_analysis_table(
+    scenarioId: str,
+    ruleId: str
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Look up the Scenario with the given ID, then return that Rule’s
+    'sprite_analysis' table (indexed by id). If not found, return an empty dict.
+    """
+    for scen in all_scenarios:
+        if scen.id == scenarioId:
+            rule = scen.rules.get(ruleId)
+            if rule is not None:
+                # rule.tables was populated by load_all_tables_from_sqlite
+                return rule.tables.get("sprite_analysis", {})
+    return {}
+
 def get_values_by_scenario_rule(scenarioId: str, ruleId: str) -> Dict[str, Dict[str, int]]:
     """
     Look up the Scenario with the given ID, then return that Rule’s

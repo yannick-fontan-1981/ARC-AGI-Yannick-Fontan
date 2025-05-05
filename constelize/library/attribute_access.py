@@ -1,4 +1,5 @@
 #constelize/library/attribute_access.py
+from typing import List, Tuple
 
 import constelize.tools.globals as GLOBAL
 from constelize.core.action import Action
@@ -55,6 +56,35 @@ def get_attribute_fn(scenarioId: str, ruleId: str, binding_type: str, trainId: i
     #    print(f"testId: {testId}")
     #    print(f"attribute_name: {attribute_name}")
     #    print(f"return: {values_by_input.get(key, {}).get(attribute_name)}")
+
+def select_sprite_and_attribute_fn(
+    scenarioId: str,
+    ruleId: str,
+    criteria: List[Tuple[str, int]],
+    attribute_name: str,
+    sprite_ids: List[int],
+    trainId: int | None = None,
+    testId: int | None = None
+) -> int | None:
+    """
+    Return the attribute value of the first sprite matching all (attr, val) in criteria.
+    Optionally filter by trainId or testId. If no match is found, return None.
+    """
+    sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
+
+    print(f"select_sprite_and_attribute_fn trainId={trainId} testId={testId}")
+
+    for sid, row in sprite_tbl.items():
+        if trainId is not None and row.get("trainId") != trainId:
+            continue
+        if testId is not None and row.get("testId") != testId:
+            continue
+
+        if all(row.get(attr) == val for attr, val in criteria):
+            print(f"[MATCH] sprite {sid} meets criteria {criteria} → {attribute_name} = {row.get(attribute_name)}")
+            return row.get(attribute_name)
+
+    return None
 
 ACTIONS = [
     Action(
@@ -134,11 +164,31 @@ ACTIONS = [
             ArgumentBinding("scenarioId",     "String",  binding=BindingStatus.INSTANCE),
             ArgumentBinding("ruleId",         "String",  binding=BindingStatus.INSTANCE),
             ArgumentBinding("binding_type",   "String",  binding=BindingStatus.INSTANCE),
-            ArgumentBinding("trainId",        "Integer", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding("testId",         "Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("trainId",        "Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding("testId",         "Integer", binding=BindingStatus.CONTEXT),
             ArgumentBinding("attribute_name", "String",  binding=BindingStatus.UNRESOLVED)
         ],
         output_type="Integer",
         function=get_attribute_fn
+    ),
+    Action(
+        id="select_sprite_and_attribute",
+        name="Select & Get Sprite Attribute",
+        description=(
+            "Filter a list of sprites by a set of (attribute == value) criteria, "
+            "and return the values of the specified numeric attribute for those sprites."
+        ),
+        category=ActionCategory.SELECTION_FILTERING,
+        input_arguments=[
+            ArgumentBinding("scenarioId",     "String", binding=BindingStatus.INSTANCE),
+            ArgumentBinding("ruleId",         "String", binding=BindingStatus.INSTANCE),
+            ArgumentBinding("trainId",        "Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding("testId",         "Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding("criteria",       "List[Tuple<String,Integer>]", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("attribute_name", "String", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("sprite_ids",     "List<Integer>", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Integer",
+        function=select_sprite_and_attribute_fn
     )
 ]

@@ -1398,7 +1398,10 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
         all_sprite_analysis_rows.append(sprite_entire)
 
         # 2. Possibly do dimension-based splits (compute_split_sprites_by_ratio)
-        split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
+        if "output" in item:
+            split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
+        else:
+            split_sprites = []
         all_sprite_rows.extend(split_sprites)
 
         # Now also fill the new tables.

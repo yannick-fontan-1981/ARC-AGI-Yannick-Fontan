@@ -246,14 +246,19 @@ def concrete_grids_equal(g1: Grid, g2: Grid) -> bool:
     except TypeError:
         success = False
 
-def crop(grid: Grid, minX: int, minY: int, width: int, height: int) -> Grid:
-    """
-    Crop a sub-region from a grid given the top-left coordinates and dimensions.
-    """
-    return tuple(
-        tuple(grid[minY + i][minX + j] for j in range(width))
+def crop(grid: list[list[int]], minX: int, minY: int, width: int, height: int) -> list[list[int]] | None:
+    max_y = len(grid)
+    max_x = len(grid[0]) if max_y > 0 else 0
+
+    if minX < 0 or minY < 0 or minX + width > max_x or minY + height > max_y:
+        print(f"⚠️ crop bounds out of range: grid={len(grid)}x{max_x}, "
+              f"minX={minX}, minY={minY}, width={width}, height={height}")
+        return None
+
+    return [
+        [grid[minY + i][minX + j] for j in range(width)]
         for i in range(height)
-    )
+    ]
 
 def fill_grid(mask: Grid, color: int) -> Grid:
     """

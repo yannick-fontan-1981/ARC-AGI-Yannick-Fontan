@@ -8,6 +8,8 @@ import sys
 import time
 from collections import defaultdict
 
+from joblib._multiprocessing_helpers import mp
+
 import constelize.tools.globals as GLOBAL
 import constelize.library.attribute_access as _aa_mod
 import constelize.tools.binding_train_map as btm
@@ -24,9 +26,66 @@ from constelize.tools.pattern_analysis import (
     generate_submission_file_from_scenarios, preprocess_arc_with_action,
 )
 from constelize.tools.sqlite_loader import build_values_by_input, \
-    build_attributes_by_input_and_values, build_colors_by_input, build_attributes_by_input_and_colors
+    build_attributes_by_input_and_values, build_colors_by_input, build_attributes_by_input_and_colors, \
+    load_all_tables_from_sqlite
 from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR, filter_successful_scenarios
+
+class TimeoutException(Exception):
+    """Raised when an operation exceeds its time limit."""
+    pass
+
+# ← module‐level, picklable target
+def _timeout_target(queue, fn, args, kwargs):
+    try:
+        result = fn(*args, **kwargs)
+        queue.put((True, result))
+    except Exception as e:
+        queue.put((False, e))
+
+def run_with_timeout(fn, *args, timeout=30, **kwargs):
+    """
+    Runs fn(*args, **kwargs) in a child process, killing it
+    if it runs longer than `timeout` seconds.
+    """
+    q = mp.Queue()
+    # note: _timeout_target is at module top‐level now
+    p = mp.Process(target=_timeout_target, args=(q, fn, args, kwargs))
+    p.start()
+    p.join(timeout)
+    if p.is_alive():
+        p.terminate()
+        p.join()
+        raise TimeoutException(f"operation exceeded {timeout} seconds")
+    success, result = q.get()
+    if success:
+        return result
+    else:
+        # re-raise whatever exception happened inside the child
+        raise result
+
+# --------------------------------------------------
+# Wrapper to load globals and call generation logic
+# --------------------------------------------------
+def _setup_and_generate(current_scenario, current_rule, data, db_path, json_path, raw_json, results_path):
+    # Load inputs/outputs into globals within child
+    load_end_outputs_from_json(json_path)
+    load_json_inputs_from_json(json_path)
+    # Ensure data is current
+    data = load_arc_json(json_path)
+
+    btm.TOTAL_TRAINS = len(data.get("train", []))
+    btm.ALL_TRAIN_IDS = set(range(btm.TOTAL_TRAINS))
+
+    return generate_scenarios_and_rules(
+        current_scenario,
+        current_rule,
+        data,
+        db_path,
+        json_path,
+        raw_json,
+        results_path,
+    )
 
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
@@ -138,11 +197,22 @@ def split_action_instances_in_scenarios(action_instances, current_scenario):
         GLOBAL.all_scenarios.append(scenario_by_separate_action)
     return rest
 
-def test_file(json_path, db_path, results_path, submission_path, comparison_path, task_id, trainings_number):
-    first_rule = Rule( id=f"rule_{getUniqueRuleId()}")
+# --------------------------------------------------
+# Main test_file logic without internal timeout
+# --------------------------------------------------
+def test_file(
+    json_path,
+    db_path,
+    results_path,
+    submission_path,
+    comparison_path,
+    task_id,
+    trainings_number
+):
+    first_rule = Rule(id=f"rule_{getUniqueRuleId()}")
     first_scenario = Scenario(
         id=f"scenario_{getUniqueScenarioId()}",
-        rules={first_rule.id: first_rule},  # map rule ID → Rule instance
+        rules={first_rule.id: first_rule},
     )
     GLOBAL.all_scenarios.append(first_scenario)
 
@@ -154,9 +224,21 @@ def test_file(json_path, db_path, results_path, submission_path, comparison_path
     btm.TOTAL_TRAINS = len(data.get("train", []))
     btm.ALL_TRAIN_IDS = set(range(btm.TOTAL_TRAINS))
 
-    generate_scenarios_and_rules(first_scenario, first_rule, data, db_path, json_path, raw_json, results_path)
+    # Call generation directly
+    try:
+        _setup_and_generate(
+            first_scenario,
+            first_rule,
+            data,
+            db_path,
+            json_path,
+            raw_json,
+            results_path,
+        )
+    except Exception as e:
+        print(f"❌ Error during scenario/rule generation: {e}")
+        return False
 
-    # pick the scenarios that fully succeeded
     valid_scenario = filter_successful_scenarios()
 
     if valid_scenario:
@@ -172,7 +254,6 @@ def test_file(json_path, db_path, results_path, submission_path, comparison_path
     print(f"\n⏱️ Total verification time: {total_time:.2f} seconds")
     print("✅ Evaluation completed. Results saved to", results_path)
 
-    # return True if tests ran (even partially), False only if no valid train‐proc
     return bool(valid_scenario)
 
 
@@ -181,6 +262,7 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     ruleId = current_rule.id
     run_analysis_scripts(raw_json, inline=True, name=json_path)
     # 2) inject the sqlite‐derived attributes
+    _tables = load_all_tables_from_sqlite(db_path)
     _values = build_values_by_input(db_path)
     _attrs = build_attributes_by_input_and_values(_values)
     _aa_mod._values_by_input = _values
@@ -190,18 +272,20 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     _aa_mod._colors_by_input = _colors
     _aa_mod._attributes_by_input_and_colors = _attrs_color
     print(f"[verify_task] Injected attributes: {len(_attrs)} entries")
+    current_rule.tables = _tables
     current_rule.values_by_input = _values
     current_rule.attributes_by_input_and_values = _attrs
     current_rule.colors_by_input = _colors
     current_rule.attributes_by_input_and_colors = _attrs_color
-    print("_colors")
-    print(_colors)
-    print("_attrs_color")
-    print(_attrs_color)
+    #print("_colors")
+    #print(_colors)
+    #print("_attrs_color")
+    #print(_attrs_color)
     print(f"\n📥 [generate_draft_procedure] Loading from DB: {db_path} and JSON: {json_path}")
-    action_instances = generate_action_instances_from_db(db_path, scenarioId, ruleId)
+    action_instances = generate_action_instances_from_db(db_path, scenarioId, current_rule)
     rest_action_instances = split_action_instances_in_scenarios(action_instances, current_scenario)
-    procedures = generate_draft_procedure(rest_action_instances, data, scenarioId, ruleId)
+
+    procedures = generate_draft_procedure(rest_action_instances, data, scenarioId, current_rule)
     # debug: list initial steps
     print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
     for proc_id, proc in procedures.items():
@@ -226,8 +310,13 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     successful = filter_successful_procedures(train_results)
     if not successful:
         print("❌ No successful procedures found.")
+
+        #print(f"current_scenario.to_launch_next: {current_scenario.to_launch_next}")
         for scenario in current_scenario.to_launch_next:
             print(f"scenario to launch next: {scenario.id}")
+            if scenario.id != "scenario_denoise_2":
+                print(f"infinite loop to launch next: {scenario.id}")
+                exit(0)
             pre_rule = scenario.rule_to_launch_before
             generic_proc = pre_rule.proc_producing_output
             action_inst = generic_proc.action_producing_output
@@ -270,7 +359,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "ed36ccf7"
 
     # Training 2
-    #DEFAULT_TASK_ID = "4c4377d9"
+    DEFAULT_TASK_ID = "4c4377d9"
     #DEFAULT_TASK_ID = "6d0aefbc"
     #DEFAULT_TASK_ID = "6fa7a44f"
     #DEFAULT_TASK_ID = "5614dbcf_zoom_out"
@@ -279,7 +368,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "5582e5ca"
     #DEFAULT_TASK_ID = "8be77c9e"
     #DEFAULT_TASK_ID = "c9e6f938"
-    DEFAULT_TASK_ID = "2dee498d_mini"
+    #DEFAULT_TASK_ID = "2dee498d"
 
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
     trainings_number = 2
@@ -291,4 +380,20 @@ if __name__ == "__main__":
     submission_path  = os.path.join(PROJECT_ROOT, "results", "submission.json")
     comparison_path  = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_comparison.txt")
 
-    success = test_file(json_path, db_path, results_path, submission_path, comparison_path, TASK_ID, trainings_number)
+    #success = test_file(json_path, db_path, results_path, submission_path, comparison_path, TASK_ID, trainings_number)
+    try:
+        success = run_with_timeout(
+            test_file,
+            json_path,
+            db_path,
+            results_path,
+            submission_path,
+            comparison_path,
+            TASK_ID,
+            trainings_number,
+            timeout=30,
+        )
+    except TimeoutException as te:
+        print(f"⚠️ Overall test_file timed out: {te}")
+        success = False
+

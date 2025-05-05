@@ -1,7 +1,9 @@
 import json
 import sqlite3
 from collections import defaultdict
-from typing import Dict, Any, List, Iterable
+from itertools import combinations
+from typing import Dict, Any, List, Iterable, Tuple, Optional
+
 
 # Ajout facultatif d’un alias plus explicite
 def load_sqlite_to_dict(db_path: str):
@@ -146,7 +148,425 @@ def build_attributes_by_input_and_values(values_by_input: dict[str, dict[str, in
 
     return attributes_by_input_and_values
 
+
+def extract_common_attribute_action(
+    attributes_by_input_and_values: Dict[str, Dict[int, List[str]]],
+    pairs: List[Tuple[int, int]],
+    path: str,
+    tables: Dict[str, Dict[int, Dict[str, Any]]]
+) -> Optional[Dict[str, Any]]:
+    """
+    Verbose tracing of:
+      1) per-train and cross-train common column discovery
+      2) row collection
+      3) sprite ID resolution
+      4) deduplication by data
+      5) grouping by similarity
+      6) criteria search
+      7) early getAttributeAction return if applicable
+    """
+
+    print("==> 1) Group & dedupe values by train")
+    values_by_train: Dict[int, List[int]] = {}
+    for train_id, value in pairs:
+        values_by_train.setdefault(train_id, []).append(value)
+    #print("    values_by_train:", values_by_train)
+
+    print("\n==> 2) Compute per-train common columnNames (after the dot)")
+    per_train_common: Dict[int, set] = {}
+    for train_id, vals in values_by_train.items():
+        key = f"{train_id}#-1"
+        attr_map = attributes_by_input_and_values.get(key, {})
+        print(f"  Train {train_id}, attr_map keys: {list(attr_map.keys())}")
+        common_for_train: Optional[set] = None
+
+        for v in dict.fromkeys(vals):
+            raw = attr_map.get(v, [])
+            cols = {full.split(".",1)[1] for full in raw if "." in full}
+            #print(f"    Value {v} → columns: {cols}")
+            common_for_train = cols if common_for_train is None else (common_for_train & cols)
+            #print(f"    Intersection so far: {common_for_train}")
+            if not common_for_train:
+                print("    → No overlap within this train → returning None")
+                return None
+        per_train_common[train_id] = common_for_train  # type: ignore
+    print("    per_train_common:", per_train_common)
+
+    print("\n==> 3) Intersect across trains")
+    common_columns = sorted(set.intersection(*per_train_common.values()))
+    print("    common_columns:", common_columns)
+    if not common_columns:
+        print("    → No common columns across trains → returning None")
+        return None
+
+    # Early getAttributeAction si l'attribut existe dans first_sight_analysis
+    fsample = next(iter(tables.get("first_sight_analysis", {}).values()), {})
+    for col in common_columns:
+        if col in fsample:
+            print(f"\n==> Early return: single first_sight_analysis column '{col}'")
+            return {
+                "type": "getAttributeAction",
+                "attribute": f"first_sight_analysis.{col}"
+            }
+
+    # Early getAttributeAction if exactly one direct column
+    sprite_sample = next(iter(tables.get("sprite_analysis", {}).values()), {})
+    if len(common_columns) == 1 and common_columns[0] in sprite_sample:
+        col = common_columns[0]
+        print(f"\n==> Early return: single direct sprite_analysis column '{col}'")
+        return {
+            "type": "getAttributeAction",
+            "attribute": f"sprite_analysis.{col}"
+        }
+
+    print("\n==> 4) Build per-train list of table#rowId for those columns")
+    per_train_rows: Dict[int, List[str]] = {tid: [] for tid in values_by_train}
+    for train_id, vals in values_by_train.items():
+        key = f"{train_id}#-1"
+        attr_map = attributes_by_input_and_values[key]
+        for v in dict.fromkeys(vals):
+            for full in attr_map.get(v, []):
+                if "." not in full:
+                    continue
+                table_row, col = full.split(".",1)
+                if col in common_columns:
+                    per_train_rows[train_id].append(table_row)
+        #print(f"  Train {train_id} rows:", per_train_rows[train_id])
+
+    print("\n==> 5) Resolve sprite_occurrence → sprite_analysis IDs")
+    sprite_occ = tables.get("sprite_occurrence", {})
+    occ2sprite = {rid: row["sprite_id"] for rid,row in sprite_occ.items()}
+    print("    occ2sprite map size:", len(occ2sprite))
+
+    print("\n==> 6) Collapse to sprite IDs per train")
+    sprite_ids_by_train: Dict[str, List[int]] = {}
+    for train_id, rows in per_train_rows.items():
+        sids = set()
+        for tr in rows:
+            if "#" not in tr:
+                continue
+            table, id_str = tr.split("#",1)
+            rid = int(id_str)
+            if table == "sprite_analysis":
+                sids.add(rid)
+            elif table == "sprite_occurrence":
+                target = occ2sprite.get(rid)
+                if target is not None:
+                    sids.add(target)
+        key = f"{train_id}#-1"
+        sprite_ids_by_train[key] = sorted(sids)
+        print(f"  {key} → raw sprite IDs:", sprite_ids_by_train[key])
+
+    print("\n==> 7) Deduplicate by sprite data per train")
+    deduped: Dict[str, List[int]] = {}
+    for key, sids in sprite_ids_by_train.items():
+        seen, uniq = set(), []
+        for sid in sids:
+            data = tables["sprite_analysis"][sid]["data"]
+            if data not in seen:
+                seen.add(data)
+                uniq.append(sid)
+        deduped[key] = uniq
+        print(f"  {key} → deduped sprite IDs:", uniq)
+
+    print("\n==> 8) Find most‐alike sprite pairs")
+    groups = group_similar_sprites_by_attributes(common_columns, deduped, tables)
+    print("    Most-alike pairs:", groups)
+
+    print("\n==> 9) Build negatives = input-only sprites in these trains")
+    train_ids = [int(k.split("#",1)[0]) for k in deduped]
+    all_sprites = [
+        sid for sid,row in tables["sprite_analysis"].items()
+        if row["trainId"] in train_ids and row.get("isInsideInput") == 1
+    ]
+    print("    all_sprites (negatives):", all_sprites)
+
+    print("\n==> 10) Search minimal distinguishing criteria for each group")
+    for group in groups:
+        if any(sid is None for sid in group):
+            print(f"    🔹 Skipping incomplete group {group}")
+            continue
+        crit = find_minimal_selection_criteria_for_group(group, all_sprites, tables, common_columns)
+        print(f"    Group {group} → criteria: {crit}")
+        if crit:
+            # 11) restrict to columns that actually exist on sprite_analysis
+            sprite_tbl = tables["sprite_analysis"]
+            # grab one row to see which columns are present
+            sample = next(iter(sprite_tbl.values()), {})
+            sprite_cols = [c for c in common_columns if c in sample]
+
+            # map trainId → original unresolved value
+            pairs_by_train = {t: v for t, v in pairs}
+            train_ids_sorted = sorted(values_by_train.keys())
+
+            output_attr = None
+            for col in sprite_cols:
+                # check that for each sprite in our chosen group, sprite_tbl[sid][col]
+                # matches the original unresolved binding value for its train
+                ok = True
+                for sid, train_id in zip(group, train_ids_sorted):
+                    if sprite_tbl[sid][col] != pairs_by_train[train_id]:
+                        ok = False
+                        break
+                if ok:
+                    output_attr = col
+                    break
+
+            # if none matched exactly, fall back safely
+            if output_attr is None:
+                output_attr = path if path in sprite_cols else (sprite_cols[0] if sprite_cols else path)
+
+            action = {
+                "type": "selectSpriteAndAttributeAction",
+                "criteria": crit,
+                "output_attribute": output_attr,
+                "for_sprites": list(group)
+            }
+            print("\n==> Returning select action:", action)
+            return action
+
+    print("==> No group yielded non-empty criteria → returning None")
+    return None
+
+
+
+def group_similar_sprites_by_attributes(
+    common_columns: List[str],
+    sprite_ids_by_train: Dict[str, List[int]],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    tie_threshold: float = 0.1
+) -> List[Tuple[int, ...]]:
+    """
+    Pour N trains, renvoie des tuples (sid_ref, sid_train1, ..., sid_trainN)
+    appariés d'abord par index dans le train de référence, puis, pour les
+    restants, par plus petite distance L1, avec repli sur l'index si distance
+    trop proche (tie_threshold relatif).
+    """
+    # 1) repérer le train de référence (le plus long)
+    train_keys = sorted(sprite_ids_by_train.keys())
+    if not train_keys:
+        return []
+    # référence = clé dont la liste est la plus longue
+    ref_key = max(train_keys, key=lambda k: len(sprite_ids_by_train[k]))
+    other_keys = [k for k in train_keys if k != ref_key]
+
+    lists = {k: sprite_ids_by_train[k] for k in train_keys}
+
+    # 2) colonnes communes valides
+    sprite_tbl = tables.get("sprite_analysis", {})
+    if not sprite_tbl:
+        print("⚠️ sprite_analysis vide")
+        return []
+    sample = next(iter(sprite_tbl.values()))
+    valid_cols = [c for c in common_columns if c in sample]
+    if not valid_cols:
+        print("⚠️ Pas de colonne commune:", common_columns)
+        return []
+
+    # 3) vecteurs de features pour chaque train
+    feats = {}
+    for k, lst in lists.items():
+        feats[k] = {sid: [sprite_tbl[sid][col] for col in valid_cols] for sid in lst}
+
+    used = {k: set() for k in train_keys}
+    groups: List[Tuple[int, ...]] = []
+
+    # 4) appariement direct par index
+    ref_list = lists[ref_key]
+    min_len = min(len(lists[k]) for k in train_keys)
+    for i in range(min_len):
+        tup = tuple(lists[k][i] for k in train_keys)
+        groups.append(tup)
+        for k, sid in zip(train_keys, tup):
+            used[k].add(sid)
+
+    # 5) pour chaque sid_ref restant, chercher son meilleur match dans chaque autre train
+    for sid_ref in ref_list:
+        if sid_ref in used[ref_key]:
+            continue
+        used[ref_key].add(sid_ref)
+        vec_ref = feats[ref_key][sid_ref]
+        grp = [sid_ref]
+
+        for k in other_keys:
+            # candidats non encore utilisés
+            cands = [sid for sid in lists[k] if sid not in used[k]]
+            if not cands:
+                grp.append(None)
+                continue
+
+            # calcul des distances
+            dists = [(sid, sum(abs(a-b) for a,b in zip(vec_ref, feats[k][sid])))
+                     for sid in cands]
+            dists.sort(key=lambda x: x[1])
+            best_sid, best_d = dists[0]
+            # si tie proche, retomber sur appariement par index
+            if len(dists) > 1:
+                second_d = dists[1][1]
+                # check relatif
+                if second_d - best_d <= tie_threshold * max(best_d, 1):
+                    # on choisit le candidat à même index que sid_ref
+                    idx = ref_list.index(sid_ref)
+                    if idx < len(cands):
+                        best_sid = cands[idx]
+            grp.append(best_sid)
+            used[k].add(best_sid)
+
+        # reconstitue tuple dans l'ordre train_keys
+        # grp = [sid_ref] + [match pour chaque other_keys]
+        full_tup = []
+        for k in train_keys:
+            if k == ref_key:
+                full_tup.append(sid_ref)
+            else:
+                # les valeurs dans grp sont dans l'ordre other_keys
+                full_tup.append(grp[1 + other_keys.index(k)])
+        groups.append(tuple(full_tup))
+
+    return groups
+
+
+
+def find_minimal_selection_criteria_for_group(
+    group: Tuple[int, ...],
+    all_sprites: List[int],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    common_columns: List[str]
+) -> List[Tuple[str, Any]]:
+    sprite_tbl = tables["sprite_analysis"]
+    if not sprite_tbl:
+        return []
+
+    # only consider input sprites as negatives
+    positives = {sid for sid in group if sid is not None}
+    negatives = set(all_sprites) - positives
+
+    # keep only columns actually on sprite_analysis
+    sample = next(iter(sprite_tbl.values()))
+    valid_cols = [c for c in common_columns if c in sample]
+    if not valid_cols:
+        return []
+
+    def matches(sid: int, criteria: List[Tuple[str, Any]]) -> bool:
+        row = sprite_tbl[sid]
+        return all(row[attr] == val for attr, val in criteria)
+
+    # try combinations of 1,2,… attributes
+    for k in range(1, len(valid_cols) + 1):
+        for attrs in combinations(valid_cols, k):
+            # check all positives share the same value for each attr
+            vals = []
+            for attr in attrs:
+                vals_set = {sprite_tbl[sid][attr] for sid in positives}
+                if len(vals_set) != 1:
+                    break
+                vals.append(vals_set.pop())
+            else:
+                criteria = list(zip(attrs, vals))
+                # ensure no negative matches
+                if all(not matches(n, criteria) for n in negatives):
+                    return criteria
+
+    return []
+
 def common_attributes_by_train_value_pairs(
+    attributes_by_input_and_values: dict[str, dict[int, list[str]]],
+    pairs: list[tuple[int, int]],
+    path: str,
+    tables: dict[str, dict[int, dict[str, Any]]]
+) -> list[str]:
+    # 1) group and dedupe values by train
+    values_by_train: dict[int, list[int]] = {}
+    for train_id, value in pairs:
+        values_by_train.setdefault(train_id, []).append(value)
+
+    # 2) per-train intersection
+    per_train_common: dict[int, set[str]] = {}
+    for train_id, vals in values_by_train.items():
+        key = f"{train_id}#-1"
+        attr_map = attributes_by_input_and_values.get(key)
+        if not attr_map:
+            return []
+
+        common_for_train: set[str] | None = None
+        for v in dict.fromkeys(vals):
+            raw_attrs = attr_map.get(v, [])
+            # ← extract just the part after the dot:
+            cols_for_value = {
+                full.split(".", 1)[1]
+                for full in raw_attrs
+                if "." in full
+            }
+            if common_for_train is None:
+                common_for_train = cols_for_value
+            else:
+                common_for_train &= cols_for_value
+
+            # if no common column **names** in this train, bail out
+            if not common_for_train:
+                print(f"no common column **names** in this train, bail out")
+                exit(0)
+                return []
+
+        per_train_common[train_id] = common_for_train  # type: ignore
+
+    # 3) cross-train intersection
+    common_attrs = set.intersection(*per_train_common.values()) if per_train_common else set()
+    if not common_attrs:
+        print(f"not common_attrs")
+        exit(0)
+        return []
+
+    # 4) split out table#row → column, but only for columns we kept
+    col_to_rows: dict[str, list[str]] = {}
+    for train_id, vals in values_by_train.items():
+        key = f"{train_id}#-1"
+        attr_map = attributes_by_input_and_values[key]
+        for v in dict.fromkeys(vals):
+            for full in attr_map.get(v, []):
+                if "." not in full:
+                    continue
+                table_row, col = full.split(".", 1)
+                if col in common_attrs:
+                    col_to_rows.setdefault(col, []).append(table_row)
+
+    # 5) display and return
+    for col in sorted(common_attrs):
+        rows = sorted(set(col_to_rows.get(col, [])))
+        print(f"{col} → {rows}")
+        #print(f"{col}")
+
+    # Step 5) split into sprite vs object
+    sprite_rows_by_table = defaultdict(set)
+    object_rows_by_table = defaultdict(set)
+
+    for col in common_attrs:
+        for table_row in col_to_rows.get(col, []):
+            table, rid_str = table_row.split("#", 1)
+            rid = int(rid_str)
+
+            if table.startswith("sprite_"):
+                # anything coming from sprite_analysis, sprite_occurrence,
+                # sprite_unique, sprite_transformation
+                sprite_rows_by_table[table].add(rid)
+            elif table.startswith("object_") or table.startswith("shape_"):
+                # object_analysis, shape_occurrence, shape, shape_transformation
+                object_rows_by_table[table].add(rid)
+
+    # for display
+    for table, ids in sprite_rows_by_table.items():
+        print(f"[SPRITE] {table}: {sorted(ids)}")
+    for table, ids in object_rows_by_table.items():
+        print(f"[OBJECT] {table}: {sorted(ids)}")
+
+    exit(0)
+    return (
+        sorted(common_attrs),
+        {t: set(ids) for t, ids in sprite_rows_by_table.items()},
+        {t: set(ids) for t, ids in object_rows_by_table.items()}
+    )
+
+def common_attributes_by_train_value_pairs_old(
     attributes_by_input_and_values: dict[str, dict[int, list[str]]],
     pairs: list[tuple[int, int]],
     path: str
@@ -170,28 +590,6 @@ def common_attributes_by_train_value_pairs(
             return []
 
     return sorted(common_attrs) if common_attrs else []
-
-# Example usage:
-if __name__ == "__main__":
-    db_path = "../../db/database.db"
-    values_by_input = build_values_by_input(db_path)
-    attributes_by_input_and_values = build_attributes_by_input_and_values(values_by_input)
-
-    # Visualisation rapide
-    #for key, val_map in attributes_by_input_and_values.items():
-    #    print(f"\n📦 For {key}:")
-    #    for val, attrs in val_map.items():
-    #        print(f"  🔢 {val}: {attrs}")
-
-    # Test: attributs communs avec des valeurs différentes par train
-    print("\n🔍 Testing common_attributes_by_train_value_pairs...")
-    test_pairs = [(1, 3), (2, 4)] # [(0, 3), (1, 3), (2, 4)]  # à adapter selon ton jeu de données
-    common_attrs = common_attributes_by_train_value_pairs(attributes_by_input_and_values, test_pairs)
-
-    print(f"\n✅ Common attributes for: {test_pairs}")
-    for attr in common_attrs:
-        print(f"   • {attr}")
-
 
 def build_colors_by_input(db_path: str) -> Dict[str, Dict[str, Any]]:
     """

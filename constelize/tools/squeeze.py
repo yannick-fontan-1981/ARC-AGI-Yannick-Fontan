@@ -195,7 +195,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
         Build a signature for an ActionInstance based on all its bindings' hashes,
         using make_binding_hash when needed.
         """
-        signature = []
+        signature = [("output_var", step.output_var or "")]
         for name, binding in sorted(step.bindings.items()):
             if binding.binding_hash is None:
                 producer_id = binding.source_procedure_id

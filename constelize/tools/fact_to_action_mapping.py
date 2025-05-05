@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
 from itertools import product
 
@@ -585,6 +585,51 @@ def build_get_attribute_instance(
         isToOutput=True
     )
 
+def build_select_sprite_and_attribute_instance(
+    trainId: int,
+    testId: int,
+    binding_type: str,
+    output_value: Any,
+    criteria: List[Tuple[str, Any]],
+    attribute_name: str,
+    sprite_ids: List[int],
+    scenarioId: str,
+    ruleId: str
+) -> ActionInstance:
+    """
+    Build an ActionInstance for the `select_sprite_and_attribute` action,
+    customized per train/test example. Output value is provided.
+    """
+    action = registry.get_by_id("select_sprite_and_attribute")
+
+    instance_id = (
+        f"select_sprite_and_attribute_{scenarioId}_{ruleId}_{attribute_name}"
+        f"_train{trainId}_test{testId}"
+    )
+
+    return ActionInstance(
+        id=instance_id,
+        action=action,
+        bindings={
+            "scenarioId":     ArgumentBinding("scenarioId",     "String",                      binding=BindingStatus.INSTANCE, value=scenarioId),
+            "ruleId":         ArgumentBinding("ruleId",         "String",                      binding=BindingStatus.INSTANCE, value=ruleId),
+            "trainId":        ArgumentBinding("trainId",        "Integer",                     binding=BindingStatus.CONTEXT,  value=trainId),
+            "testId":         ArgumentBinding("testId",         "Integer",                     binding=BindingStatus.CONTEXT,  value=testId),
+            "criteria":       ArgumentBinding("criteria",       "List[Tuple[String,Integer]]", binding=BindingStatus.CONSTANT, value=criteria),
+            "attribute_name": ArgumentBinding("attribute_name", "String",                      binding=BindingStatus.CONSTANT, value=attribute_name),
+            "sprite_ids":     ArgumentBinding("sprite_ids",     "List[Integer]",               binding=BindingStatus.CONSTANT, value=sprite_ids),
+        },
+        output_var=f"select_{attribute_name}", # _train{trainId}_test{testId}
+        output_type=binding_type,
+        output_value=output_value,
+        trainId=trainId,
+        testId=testId,
+        isTrain=(testId == -1),
+        isToOutput=False,
+        scenarioId=scenarioId,
+        ruleId=ruleId
+    )
+
 
 class RecolorSpriteFactToAction(FactToActionMapping):
     def __init__(self):
@@ -1122,21 +1167,21 @@ class CreateObjectFactToAction(FactToActionMapping):
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
-    #FactToActionMapping("rotated_90", "rotate_90"),
-    #FactToActionMapping("rotated_180", "rotate_180"),
-    #FactToActionMapping("rotated_270", "rotate_270"),
-    #FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
-    #FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
-    #FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
-    #FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
-    #ZoomFactToAction(),
-    #RepeatedSpriteFactToAction(),
-    #CanvasByRatioFactToAction(),
-    #RecolorSpriteFactToAction(),
+    FactToActionMapping("rotated_90", "rotate_90"),
+    FactToActionMapping("rotated_180", "rotate_180"),
+    FactToActionMapping("rotated_270", "rotate_270"),
+    FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
+    FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
+    FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
+    FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
+    ZoomFactToAction(),
+    RepeatedSpriteFactToAction(),
+    CanvasByRatioFactToAction(),
+    RecolorSpriteFactToAction(),
     CropSpriteFactToAction(),
-    #SpriteComputationFactToAction(),
-    #DenoiseFactToAction(),
-    #ZoomOutFactToAction(),
-    #CreateObjectFactToAction()
+    SpriteComputationFactToAction(),
+    DenoiseFactToAction(),
+    ZoomOutFactToAction(),
+    CreateObjectFactToAction()
 ]
 

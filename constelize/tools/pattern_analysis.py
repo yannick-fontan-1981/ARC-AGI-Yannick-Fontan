@@ -8,15 +8,18 @@ from itertools import product
 
 import constelize.tools.globals as GLOBAL
 from constelize.core.binding import BindingStatus, LinkCandidate, ArgumentBinding
+from constelize.core.rule import Rule
 from constelize.core.scenario import Scenario
 from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
 
-from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, build_get_attribute_instance
+from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, \
+    build_get_attribute_instance, build_select_sprite_and_attribute_instance
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
-from constelize.tools.sqlite_loader import load_sqlite_to_dict, common_attributes_by_train_value_pairs
+from constelize.tools.sqlite_loader import load_sqlite_to_dict, common_attributes_by_train_value_pairs, \
+    extract_common_attribute_action
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
 from typing import List, Dict, Optional, Any, Tuple
@@ -33,13 +36,16 @@ def table_for_fact(fact_name: str) -> str:
         "flipped_vertical": "symmetry",
     }.get(fact_name, fact_name)
 
-def generate_action_instances_from_db(db_path: str, scenarioId: str, ruleId: str) -> List:
+def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rule: Rule) -> List:
+    ruleId = current_rule.id
     conn = sqlite3.connect(db_path)
 
     action_instances = []
 
     for mapping in FACT_TO_ACTION_MAPPING:
         try:
+            if(mapping.fact_name=="denoise"):
+                print("FACT_TO_ACTION_MAPPING denoise")
             rows = mapping.test_function(conn)
             for row in rows:
                 try:
@@ -66,7 +72,9 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, ruleId: str
     conn.close()
     return action_instances
 
-def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str, ruleId: str) -> List[Procedure]:
+def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str, current_rule: Rule) -> List[Procedure]:
+    ruleId = current_rule.id
+
     print(f"🔍 Loaded {len(action_instances)} action instances from DB.")
 
     #with open(json_path, "r") as f:
@@ -95,7 +103,7 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
     auto_link_by_value_and_type(action_instances)
 
     print("\n🔗 Linking by common attributes...")
-    action_instances = auto_link_by_common_attribute(action_instances, scenarioId, ruleId)
+    action_instances = auto_link_by_common_attribute(action_instances, scenarioId, current_rule)
 
     print("\n🧹 Filtering unresolved bindings...")
     before = len(action_instances)
@@ -231,7 +239,7 @@ def auto_link_by_value_and_type(action_instances: list):
                         continue
 
                     if binding.value is not None and not values_equal(value, binding.value, binding.type):
-                        print(f"    ❌ Value mismatch with producer {producer.id}")
+                        #print(f"    ❌ Value mismatch with producer {producer.id}")
                         #print(f"       value {value}")
                         #print(f"       binding.value {binding.value}")
                         #print(f"       binding.type {binding.type}")
@@ -280,17 +288,22 @@ def auto_link_by_value_and_type(action_instances: list):
     for trainId, stats in link_stats.items():
         print(f"  ▶️ trainId={trainId}: ✅ {stats['successful']} linked, 🛑 {stats['skipped']} skipped, ❌ {stats['failed']} unresolved")
 
-def auto_link_by_common_attribute(action_instances: list, scenarioId: str, ruleId: str) -> list:
+def auto_link_by_common_attribute(
+    action_instances: List,
+    scenarioId: str,
+    current_rule: Rule
+) -> List:
     """
-    Try to resolve any UNRESOLVED Integer or Color binding by detecting a common attribute
-    across training examples for that argument's value.
-    Returns a new list of action instances including any new get_attribute steps.
+    Try to resolve any UNRESOLVED Integer or Color binding by detecting
+    a common attribute across training examples for that argument's value.
+    Returns a new list of action instances including any new get/select steps.
     """
+    ruleId = current_rule.id
     print("\n🔎 auto_link_by_common_attribute...")
+
+    # 1) Collect unresolved bindings
     unresolved_by_path = defaultdict(list)    # path -> [(consumer, binding), ...]
     trainval_by_path   = defaultdict(list)    # path -> [(trainId, value), ...]
-
-    # 1) Collect all unresolved Integer *and* Color bindings
     for consumer in action_instances:
         for path, binding in _iter_all_bindings(consumer.bindings):
             if binding.binding == BindingStatus.UNRESOLVED \
@@ -301,60 +314,108 @@ def auto_link_by_common_attribute(action_instances: list, scenarioId: str, ruleI
                     trainval_by_path[path].append((consumer.trainId, binding.value))
 
     new_instances = []
-    # 2) For each binding‐path, pick the correct map and resolve
+
+    # 2) For each path, attempt to extract a common-attribute action
     for path, pairs in trainval_by_path.items():
         binding_type = unresolved_by_path[path][0][1].type
-        print(f"\n🔍 Trying to resolve bindings at path: {path} binding_type: {binding_type}")
-        print(f"   value_pairs = {pairs}")
+        pairs = list(dict.fromkeys(pairs))
+        print(f"\n🔍 Resolving path={path} type={binding_type}, value_pairs={pairs}")
 
-        # choose the right attribute→value map
+        # pick the right attribute map
         if binding_type == "Integer":
-            # integer bindings come from rule.values_by_input
             attr_map = GLOBAL.get_attributes_by_scenario_rule(scenarioId, ruleId)
         elif binding_type == "Color":
-            # color bindings come from rule.attributes_by_input_and_colors
             attr_map = GLOBAL.get_attributes_colors_by_scenario_rule(scenarioId, ruleId)
         else:
             continue
-        #print(f"attr_map {attr_map}")
 
-        common_attrs = common_attributes_by_train_value_pairs(attr_map, pairs, path)
-        if not common_attrs:
-            print(f"   ❌ No common attribute found for path {path}.")
+        # call your refactored function
+        action_spec = extract_common_attribute_action(
+            attr_map, pairs, path, current_rule.tables
+        )
+        if action_spec is None:
+            print(f"   ❌ No common attribute action for path {path}")
             continue
 
-        chosen_attr = common_attrs[0]
-        print(f"   ✅ Found common attribute: {chosen_attr}")
+        # 3a) getAttributeAction
+        if action_spec["type"] == "getAttributeAction":
+            full_attr = action_spec["attribute"]               # e.g. "sprite_analysis.minX"
+            print(f"   ✅ getAttributeAction → {full_attr}")
 
-        for consumer, binding in unresolved_by_path[path]:
-            key = f"{consumer.trainId}#{consumer.testId}"
-            value = None
-            if binding_type == "Integer":
-                value = GLOBAL.get_values_by_scenario_rule(scenarioId, ruleId).get(key, {}).get(chosen_attr)
-            elif binding_type == "Color":
-                value = GLOBAL.get_colors_by_scenario_rule(scenarioId, ruleId).get(key, {}).get(chosen_attr)
-            if value is None:
-                print(f"      ⚠️ Skipping {consumer.id}.{path} → attribute missing in {key}")
-                continue
+            for consumer, binding in unresolved_by_path[path]:
+                key = f"{consumer.trainId}#{consumer.testId}"
+                if binding_type == "Integer":
+                    value = GLOBAL.get_values_by_scenario_rule(scenarioId, ruleId) \
+                                 .get(key, {}) \
+                                 .get(full_attr)
+                else:
+                    value = GLOBAL.get_colors_by_scenario_rule(scenarioId, ruleId) \
+                                 .get(key, {}) \
+                                 .get(full_attr)
+                if value is None:
+                    print(f"      ⚠️ Missing value for {consumer.id}.{path} in {key}")
+                    continue
 
-            print(f"      🔁 Linking {consumer.id}.{path} to get_attribute({chosen_attr}) = {value}")
+                print(f"      🔁 Linking {consumer.id}.{path} to get_attribute({full_attr}) = {value}")
+                inst = build_get_attribute_instance(
+                    trainId       = consumer.trainId,
+                    testId        = consumer.testId,
+                    binding_type  = binding_type,
+                    attribute_name= full_attr,
+                    output_value  = value,
+                    scenarioId    = consumer.scenarioId,
+                    ruleId        = consumer.ruleId
+                )
+                new_instances.append(inst)
+                binding.binding = BindingStatus.VARIABLE
+                binding.source_procedure_id = inst.id
 
-            instance = build_get_attribute_instance(
-                trainId=consumer.trainId,
-                testId=consumer.testId,
-                binding_type=binding_type,
-                attribute_name=chosen_attr,
-                output_value=value,
-                scenarioId=consumer.scenarioId,
-                ruleId=consumer.ruleId
-            )
+        # 3b) selectSpriteAndAttributeAction
+        elif action_spec["type"] == "selectSpriteAndAttributeAction":
+            criteria = action_spec["criteria"]
+            output_attr = action_spec["output_attribute"]
+            sprite_ids = action_spec["for_sprites"]
 
-            #instance.bindings["trainId"].binding = BindingStatus.CONTEXT
-            #instance.bindings["testId"].binding = BindingStatus.CONTEXT
+            print(
+                f"   ✅ selectSpriteAndAttributeAction → criteria={criteria}, attribute={output_attr}, sprites={sprite_ids}")
 
-            new_instances.append(instance)
-            binding.binding = BindingStatus.VARIABLE
-            binding.source_procedure_id = instance.id
+            # Loop over all consumers that are waiting for this value
+            for consumer_step, binding in unresolved_by_path[path]:
+                # Infer trainId/testId from the consumer (they are typically set)
+                train_id = consumer_step.trainId
+                test_id = consumer_step.testId
+
+                # Compute output value for this context (using trainId/testId if needed)
+                value = _aa_mod.select_sprite_and_attribute_fn(
+                    scenarioId=scenarioId,
+                    ruleId=ruleId,
+                    criteria=criteria,
+                    attribute_name=output_attr,
+                    sprite_ids=sprite_ids,
+                    trainId=train_id,
+                    testId=test_id
+                )
+
+                # Build an ActionInstance for this consumer
+                instance = build_select_sprite_and_attribute_instance(
+                    trainId=train_id,
+                    testId=test_id,
+                    binding_type=binding_type,
+                    output_value=value,
+                    criteria=criteria,
+                    attribute_name=output_attr,
+                    sprite_ids=sprite_ids,
+                    scenarioId=scenarioId,
+                    ruleId=ruleId
+                )
+
+                # Register and link it
+                new_instances.append(instance)
+                binding.binding = BindingStatus.VARIABLE
+                binding.source_procedure_id = instance.id
+
+        else:
+            print(f"   ⚠️ Unknown action type {action_spec['type']} for path {path}")
 
     print(f"\n✅ auto_link_by_common_attribute complete. {len(new_instances)} new action(s) added.")
     return new_instances + action_instances
