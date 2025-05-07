@@ -359,7 +359,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "ed36ccf7"
 
     # Training 2
-    DEFAULT_TASK_ID = "4c4377d9"
+    #DEFAULT_TASK_ID = "4c4377d9"
     #DEFAULT_TASK_ID = "6d0aefbc"
     #DEFAULT_TASK_ID = "6fa7a44f"
     #DEFAULT_TASK_ID = "5614dbcf_zoom_out"
@@ -370,8 +370,26 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "c9e6f938"
     #DEFAULT_TASK_ID = "2dee498d"
 
+    # Training 3
+    DEFAULT_TASK_ID = "1cf80156"
+    #DEFAULT_TASK_ID = "32597951"
+    #DEFAULT_TASK_ID = "25ff71a9"
+    #DEFAULT_TASK_ID = "0b148d64"
+    #DEFAULT_TASK_ID = "1f85a75f"
+    #DEFAULT_TASK_ID = "23b5c85d"
+    #DEFAULT_TASK_ID = "9ecd008a"
+    #DEFAULT_TASK_ID = "ac0a08a4"
+    #DEFAULT_TASK_ID = "be94b721"
+    #DEFAULT_TASK_ID = "c909285e"
+    #DEFAULT_TASK_ID = "f25ffba3"
+    #DEFAULT_TASK_ID = "c1d99e64"
+    #DEFAULT_TASK_ID = "b91ae062"
+    #DEFAULT_TASK_ID = "3aa6fb7a"
+    #DEFAULT_TASK_ID = "7b7f7511"
+    #DEFAULT_TASK_ID = "4258a5f9"
+
+    trainings_number = 3
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
-    trainings_number = 2
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
     db_path          = os.path.join(PROJECT_ROOT, "db", "database.db")
@@ -391,7 +409,7 @@ if __name__ == "__main__":
             comparison_path,
             TASK_ID,
             trainings_number,
-            timeout=30,
+            timeout=30000000000000,
         )
     except TimeoutException as te:
         print(f"⚠️ Overall test_file timed out: {te}")

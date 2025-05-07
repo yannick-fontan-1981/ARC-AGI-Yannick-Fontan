@@ -16,7 +16,7 @@ from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, co
 import constelize.library.attribute_access as _aa_mod
 
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, \
-    build_get_attribute_instance, build_select_sprite_and_attribute_instance
+    build_get_attribute_instance, build_select_sprite_and_attribute_instance, build_select_object_and_attribute_instance
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
 from constelize.tools.sqlite_loader import load_sqlite_to_dict, common_attributes_by_train_value_pairs, \
     extract_common_attribute_action
@@ -410,6 +410,51 @@ def auto_link_by_common_attribute(
                 )
 
                 # Register and link it
+                new_instances.append(instance)
+                binding.binding = BindingStatus.VARIABLE
+                binding.source_procedure_id = instance.id
+
+        # 3c) selectObjectAndAttributeAction
+        elif action_spec["type"] == "selectObjectAndAttributeAction":
+            criteria = action_spec["criteria"]
+            output_attr = action_spec["output_attribute"]
+            object_ids = action_spec["for_objects"]
+
+            print(
+                f"   ✅ selectObjectAndAttributeAction → "
+                f"criteria={criteria}, attribute={output_attr}, objects={object_ids}"
+            )
+
+            # Loop over all consumers that are waiting for this value
+            for consumer_step, binding in unresolved_by_path[path]:
+                train_id = consumer_step.trainId
+                test_id = consumer_step.testId
+
+                # Compute output value for this context
+                value = _aa_mod.select_object_and_attribute_fn(
+                    scenarioId=scenarioId,
+                    ruleId=ruleId,
+                    criteria=criteria,
+                    attribute_name=output_attr,
+                    object_ids=object_ids,
+                    trainId=train_id,
+                    testId=test_id
+                )
+
+                # Build an ActionInstance for this consumer
+                instance = build_select_object_and_attribute_instance(
+                    trainId=train_id,
+                    testId=test_id,
+                    binding_type=binding_type,
+                    output_value=value,
+                    criteria=criteria,
+                    attribute_name=output_attr,
+                    object_ids=object_ids,
+                    scenarioId=scenarioId,
+                    ruleId=ruleId
+                )
+
+                # Register it and link into the consumer binding
                 new_instances.append(instance)
                 binding.binding = BindingStatus.VARIABLE
                 binding.source_procedure_id = instance.id

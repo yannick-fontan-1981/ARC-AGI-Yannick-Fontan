@@ -200,7 +200,22 @@ ACTIONS = [
         id="crop_sprite",
         name="Crop Sprite",
         description="Crop a grid region defined by minX, minY, width and height.",
-        category=ActionCategory.COLOR_SYMBOL_MANIPULATION,
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.INPUT_GRID),
+            ArgumentBinding(name="minX", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="minY", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="width", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="height", type="Integer", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=crop
+    ),
+    Action(
+        id="crop_object",
+        name="Crop Sprite",
+        description="Crop a grid region defined by minX, minY, width and height.",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
         input_arguments=[
             ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.INPUT_GRID),
             ArgumentBinding(name="minX", type="Integer", binding=BindingStatus.UNRESOLVED),

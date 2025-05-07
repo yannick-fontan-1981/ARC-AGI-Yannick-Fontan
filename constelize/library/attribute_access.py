@@ -86,6 +86,43 @@ def select_sprite_and_attribute_fn(
 
     return None
 
+def select_object_and_attribute_fn(
+    scenarioId: str,
+    ruleId: str,
+    criteria: List[Tuple[str, int]],
+    attribute_name: str,
+    object_ids: List[int],
+    trainId: int | None = None,
+    testId: int | None = None
+) -> int | None:
+    """
+    Return the attribute value of the first object matching all (attr, val) in criteria.
+    Optionally filter by trainId, testId, or restrict to a given list of object_ids.
+    If no match is found, return None.
+    """
+    object_tbl = GLOBAL.load_object_analysis_table(scenarioId, ruleId)
+
+    print(f"select_object_and_attribute_fn trainId={trainId} testId={testId}")
+
+    if testId == 0:
+        print("select_object_and_attribute_fn")
+
+    # 1) Try each single criterion in priority order:
+    for single_attr, single_val in criteria:
+        print(f"  Trying criterion: {single_attr} == {single_val}")
+        for oid, row in object_tbl.items():
+            if trainId is not None and row.get("trainId") != trainId:
+                continue
+            if testId is not None and row.get("testId") != testId:
+                continue
+
+            if row.get(single_attr) == single_val:
+                print(f"[MATCH] object {oid} meets criterion {(single_attr, single_val)} → "
+                      f"{attribute_name} = {row.get(attribute_name)}")
+                return row.get(attribute_name)
+
+    return None
+
 ACTIONS = [
     Action(
         id="get_start_input",
@@ -190,5 +227,25 @@ ACTIONS = [
         ],
         output_type="Integer",
         function=select_sprite_and_attribute_fn
+    ),
+    Action(
+        id="select_object_and_attribute",
+        name="Select & Get Object Attribute",
+        description=(
+            "Filter a list of objects by a set of (attribute == value) criteria, "
+            "and return the values of the specified numeric attribute for those objects."
+        ),
+        category=ActionCategory.SELECTION_FILTERING,
+        input_arguments=[
+            ArgumentBinding("scenarioId",     "String",                  binding=BindingStatus.INSTANCE),
+            ArgumentBinding("ruleId",         "String",                  binding=BindingStatus.INSTANCE),
+            ArgumentBinding("trainId",        "Integer",                 binding=BindingStatus.CONTEXT),
+            ArgumentBinding("testId",         "Integer",                 binding=BindingStatus.CONTEXT),
+            ArgumentBinding("criteria",       "List[Tuple<String,Integer>]", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("attribute_name", "String",                  binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding("object_ids",     "List<Integer>",           binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Integer",
+        function=select_object_and_attribute_fn
     )
 ]

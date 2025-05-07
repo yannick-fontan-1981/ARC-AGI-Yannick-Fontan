@@ -246,7 +246,7 @@ def concrete_grids_equal(g1: Grid, g2: Grid) -> bool:
     except TypeError:
         success = False
 
-def crop(grid: list[list[int]], minX: int, minY: int, width: int, height: int) -> list[list[int]] | None:
+def crop(grid: tuple[tuple[int, ...], ...], minX: int, minY: int, width: int, height: int) -> tuple[tuple[int, ...], ...] | None:
     max_y = len(grid)
     max_x = len(grid[0]) if max_y > 0 else 0
 

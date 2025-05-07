@@ -143,6 +143,17 @@ def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isIn
         obj_row["isBlock"] = (obj in blocks_in)
         obj_row["isZone"] = (obj in zones_in)
         obj_row["color"] = color
+        obj_row["isBlack"]   = (color == 0)
+        obj_row["isBlue"]    = (color == 1)
+        obj_row["isRed"]     = (color == 2)
+        obj_row["isGreen"]   = (color == 3)
+        obj_row["isYellow"]  = (color == 4)
+        obj_row["isGrey"]    = (color == 5)
+        obj_row["isFuchsia"] = (color == 6)
+        obj_row["isOrange"]  = (color == 7)
+        obj_row["isTeal"]    = (color == 8)
+        obj_row["isBrown"]   = (color == 9)
+
         obj_row["minX"] = current_align["minX"]
         obj_row["minY"] = current_align["minY"]
         obj_row["maxX"] = current_align["maxX"]
@@ -321,6 +332,12 @@ def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isIn
         occ_row["minY"] = current_align["minY"]
         # The occ_row will later be augmented with the foreign key "object_id".
         results.append((obj_row, occ_row))
+
+    obj_rows = [obj_row for obj_row, _ in results]
+    sorted_by_size = sorted(obj_rows, key=lambda r: r["pixelCount"], reverse=True)
+    for rank, row in enumerate(sorted_by_size, start=1):
+        row["sizeOrder"] = rank
+
     return results
 
 

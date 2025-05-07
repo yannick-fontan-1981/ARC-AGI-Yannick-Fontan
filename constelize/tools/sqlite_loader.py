@@ -170,7 +170,7 @@ def extract_common_attribute_action(
     values_by_train: Dict[int, List[int]] = {}
     for train_id, value in pairs:
         values_by_train.setdefault(train_id, []).append(value)
-    #print("    values_by_train:", values_by_train)
+    print("    values_by_train:", values_by_train)
 
     print("\n==> 2) Compute per-train common columnNames (after the dot)")
     per_train_common: Dict[int, set] = {}
@@ -178,26 +178,46 @@ def extract_common_attribute_action(
         key = f"{train_id}#-1"
         attr_map = attributes_by_input_and_values.get(key, {})
         print(f"  Train {train_id}, attr_map keys: {list(attr_map.keys())}")
-        common_for_train: Optional[set] = None
 
+        common_for_train: Optional[set] = None
         for v in dict.fromkeys(vals):
             raw = attr_map.get(v, [])
-            cols = {full.split(".",1)[1] for full in raw if "." in full}
-            #print(f"    Value {v} → columns: {cols}")
-            common_for_train = cols if common_for_train is None else (common_for_train & cols)
-            #print(f"    Intersection so far: {common_for_train}")
+            cols = set()
+            for full in raw:
+                if "." not in full:
+                    continue
+                table_row, col = full.split(".", 1)
+                table_name = table_row.split("#", 1)[0]
+                if table_name == "object_analysis":  # or "sprite_analysis" if in sprite‐phase
+                    cols.add(col)
+            print(f"    Value {v} → filtered columns: {cols}")
+
+            if common_for_train is None:
+                common_for_train = cols
+            else:
+                common_for_train &= cols
+
             if not common_for_train:
                 print("    → No overlap within this train → returning None")
                 return None
+
         per_train_common[train_id] = common_for_train  # type: ignore
     print("    per_train_common:", per_train_common)
 
     print("\n==> 3) Intersect across trains")
-    common_columns = sorted(set.intersection(*per_train_common.values()))
-    print("    common_columns:", common_columns)
-    if not common_columns:
+    cols = set.intersection(*per_train_common.values())
+    if not cols:
         print("    → No common columns across trains → returning None")
         return None
+
+    # prioritize `path` first
+    if path in cols:
+        rest = sorted(cols - {path})
+        common_columns = [path] + rest
+    else:
+        common_columns = sorted(cols)
+
+    print("    common_columns (prioritized):", common_columns)
 
     # Early getAttributeAction si l'attribut existe dans first_sight_analysis
     fsample = next(iter(tables.get("first_sight_analysis", {}).values()), {})
@@ -210,14 +230,14 @@ def extract_common_attribute_action(
             }
 
     # Early getAttributeAction if exactly one direct column
-    sprite_sample = next(iter(tables.get("sprite_analysis", {}).values()), {})
-    if len(common_columns) == 1 and common_columns[0] in sprite_sample:
-        col = common_columns[0]
-        print(f"\n==> Early return: single direct sprite_analysis column '{col}'")
-        return {
-            "type": "getAttributeAction",
-            "attribute": f"sprite_analysis.{col}"
-        }
+    #sprite_sample = next(iter(tables.get("sprite_analysis", {}).values()), {})
+    #if len(common_columns) == 1 and common_columns[0] in sprite_sample:
+    #    col = common_columns[0]
+    #    print(f"\n==> Early return: single direct sprite_analysis column '{col}'")
+    #    return {
+    #        "type": "getAttributeAction",
+    #        "attribute": f"sprite_analysis.{col}"
+    #    }
 
     print("\n==> 4) Build per-train list of table#rowId for those columns")
     per_train_rows: Dict[int, List[str]] = {tid: [] for tid in values_by_train}
@@ -286,7 +306,7 @@ def extract_common_attribute_action(
         if any(sid is None for sid in group):
             print(f"    🔹 Skipping incomplete group {group}")
             continue
-        crit = find_minimal_selection_criteria_for_group(group, all_sprites, tables, common_columns)
+        crit = find_minimal_selection_criteria_for_table(group, all_sprites, tables, table_key="sprite_analysis")
         print(f"    Group {group} → criteria: {crit}")
         if crit:
             # 11) restrict to columns that actually exist on sprite_analysis
@@ -325,7 +345,102 @@ def extract_common_attribute_action(
             print("\n==> Returning select action:", action)
             return action
 
-    print("==> No group yielded non-empty criteria → returning None")
+    # --- FALLBACK: object‐level grouping using the same 5–10 pipeline ---
+    print("==> No sprite‐level action found, falling back to object‐level grouping")
+
+    # 5) Build per‐train list of object_analysis / object_occurrence row IDs,
+    #    in the exact order of common_columns
+    per_train_rows_obj = {tid: [] for tid in values_by_train}
+    for train_id, vals in values_by_train.items():
+        key = f"{train_id}#-1"
+        attr_map = attributes_by_input_and_values.get(key, {})
+
+        # for each column in priority order…
+        for col in common_columns:
+            # check each unresolved value
+            for v in dict.fromkeys(vals):
+                for full in attr_map.get(v, []):
+                    if "." not in full:
+                        continue
+                    table_row, full_col = full.split(".", 1)
+                    if full_col != col:
+                        continue
+                    table_name = table_row.split("#", 1)[0]
+                    if table_name in ("object_analysis", "shape_occurrence"):
+                        per_train_rows_obj[train_id].append(table_row)
+
+    print("    per_train_rows_obj (prioritized):", per_train_rows_obj)
+
+    # 6) Resolve object_occurrence → object_analysis IDs
+    obj_occ = tables.get("object_occurrence", {})
+    occ2obj = { rid: row["object_id"] for rid, row in obj_occ.items() }
+
+    # 7) Collapse to object IDs per train
+    object_ids_by_train: Dict[str, List[int]] = {}
+    for train_id, rows in per_train_rows_obj.items():
+        seen, ordered = set(), []
+        for full in rows:
+            if "#" not in full:
+                continue
+            table, id_str = full.split("#", 1)
+            rid = int(id_str)
+            # map occurrence → real object_id
+            oid = rid if table == "object_analysis" else occ2obj.get(rid)
+            if oid is None or oid in seen:
+                continue
+            seen.add(oid)
+            ordered.append(oid)
+        key = f"{train_id}#-1"
+        object_ids_by_train[key] = ordered
+        print(f"  {key} → raw object IDs (ordered):", ordered)
+
+    # 8) Deduplicate by object 'data' payload
+    deduped_obj: Dict[str, List[int]] = {}
+    for key, oids in object_ids_by_train.items():
+        seen, uniq = set(), []
+        for oid in oids:
+            data = tables["object_analysis"][oid].get("data")
+            if data not in seen:
+                seen.add(data)
+                uniq.append(oid)
+        deduped_obj[key] = uniq
+        print(f"  {key} → deduped object IDs:", uniq)
+
+    # 9) Group similar objects by those common_columns
+    groups_obj = group_similar_sprites_by_attributes(common_columns, deduped_obj, tables)
+    # (You can rename or write a `group_similar_objects_by_attributes` helper if you like.)
+    print("    Most‐alike object groups:", groups_obj)
+
+    # 10) Build negatives = all input‐only objects
+    train_ids = [int(k.split("#",1)[0]) for k in deduped_obj]
+    all_objects = [
+        oid for oid,row in tables["object_analysis"].items()
+        if row.get("trainId") in train_ids and row.get("isInsideInput") == 1
+    ]
+    print("    all_objects (negatives):", all_objects)
+
+    # 11) Find minimal distinguishing criteria per object‐group
+    for group in groups_obj:
+        if any(sid is None for sid in group):
+            continue
+        crit = find_minimal_selection_criteria_for_table(
+            group, all_objects, tables, table_key="object_analysis"
+        )
+        print(f"    Object group {group} → criteria: {crit}")
+        if crit:
+            # choose an output_attr (fall back to path if no exact match)
+            obj_sample = next(iter(tables["object_analysis"].values()), {})
+            output_attr = path if path in obj_sample else crit[0][0]
+            action = {
+                "type":             "selectObjectAndAttributeAction",
+                "criteria":         crit,
+                "output_attribute": output_attr,
+                "for_objects":      list(group)
+            }
+            print("==> Returning selectObjectAndAttributeAction:", action)
+            return action
+
+    print("==> No object‐level group matched either → returning None")
     return None
 
 
@@ -426,48 +541,70 @@ def group_similar_sprites_by_attributes(
     return groups
 
 
-
-def find_minimal_selection_criteria_for_group(
+def find_minimal_selection_criteria_for_table(
     group: Tuple[int, ...],
-    all_sprites: List[int],
+    all_ids: List[int],
     tables: Dict[str, Dict[int, Dict[str, Any]]],
-    common_columns: List[str]
+    table_key: str
 ) -> List[Tuple[str, Any]]:
-    sprite_tbl = tables["sprite_analysis"]
-    if not sprite_tbl:
+    """
+    Find a minimal set of (column,value) tests that include all group IDs (positives)
+    and exclude all other IDs (negatives), but only searching over columns that
+    are constant in the positives and actually discriminate them from negatives.
+    """
+    tbl = tables.get(table_key, {})
+    if not tbl:
         return []
 
-    # only consider input sprites as negatives
+    # split positives/negatives
     positives = {sid for sid in group if sid is not None}
-    negatives = set(all_sprites) - positives
-
-    # keep only columns actually on sprite_analysis
-    sample = next(iter(sprite_tbl.values()))
-    valid_cols = [c for c in common_columns if c in sample]
-    if not valid_cols:
+    negatives = set(all_ids) - positives
+    if not positives or not negatives:
         return []
 
-    def matches(sid: int, criteria: List[Tuple[str, Any]]) -> bool:
-        row = sprite_tbl[sid]
-        return all(row[attr] == val for attr, val in criteria)
+    # all columns in the table
+    sample = next(iter(tbl.values()))
+    all_cols = list(sample.keys())
 
-    # try combinations of 1,2,… attributes
-    for k in range(1, len(valid_cols) + 1):
-        for attrs in combinations(valid_cols, k):
-            # check all positives share the same value for each attr
-            vals = []
-            for attr in attrs:
-                vals_set = {sprite_tbl[sid][attr] for sid in positives}
-                if len(vals_set) != 1:
-                    break
-                vals.append(vals_set.pop())
-            else:
-                criteria = list(zip(attrs, vals))
-                # ensure no negative matches
-                if all(not matches(n, criteria) for n in negatives):
-                    return criteria
+    # 1) keep only columns constant in positives
+    constant_cols = []
+    for col in all_cols:
+        vals = {tbl[sid][col] for sid in positives}
+        if len(vals) == 1:
+            constant_cols.append(col)
 
+    # 2) from those, keep only columns that at least one negative fails
+    discriminating_cols = []
+    for col in constant_cols:
+        val = tbl[next(iter(positives))][col]
+        if any(tbl[n][col] != val for n in negatives):
+            discriminating_cols.append((col, val))
+
+    # if nothing discriminates at all, give up
+    if not discriminating_cols:
+        return []
+
+    # 3) try single‐column criteria first
+    return discriminating_cols
+    #for col, val in discriminating_cols:
+    #    return [(col, val)]
+
+    # (Optional) 4) if you really need multi‐column criteria, try pairs
+    #    but only on the small discriminating subset
+    if len(discriminating_cols) > 1:
+        cols_only = [col for col, _ in discriminating_cols]
+        for a, b in combinations(cols_only, 2):
+            # both must be constant in positives
+            v1 = tbl[next(iter(positives))][a]
+            v2 = tbl[next(iter(positives))][b]
+            # check that no negative matches both
+            if all(not (tbl[n][a] == v1 and tbl[n][b] == v2) for n in negatives):
+                return [(a, v1), (b, v2)]
+
+    # fallback: no minimal criteria found
     return []
+
+
 
 def common_attributes_by_train_value_pairs(
     attributes_by_input_and_values: dict[str, dict[int, list[str]]],
