@@ -794,79 +794,6 @@ class CropSpriteFactToAction(FactToActionMapping):
             isToOutput=True
         )
 
-class CropObjectFactToAction(FactToActionMapping):
-    def __init__(self):
-        # fact_name = "crop_object",
-        super().__init__("crop_object", "crop_object")
-
-    def _test_function(self, conn):
-        query = """
-        SELECT
-          so.trainId   AS trainId,
-          so.testId    AS testId,
-          so.minX      AS minX,
-          so.minY      AS minY,
-          s.width      AS width,
-          s.height     AS height,
-          s.data       AS data
-        FROM shape_occurrence so
-        JOIN shape_transformation st ON so.shape_transformation_id = st.id
-        JOIN shape s ON st.shape_id = s.id
-        WHERE so.object_id IS NULL
-          AND st.rotated_90      = 0
-          AND st.rotated_180     = 0
-          AND st.rotated_270     = 0
-          AND st.flipped_vert    = 0
-          AND st.flipped_horiz   = 0
-          AND st.flipped_vert_90 = 0
-          AND st.flipped_horiz_90= 0
-        """
-        cursor = conn.execute(query)
-        cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in cursor.fetchall()]
-
-    def _build_function(self, row):
-        if row is None:
-            return None
-
-        # pick the right input grid
-        input_grid = (
-            TRAIN_INPUT_GRIDS[row["trainId"]]
-            if row["trainId"] != -1
-            else TEST_INPUT_GRIDS[row["testId"]]
-        )
-        grid = to_concrete_grid(input_grid)
-
-        # perform the crop
-        cropped = crop(
-            grid,
-            int(row["minX"]),
-            int(row["minY"]),
-            int(row["width"]),
-            int(row["height"])
-        )
-
-        return ActionInstance(
-            id=f"crop_object_{row['trainId']}_{row['minX']}_{row['minY']}#{getUniqueId()}",
-            action=registry.get_by_id("crop_object"),
-            bindings={
-                "grid":   ArgumentBinding("grid",   "Grid",    binding=BindingStatus.INPUT_GRID),
-                "minX":   ArgumentBinding("minX",   "Integer", binding=BindingStatus.UNRESOLVED, value=row["minX"]),
-                "minY":   ArgumentBinding("minY",   "Integer", binding=BindingStatus.UNRESOLVED, value=row["minY"]),
-                "width":  ArgumentBinding("width",  "Integer", binding=BindingStatus.UNRESOLVED, value=row["width"]),
-                "height": ArgumentBinding("height", "Integer", binding=BindingStatus.UNRESOLVED, value=row["height"]),
-            },
-            output_var="cropped_object",
-            output_value=cropped,
-            output_type="Grid",
-            scenarioId=row.get("scenarioId"),
-            ruleId=row.get("ruleId"),
-            trainId=row["trainId"],
-            testId=row["testId"],
-            isTrain=(row["trainId"] != -1),
-            isToOutput=True
-        )
-
 class SpriteComputationFactToAction:
     def __init__(self):
         self.fact_name = "sprite_computation"
@@ -1288,22 +1215,21 @@ class CreateObjectFactToAction(FactToActionMapping):
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
-    #FactToActionMapping("rotated_90", "rotate_90"),
-    #FactToActionMapping("rotated_180", "rotate_180"),
-    #FactToActionMapping("rotated_270", "rotate_270"),
-    #FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
-    #FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
-    #FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
-    #FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
-    #ZoomFactToAction(),
-    #RepeatedSpriteFactToAction(),
-    #CanvasByRatioFactToAction(),
-    #RecolorSpriteFactToAction(),
+    FactToActionMapping("rotated_90", "rotate_90"),
+    FactToActionMapping("rotated_180", "rotate_180"),
+    FactToActionMapping("rotated_270", "rotate_270"),
+    FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
+    FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
+    FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
+    FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
+    ZoomFactToAction(),
+    RepeatedSpriteFactToAction(),
+    CanvasByRatioFactToAction(),
+    RecolorSpriteFactToAction(),
     CropSpriteFactToAction(),
-    #CropObjectFactToAction(),
-    #SpriteComputationFactToAction(),
-    #DenoiseFactToAction(),
-    #ZoomOutFactToAction(),
-    #CreateObjectFactToAction()
+    SpriteComputationFactToAction(),
+    DenoiseFactToAction(),
+    ZoomOutFactToAction(),
+    CreateObjectFactToAction()
 ]
 

@@ -188,7 +188,7 @@ def extract_common_attribute_action(
                     continue
                 table_row, col = full.split(".", 1)
                 table_name = table_row.split("#", 1)[0]
-                if table_name == "object_analysis":  # or "sprite_analysis" if in sprite‐phase
+                if table_name == "sprite_analysis":
                     cols.add(col)
             print(f"    Value {v} → filtered columns: {cols}")
 
@@ -248,10 +248,14 @@ def extract_common_attribute_action(
             for full in attr_map.get(v, []):
                 if "." not in full:
                     continue
-                table_row, col = full.split(".",1)
+                table_row, col = full.split(".", 1)
+                table_name = table_row.split("#", 1)[0]
+                # <<< only keep sprite tables here
+                if table_name not in ("sprite_analysis", "sprite_occurrence"):
+                    continue
                 if col in common_columns:
                     per_train_rows[train_id].append(table_row)
-        #print(f"  Train {train_id} rows:", per_train_rows[train_id])
+        print(f"  Train {train_id} rows:", per_train_rows[train_id])
 
     print("\n==> 5) Resolve sprite_occurrence → sprite_analysis IDs")
     sprite_occ = tables.get("sprite_occurrence", {})
@@ -406,10 +410,12 @@ def extract_common_attribute_action(
         deduped_obj[key] = uniq
         print(f"  {key} → deduped object IDs:", uniq)
 
-    # 9) Group similar objects by those common_columns
-    groups_obj = group_similar_sprites_by_attributes(common_columns, deduped_obj, tables)
-    # (You can rename or write a `group_similar_objects_by_attributes` helper if you like.)
-    print("    Most‐alike object groups:", groups_obj)
+    # 9) Build all candidate object‐groups via Cartesian product
+    from itertools import product
+    train_keys   = sorted(deduped_obj.keys())                # e.g. ["0#-1","1#-1","2#-1"]
+    per_id_lists = [deduped_obj[k] for k in train_keys]      # e.g. [[2], [4], [5,6]]
+    groups_obj   = list(product(*per_id_lists))
+    print("    Candidate object groups:", groups_obj)
 
     # 10) Build negatives = all input‐only objects
     train_ids = [int(k.split("#",1)[0]) for k in deduped_obj]

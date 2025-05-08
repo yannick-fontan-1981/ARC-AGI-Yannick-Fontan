@@ -14,12 +14,13 @@ from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
+from constelize.tools.extract_common_attribute import extract_common_attribute_action
 
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, \
     build_get_attribute_instance, build_select_sprite_and_attribute_instance, build_select_object_and_attribute_instance
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
-from constelize.tools.sqlite_loader import load_sqlite_to_dict, common_attributes_by_train_value_pairs, \
-    extract_common_attribute_action
+from constelize.tools.sqlite_loader import load_sqlite_to_dict
+
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
 from typing import List, Dict, Optional, Any, Tuple

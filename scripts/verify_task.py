@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from collections import defaultdict
 
 from joblib._multiprocessing_helpers import mp
@@ -236,7 +237,11 @@ def test_file(
             results_path,
         )
     except Exception as e:
-        print(f"❌ Error during scenario/rule generation: {e}")
+        print("❌ Exception during scenario/rule generation:")
+        print(f"   • Exception type: {type(e).__name__}")
+        print(f"   • Message       : {e}")
+        # optional: show full stack trace
+        traceback.print_exc()
         return False
 
     valid_scenario = filter_successful_scenarios()
@@ -371,7 +376,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "2dee498d"
 
     # Training 3
-    DEFAULT_TASK_ID = "1cf80156"
+    #DEFAULT_TASK_ID = "1cf80156"
     #DEFAULT_TASK_ID = "32597951"
     #DEFAULT_TASK_ID = "25ff71a9"
     #DEFAULT_TASK_ID = "0b148d64"
@@ -388,7 +393,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "7b7f7511"
     #DEFAULT_TASK_ID = "4258a5f9"
 
-    trainings_number = 3
+    trainings_number = 2
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
