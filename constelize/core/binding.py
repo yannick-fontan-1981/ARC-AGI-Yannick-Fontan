@@ -12,6 +12,7 @@ class BindingStatus(Enum):
     INPUT_GRID = auto()     # To be injected from JSON input.
     CONTEXT = auto()        # Externally provided metadata, e.g. trainId/testId.
     COMPOUND = auto()       # Structured binding for composite types.
+    BUFFER = auto()         # Common buffer to produce the output.
 
 @dataclass
 class LinkCandidate:

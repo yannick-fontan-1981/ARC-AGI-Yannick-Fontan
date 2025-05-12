@@ -12,7 +12,7 @@ from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid
 from constelize.library.pattern_detection import detect_noise, denoise_grid
-from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn
+from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint
 from constelize.tools.registry_singleton import registry
 
 # Global unique ID counter for ActionInstances.
@@ -35,13 +35,15 @@ def load_end_outputs_from_json(json_path: str):
 
 # Global dictionaries for input grids.
 TRAIN_INPUT_GRIDS: Dict[int, any] = {}
+TRAIN_OUTPUT_GRIDS: Dict[int, any] = {}
 TEST_INPUT_GRIDS: Dict[int, any] = {}
 def load_json_inputs_from_json(json_path: str):
-    global TRAIN_INPUT_GRIDS, TEST_INPUT_GRIDS
+    global TRAIN_INPUT_GRIDS, TRAIN_OUTPUT_GRIDS, TEST_INPUT_GRIDS
     with open(json_path, "r") as f:
         data = json.load(f)
     for trainId, item in enumerate(data.get("train", [])):
         TRAIN_INPUT_GRIDS[trainId] = item["input"]
+        TRAIN_OUTPUT_GRIDS[trainId] = item["output"]
     for testId, item in enumerate(data.get("test", [])):
         TEST_INPUT_GRIDS[testId] = item["input"]
 
@@ -80,9 +82,12 @@ class FactToActionMapping:
             so.trainId,
             so.testId,
             source.data AS source_data,
-            produced.data AS produced_data
+            produced.data AS produced_data,
+            po.minX,
+            po.minY
         FROM sprite_transformation AS st
         INNER JOIN sprite_occurrence AS so ON st.id = so.sprite_transformation_id
+        INNER JOIN sprite_occurrence AS po ON po.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS produced ON produced.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
         WHERE st.{self.column_name} = 1
@@ -136,6 +141,9 @@ class FactToActionMapping:
             testId=row["testId"],
             isTrain=trainId != -1,
             isToOutput=row["isInsideOutput"],
+            toRepaint=True,
+            repaintMinX=row["minX"],
+            repaintMinY=row["minY"],
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
@@ -155,9 +163,9 @@ class ZoomFactToAction(FactToActionMapping):
                so.isInsideOutput,
                su.data,
                st.zoom_x,
-               st.zoom_y
+               st.zoom_y, so.minX, so.minY
         FROM sprite_transformation st
-        JOIN sprite_occurrence so ON so.sprite_unique_id = st.sprite_unique_id
+        JOIN sprite_occurrence so ON  so.sprite_transformation_id = st.id
         JOIN sprite_unique su ON su.id = st.sprite_produce_id
         WHERE (zoom_x > 1 OR zoom_y > 1)
         AND COALESCE(st.rotated_90, 0) = 0
@@ -229,6 +237,9 @@ class ZoomFactToAction(FactToActionMapping):
             testId=row["testId"],
             isTrain=trainId != -1,
             isToOutput=row["isInsideOutput"],
+            toRepaint=True,
+            repaintMinX=row["minX"],
+            repaintMinY=row["minY"],
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
@@ -249,6 +260,8 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             so.trainId,
             so.testId,
             source.data AS data,
+            po.minX,
+            po.minY,
             -- build the inputCoords exactly as before
             COALESCE(
               '[' || GROUP_CONCAT(
@@ -271,7 +284,8 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
         JOIN sprite_transformation AS st
           ON st.id = so.sprite_transformation_id
         JOIN sprite_unique AS source
-          ON source.id = st.sprite_unique_id
+          ON source.id = st.sprite_unique_id        
+        INNER JOIN sprite_occurrence AS po ON po.id = st.sprite_produce_id
         WHERE so.sprite_id IS NOT NULL
         GROUP BY
             so.sprite_unique_id,
@@ -405,6 +419,9 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             testId=testId,
             isTrain=(trainId != -1),
             isToOutput=True,
+            toRepaint=True,
+            repaintMinX=row["minX"],
+            repaintMinY=row["minY"],
             END=False
         )
 
@@ -592,7 +609,6 @@ def build_select_sprite_and_attribute_instance(
     output_value: Any,
     criteria: List[Tuple[str, Any]],
     attribute_name: str,
-    sprite_ids: List[int],
     scenarioId: str,
     ruleId: str
 ) -> ActionInstance:
@@ -616,8 +632,7 @@ def build_select_sprite_and_attribute_instance(
             "trainId":        ArgumentBinding("trainId",        "Integer",                     binding=BindingStatus.CONTEXT,  value=trainId),
             "testId":         ArgumentBinding("testId",         "Integer",                     binding=BindingStatus.CONTEXT,  value=testId),
             "criteria":       ArgumentBinding("criteria",       "List[Tuple[String,Integer]]", binding=BindingStatus.CONSTANT, value=criteria),
-            "attribute_name": ArgumentBinding("attribute_name", "String",                      binding=BindingStatus.CONSTANT, value=attribute_name),
-            "sprite_ids":     ArgumentBinding("sprite_ids",     "List[Integer]",               binding=BindingStatus.CONSTANT, value=sprite_ids),
+            "attribute_name": ArgumentBinding("attribute_name", "String",                      binding=BindingStatus.CONSTANT, value=attribute_name)
         },
         output_var=f"select_{attribute_name}", # _train{trainId}_test{testId}
         output_type=binding_type,
@@ -675,17 +690,88 @@ def build_select_object_and_attribute_instance(
         ruleId=ruleId
     )
 
+def build_select_sprite_grid_instance(
+    trainId:    int,
+    testId:     int,
+    criteria:   List[Tuple[str, Any]],
+    output_grid: Any,
+    scenarioId: str,
+    ruleId:     str
+) -> ActionInstance:
+    action   = registry.get_by_id("select_sprite_grid")
+    inst_id  = f"select_sprite_grid_{scenarioId}_{ruleId}_train{trainId}_test{testId}"
+    return ActionInstance(
+      id=inst_id,
+      action=action,
+      bindings={
+        "scenarioId": ArgumentBinding("scenarioId", "String",                      binding=BindingStatus.INSTANCE,  value=scenarioId),
+        "ruleId":     ArgumentBinding("ruleId",     "String",                      binding=BindingStatus.INSTANCE,  value=ruleId),
+        "trainId":    ArgumentBinding("trainId",    "Integer",                     binding=BindingStatus.CONTEXT,   value=trainId),
+        "testId":     ArgumentBinding("testId",     "Integer",                     binding=BindingStatus.CONTEXT,   value=testId),
+        "criteria":   ArgumentBinding("criteria",   "List[Tuple[String,Integer]]",  binding=BindingStatus.CONSTANT,  value=criteria),
+      },
+      output_var="selected_sprite_grid",
+      output_value=output_grid,
+      output_type="Grid",
+      scenarioId=scenarioId,
+      ruleId=ruleId,
+      trainId=trainId,
+      testId=testId,
+      isTrain=(testId == -1),
+      isToOutput=False
+    )
+
+def build_repaint_instance(
+    instance: ActionInstance,
+    buffer_inst: ActionInstance
+) -> ActionInstance:
+    action = registry.get_by_id("repaint")
+
+    instance_id = f"repaint_{instance.scenarioId}_{instance.ruleId}_{instance.id}_train{instance.trainId}_test{instance.testId}"
+
+    print(f"build_repaint_instance repaintMinX {instance.repaintMinX} repaintMinY {instance.repaintMinY} ")
+    #print(f"buffer_inst.output_value {grid_to_pretty_string(buffer_inst.output_value)} ")
+    print(f"buffer_inst.output_value {buffer_inst.output_value} ")
+    #print(f"instance.output_value {grid_to_pretty_string(instance.output_value)} ")
+    print(f"instance.output_value {instance.output_value} ")
+    output_value = repaint(buffer_inst.output_value, instance.output_value, instance.repaintMinX, instance.repaintMinY)
+
+    return ActionInstance(
+        id=instance_id,
+        action=action,
+        bindings={
+            # "scenarioId":     ArgumentBinding("scenarioId",     "String",                      binding=BindingStatus.INSTANCE,   value=instance.scenarioId),
+            # "ruleId":         ArgumentBinding("ruleId",         "String",                      binding=BindingStatus.INSTANCE,   value=instance.ruleId),
+            # "trainId":        ArgumentBinding("trainId",        "Integer",                     binding=BindingStatus.CONTEXT,    value=instance.trainId),
+            # "testId":         ArgumentBinding("testId",         "Integer",                     binding=BindingStatus.CONTEXT,    value=instance.testId),
+            "base":           ArgumentBinding("base",           "Grid",                        binding=BindingStatus.BUFFER,     value=buffer_inst.output_value, source_procedure_id=buffer_inst.id),
+            "patch":          ArgumentBinding("patch",         "Grid",                        binding=BindingStatus.VARIABLE,   value=instance.output_value, source_procedure_id=instance_id),
+            "minX":           ArgumentBinding("minX",           "Integer",                     binding=BindingStatus.UNRESOLVED, value=instance.repaintMinX),
+            "minY":           ArgumentBinding("minY",           "Integer",                     binding=BindingStatus.UNRESOLVED, value=instance.repaintMinY),
+        },
+        output_var=f"repaint_{instance.id}",
+        output_type="Grid",
+        output_value=output_value,
+        trainId=instance.trainId,
+        testId=instance.testId,
+        isTrain=(instance.testId == -1),
+        isToOutput=False,
+        scenarioId=instance.scenarioId,
+        ruleId=instance.ruleId,
+        bufferInstance=buffer_inst
+    )
+
 class RecolorSpriteFactToAction(FactToActionMapping):
     def __init__(self):
         super().__init__("recolor_sprite", "recolor_sprite")
 
     def _test_function(self, conn):
         query = """
-        SELECT st.sprite_unique_id, so.trainId, so.testId, so.isInsideOutput,
-               su.data, st.recolored
+        SELECT distinct st.sprite_unique_id, so.trainId, so.testId, so.isInsideOutput,
+               su.data, st.recolored, so.minX, so.minY
         FROM sprite_transformation st
         JOIN sprite_occurrence so ON so.sprite_transformation_id = st.id
-        JOIN sprite_unique su ON su.id = st.sprite_unique_id
+        JOIN sprite_unique su ON su.id = st.sprite_unique_id        
         WHERE st.recolored IS NOT NULL AND st.recolored != '[]'
         AND COALESCE(st.zoom_x, 1) = 1
         AND COALESCE(st.zoom_y, 1) = 1
@@ -724,6 +810,9 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             testId=row["testId"],
             isTrain=(trainId != -1),
             isToOutput=row["isInsideOutput"],
+            toRepaint=True,
+            repaintMinX=row["minX"],
+            repaintMinY=row["minY"],
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
@@ -1129,21 +1218,28 @@ class CreateObjectFactToAction(FactToActionMapping):
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = """
-        SELECT
-          so.object_id    AS object_id,
-          so.trainId      AS trainId,
-          so.testId       AS testId,
-          oa.data         AS data,
-          oa.color        AS color
+        SELECT DISTINCT
+          so.object_id AS object_id,
+          so.trainId   AS trainId,
+          so.testId    AS testId,
+          oa.data      AS data,
+          oa.color     AS color
         FROM object_analysis AS oa
-        JOIN shape_occurrence AS so
+        JOIN shape_occurrence AS so 
           ON so.object_id = oa.id
-        WHERE so.isInsideOutput = 1
+        WHERE
+          so.isInsideOutput = 1
           AND NOT EXISTS (
             SELECT 1
-            FROM shape_occurrence AS so_in
-            WHERE so_in.object_id     = oa.id
-              AND so_in.isInsideInput = 1
+            FROM object_analysis AS ia
+            JOIN shape_occurrence  AS ii
+              ON ii.object_id = ia.id
+            WHERE
+              ii.isInsideInput = 1
+              AND ii.trainId     = so.trainId
+              AND ii.testId      = so.testId
+              AND ia.data        = oa.data
+              AND ia.color       = oa.color
           )
         """
         cursor = conn.execute(query)

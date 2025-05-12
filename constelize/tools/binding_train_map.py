@@ -3,7 +3,7 @@ import hashlib
 import pickle
 from collections import defaultdict
 
-from constelize.core.binding import ArgumentBinding
+from constelize.core.binding import ArgumentBinding, BindingStatus
 
 # binding_hash -> set of trainIds
 bindingTrainMap: dict[str, set[int]] = defaultdict(set)
@@ -17,12 +17,21 @@ def make_binding_hash(binding: ArgumentBinding,
                       producer_action_id: str,
                       consumer_action_id: str,
                       path: str) -> str:
-    sig = (
-        producer_action_id,
-        consumer_action_id,
-        path,
-        binding.type,
-    )
+    if binding.binding == BindingStatus.CONSTANT:
+        sig = (
+            producer_action_id,
+            consumer_action_id,
+            path,
+            binding.type,
+            binding.value
+        )
+    else:
+        sig = (
+            producer_action_id,
+            consumer_action_id,
+            path,
+            binding.type,
+        )
     raw = pickle.dumps(sig)
     h = hashlib.md5(raw).hexdigest()
     binding.binding_hash = h

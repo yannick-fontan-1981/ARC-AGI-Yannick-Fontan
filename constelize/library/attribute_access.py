@@ -1,4 +1,5 @@
 #constelize/library/attribute_access.py
+import json
 from typing import List, Tuple
 
 import constelize.tools.globals as GLOBAL
@@ -6,6 +7,7 @@ from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
 from constelize.core.procedure import ActionInstance
+from constelize.dsl.grid_dsl import Grid, to_concrete_grid
 
 _values_by_input = {}
 _attributes_by_input_and_values = {}
@@ -62,29 +64,41 @@ def select_sprite_and_attribute_fn(
     ruleId: str,
     criteria: List[Tuple[str, int]],
     attribute_name: str,
-    sprite_ids: List[int],
     trainId: int | None = None,
     testId: int | None = None
 ) -> int | None:
     """
-    Return the attribute value of the first sprite matching all (attr, val) in criteria.
-    Optionally filter by trainId or testId. If no match is found, return None.
+    Return the attribute value of the sprite whose row best matches your criteria:
+    for each sprite, count how many (attr, val) pairs it satisfies, pick the one
+    with the highest count, and return its attribute_name. If none match anything,
+    or no sprites pass the trainId/testId filter, return None.
     """
     sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
 
-    print(f"select_sprite_and_attribute_fn trainId={trainId} testId={testId}")
+    best_sid = None
+    best_score = -1
 
     for sid, row in sprite_tbl.items():
+        # apply your train/test filtering
         if trainId is not None and row.get("trainId") != trainId:
             continue
         if testId is not None and row.get("testId") != testId:
             continue
 
-        if all(row.get(attr) == val for attr, val in criteria):
-            print(f"[MATCH] sprite {sid} meets criteria {criteria} → {attribute_name} = {row.get(attribute_name)}")
-            return row.get(attribute_name)
+        # count how many criteria this row satisfies
+        score = sum(1 for attr, val in criteria if row.get(attr) == val)
+        if score > best_score:
+            best_score = score
+            best_sid = sid
 
-    return None
+    if best_sid is None or best_score <= 0:
+        # either no candidate or nobody matched any criterion
+        return None
+
+    # debug info
+    print(f"[BEST MATCH] sprite {best_sid} matched {best_score}/{len(criteria)} criteria "
+          f"→ {attribute_name} = {sprite_tbl[best_sid].get(attribute_name)}")
+    return sprite_tbl[best_sid].get(attribute_name)
 
 def select_object_and_attribute_fn(
     scenarioId: str,
@@ -122,6 +136,37 @@ def select_object_and_attribute_fn(
                 return row.get(attribute_name)
 
     return None
+
+def select_sprite_grid_fn(
+    scenarioId: str,
+    ruleId:     str,
+    criteria:   List[Tuple[str, int]],
+    trainId:    int | None = None,
+    testId:     int | None = None
+) -> Grid | None:
+    """
+    Find the first sprite_unique_id matching all (attr==val) in criteria,
+    then load its raw pixel-list and convert it to a concrete Grid.
+    """
+    sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
+
+    # 1) pick a sprite id
+    chosen = None
+    for sid, row in sprite_tbl.items():
+        if trainId is not None and row.get("trainId") != trainId:
+            continue
+        if testId  is not None and row.get("testId")  != testId:
+            continue
+        if all(row.get(attr) == val for attr, val in criteria):
+            chosen = sid
+            break
+
+    if chosen is None:
+        return None
+
+    # 2) grab its JSON-encoded data and convert
+    raw = json.loads(sprite_tbl[chosen]["data"])
+    return to_concrete_grid(raw)
 
 ACTIONS = [
     Action(
@@ -247,5 +292,23 @@ ACTIONS = [
         ],
         output_type="Integer",
         function=select_object_and_attribute_fn
+    ),
+    Action(
+      id="select_sprite_grid",
+      name="Select Sprite Grid",
+      description=(
+        "Filter a list of sprites by (attribute==value) criteria and return "
+        "the full concrete grid of the first matching sprite."
+      ),
+      category=ActionCategory.SELECTION_FILTERING,
+      input_arguments=[
+        ArgumentBinding("scenarioId", "String",                       binding=BindingStatus.INSTANCE),
+        ArgumentBinding("ruleId",     "String",                       binding=BindingStatus.INSTANCE),
+        ArgumentBinding("trainId",    "Integer",                      binding=BindingStatus.CONTEXT),
+        ArgumentBinding("testId",     "Integer",                      binding=BindingStatus.CONTEXT),
+        ArgumentBinding("criteria",   "List[Tuple[String,Integer]]",  binding=BindingStatus.UNRESOLVED),
+      ],
+      output_type="Grid",
+      function=select_sprite_grid_fn
     )
 ]

@@ -67,7 +67,7 @@ def topological_levels(instances: Dict[str, ActionInstance]) -> List[List[str]]:
     in_deg = defaultdict(int, {sid: 0 for sid in instances})
     for inst in instances.values():
         for bind in inst.bindings.values():
-            if bind.binding == BindingStatus.VARIABLE and bind.source_procedure_id:
+            if bind.binding in (BindingStatus.VARIABLE, BindingStatus.BUFFER) and bind.source_procedure_id:
                 graph[bind.source_procedure_id].add(inst.id)
                 in_deg[inst.id] += 1
 
@@ -195,7 +195,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
         Build a signature for an ActionInstance based on all its bindings' hashes,
         using make_binding_hash when needed.
         """
-        signature = [("output_var", step.output_var or "")]
+        signature = []
         for name, binding in sorted(step.bindings.items()):
             if binding.binding_hash is None:
                 producer_id = binding.source_procedure_id
@@ -274,7 +274,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
                         print(f"🛡️ Conserve candidats valides: {[c.producer_id for c in valid_cands]}")
 
             # 2) Ensuite, si on est en VARIABLE, on remplace l’ID via mapping
-            if binding.binding == BindingStatus.VARIABLE and binding.source_procedure_id in mapping:
+            if binding.binding in (BindingStatus.VARIABLE, BindingStatus.BUFFER) and binding.source_procedure_id in mapping:
                 old_id = binding.source_procedure_id
                 new_id = mapping[old_id]
                 print(f"🔁 Replacing source_procedure_id {old_id} → {new_id} for consumer {current_consumer_id}")
@@ -303,7 +303,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
             new_branches = []
             for branch in branches:
                 for bind in step.bindings.values():
-                    if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE):
+                    if bind.binding in (BindingStatus.VARIABLE, BindingStatus.MULTIPLE, BindingStatus.BUFFER):
                         old_id = bind.source_procedure_id
                         if old_id and old_id in train_to_generic_id:
                             print(f"🔗 Updating binding source_procedure_id {old_id} → {train_to_generic_id[old_id]}")
@@ -328,8 +328,20 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
                             break
 
                 if found:
+                    # record the mapping from this train-step to the generic
                     train_to_generic_id[step.id] = found.id
                     print(f"✅ Mapped {step.id} to existing generic {found.id}")
+
+                    # if this is a repaint, re-wire its bufferInstance onto the generic
+                    if step.action.id == "repaint" and step.bufferInstance:
+                        old_buf_id = step.bufferInstance.id
+                        if old_buf_id in train_to_generic_id:
+                            generic_buf_id = train_to_generic_id[old_buf_id]
+
+                            # 1) found is the generic repaint; branch holds your generic init
+                            found.bufferInstance = branch[generic_buf_id]
+                            print(f"🔧 Rewired repaint# → bufferInstance {generic_buf_id}")
+
                     new_branches.append(branch)
                     continue
 
@@ -392,7 +404,7 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
             if not is_step_still_used(sid, branch) and sid not in final_output_ids
         ]
         for sid in to_remove:
-            if branch[sid].action.id == "get_start_input":
+            if branch[sid].action.id in ("get_start_input", "initialize_buffer", "repaint"):
                 continue
             print(f"🧹 Removing unused step: {sid}")
             branch.pop(sid)

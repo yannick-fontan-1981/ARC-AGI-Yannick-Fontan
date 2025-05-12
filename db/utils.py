@@ -511,10 +511,11 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         isInsideTest BOOLEAN,
         isInsideBuffer BOOLEAN,
 
-        isGrid,
-        isFromSplit,
-        isFromHole,
-        isFromCut,
+        isGrid BOOLEAN,
+        isFromSplit BOOLEAN,
+        isFromHole BOOLEAN,
+        isFromCut BOOLEAN,
+        isFromColorZone BOOLEAN,
 
         minX INTEGER,
         minY INTEGER,

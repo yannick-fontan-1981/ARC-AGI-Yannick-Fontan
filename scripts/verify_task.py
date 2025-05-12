@@ -24,7 +24,8 @@ from constelize.tools.pattern_analysis import (
     evaluate_generic_procedures,
     load_arc_json, generate_submission_file, compare_submission_to_arc_outputs, print_test_results,
     generate_action_instances_from_db, evaluate_generic_procedures_on_scenarios, print_test_results_by_scenario,
-    generate_submission_file_from_scenarios, preprocess_arc_with_action,
+    generate_submission_file_from_scenarios, preprocess_arc_with_action, compute_get_start_input,
+    compute_buffer_and_repaint,
 )
 from constelize.tools.sqlite_loader import build_values_by_input, \
     build_attributes_by_input_and_values, build_colors_by_input, build_attributes_by_input_and_colors, \
@@ -288,8 +289,9 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     #print(_attrs_color)
     print(f"\n📥 [generate_draft_procedure] Loading from DB: {db_path} and JSON: {json_path}")
     action_instances = generate_action_instances_from_db(db_path, scenarioId, current_rule)
+    compute_get_start_input(action_instances, data, ruleId, scenarioId)
+    compute_buffer_and_repaint(action_instances, ruleId, scenarioId)
     rest_action_instances = split_action_instances_in_scenarios(action_instances, current_scenario)
-
     procedures = generate_draft_procedure(rest_action_instances, data, scenarioId, current_rule)
     # debug: list initial steps
     print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
@@ -378,7 +380,7 @@ if __name__ == "__main__":
     # Training 3
     #DEFAULT_TASK_ID = "1cf80156"
     #DEFAULT_TASK_ID = "32597951"
-    #DEFAULT_TASK_ID = "25ff71a9"
+    DEFAULT_TASK_ID = "25ff71a9"
     #DEFAULT_TASK_ID = "0b148d64"
     #DEFAULT_TASK_ID = "1f85a75f"
     #DEFAULT_TASK_ID = "23b5c85d"
@@ -393,7 +395,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "7b7f7511"
     #DEFAULT_TASK_ID = "4258a5f9"
 
-    trainings_number = 2
+    trainings_number = 3
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))

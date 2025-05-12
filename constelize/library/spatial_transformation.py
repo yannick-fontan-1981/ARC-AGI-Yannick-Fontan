@@ -55,6 +55,16 @@ def sprite_computation_paint(canvas: Grid, sub_sprites: List[Grid], positions: L
         result = paint(result, sprite, (y, x))
     return result
 
+def repaint(base: Grid, patch: Grid, minX: int, minY: int):
+    return paint(base, patch, (minY, minX))
+
+def initialize_buffer_fn(initial_grid):
+    """
+    Pass-through action for initializing the shared buffer.
+    Takes the starting grid and makes it available as the buffer.
+    """
+    return initial_grid
+
 ACTIONS = [
     Action(
         id="shift_patch",
@@ -236,5 +246,32 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=unzoom
+    ),
+    Action(
+        id="repaint",
+        name="Repaint",
+        description="repaint the given sprite in the canvas at the given position",
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="base",   type="Grid",    binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="patch",  type="Grid",    binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="minX",   type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="minY",   type="Integer", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=repaint
+    ),
+    Action(
+        id="initialize_buffer",
+        name="Initialize Buffer",
+        description="Pass-through action to initialize the shared buffer with the input grid.",
+        category=ActionCategory.ATTRIBUTE_ACCESS,
+        input_arguments=[
+            ArgumentBinding(name="initial_grid", type="Grid", binding=BindingStatus.VARIABLE)
+        ],
+        output_type="Grid",
+        function=initialize_buffer_fn,
+        deterministic=True,
+        pure=True
     )
 ]

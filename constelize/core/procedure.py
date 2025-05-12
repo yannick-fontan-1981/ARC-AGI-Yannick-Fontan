@@ -23,8 +23,12 @@ class ActionInstance:
     used_by: Optional[List[str]] = field(default_factory=list)
     comment: Optional[str] = None
     active: bool = True
-    END: Optional[bool] = False
-    IN_SEPARATE_RULE: Optional[bool] = False
+    toRepaint: bool = False
+    repaintMinX: int = 0
+    repaintMinY: int = 0
+    bufferInstance: "ActionInstance" = None
+    END: bool = False
+    IN_SEPARATE_RULE: bool = False
 
     def get_unresolved_bindings(self) -> set[str]:
         return {

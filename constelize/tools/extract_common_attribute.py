@@ -4,6 +4,104 @@ from itertools import combinations, product
 from typing import Dict, Any, List, Tuple, Optional, Set
 
 
+def extract_common_sprite_grid_action(
+    pairs: List[Tuple[int, int]],
+    path: str,
+    tables: Dict[str, Dict[int, Dict[str, Any]]]
+) -> Optional[Dict[str, Any]]:
+    """
+    (Verbose) Identify discriminative sprite_analysis attributes for a set
+    of sprites across training instances, and emit a selectSpriteGridAction spec.
+
+    Steps:
+      1) Deduplicate target sprite_analysis IDs from the (trainId, sid) pairs.
+      2) Load each corresponding row from tables["sprite_analysis"].
+      3) Build the list of candidate columns (exclude metadata & raw data).
+      4) Find columns whose values are identical across all target rows.
+      5) From those, keep only columns that match exactly the target set (no extras).
+      6) Package and return the action spec with those criteria.
+    """
+
+    print("🔵 Starting verbose extract_common_sprite_grid_action")
+    print(f"  • Binding path: {path!r}")
+    print(f"  • Incoming (trainId, sprite_analysis_id) pairs: {pairs!r}")
+
+    # 1) Deduplicate and collect target IDs
+    target_ids: List[int] = []
+    for train_id, sid in pairs:
+        if sid not in target_ids:
+            target_ids.append(sid)
+    print(f"  • Deduplicated sprite_analysis IDs: {target_ids!r}")
+    if not target_ids:
+        print("❌ No sprite IDs found → aborting.")
+        return None
+
+    # 2) Retrieve rows for those IDs
+    sprite_tbl = tables.get("sprite_analysis", {})
+    print(f"  • Loaded sprite_analysis table with {len(sprite_tbl)} rows")
+    target_rows: List[Dict[str, Any]] = []
+    for sid in target_ids:
+        row = sprite_tbl.get(sid)
+        if row is None:
+            print(f"❌ Missing row for sprite_analysis.id={sid} → aborting.")
+            return None
+        print(f"    – Row for ID={sid}: {row}")
+        target_rows.append(row)
+    print(f"  • Retrieved {len(target_rows)} target rows")
+
+    # 3) Identify candidate columns to test
+    exclude = {"id", "trainId", "testId", "data"}
+    all_columns = list(target_rows[0].keys())
+    candidate_cols = [col for col in all_columns if col not in exclude]
+    print(f"  • Candidate columns (excluding {exclude}): {candidate_cols!r}")
+
+    # 4) Find columns with identical values across all targets
+    common: List[Tuple[str, Any]] = []
+    for col in candidate_cols:
+        first_val = target_rows[0].get(col)
+        if all(row.get(col) == first_val for row in target_rows[1:]):
+            common.append((col, first_val))
+    print(f"  • Common attributes across targets: {common!r}")
+    if not common:
+        print("❌ No attributes common to all targets → aborting.")
+        return None
+
+    # 5) Filter for discriminative criteria among input sprites only
+    discriminative: List[Tuple[str, Any]] = []
+    target_set = set(target_ids)
+    for col, val in common:
+        # only consider sprites where isInsideInput == 1  AND  testId == -1
+        matching_ids = {
+            sid
+            for sid, row in sprite_tbl.items()
+            if row.get("isInsideInput") == 1
+               and row.get("testId") == -1
+               and row.get(col) == val
+        }
+        print(f"    – Testing ({col!r} == {val!r}) on input sprites: matches IDs {sorted(matching_ids)!r}")
+        if matching_ids == target_set:
+            discriminative.append((col, val))
+            print(f"      ✓ {col!r} is discriminative among inputs")
+        else:
+            print(
+                f"      ✗ {col!r} not discriminative (matches {sorted(matching_ids)!r}, target {sorted(target_set)!r})")
+    print(f"  • Final discriminative criteria: {discriminative!r}")
+    if not discriminative:
+        print("❌ No discriminative criteria remain → aborting.")
+        return None
+
+    # 6) Build and return the action spec
+    spec = {
+        "type":     "selectSpriteGridAction",
+        "criteria": discriminative,
+        "path":     path
+    }
+    print(f"✅ Emitting action spec: {spec!r}")
+    print("🔵 Completed extract_common_sprite_grid_action")
+    return spec
+
+
+
 def extract_common_attribute_action(
     attributes_by_input_and_values: Dict[str, Dict[int, List[str]]],
     pairs: List[Tuple[int, int]],

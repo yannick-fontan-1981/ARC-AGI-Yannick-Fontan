@@ -14,11 +14,14 @@ from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
-from constelize.tools.extract_common_attribute import extract_common_attribute_action
+from constelize.tools.extract_common_attribute import extract_common_attribute_action, extract_common_sprite_grid_action
 
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, \
-    build_get_attribute_instance, build_select_sprite_and_attribute_instance, build_select_object_and_attribute_instance
+    build_get_attribute_instance, build_select_sprite_and_attribute_instance, \
+    build_select_object_and_attribute_instance, build_repaint_instance, TRAIN_INPUT_GRIDS, TRAIN_OUTPUT_GRIDS, \
+    build_select_sprite_grid_instance
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
+from constelize.tools.registry_singleton import registry
 from constelize.tools.sqlite_loader import load_sqlite_to_dict
 
 from constelize.tools.registry_cli import register_procedure
@@ -54,6 +57,8 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                     row["ruleId"] = ruleId
                     instance = mapping.build_function(row)
                     action_instances.append(instance)
+                    if concrete_grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
+                        instance.END = True
                 except Exception as e:
                     # ——— EXTRA DEBUG LOGGING ———————————————————————————————————————————————
                     print(f"[DEBUG gen_instances] mapping.fact_name = {mapping.fact_name}")
@@ -73,6 +78,82 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
     conn.close()
     return action_instances
 
+
+def compute_buffer_and_repaint(action_instances, ruleId, scenarioId):
+    if not any(inst.END for inst in action_instances):
+        buffers: Dict[int, ActionInstance] = {}
+        train_ids = {inst.trainId for inst in action_instances}
+
+        for t in train_ids:
+            # 1) Look for canvas_by_ratio
+            canvas_inst = next(
+                (i for i in action_instances
+                 if i.trainId == t and i.action.id == "canvas_by_ratio"),
+                None
+            )
+
+            # 2) If no canvas, look for get_start_input
+            start_inst = None
+            if canvas_inst is None:
+                start_inst = next(
+                    (i for i in action_instances
+                     if i.trainId == t and i.action.id == "get_start_input"),
+                    None
+                )
+
+            # Decide grid + provenance
+            if canvas_inst:
+                initial_grid = canvas_inst.output_value
+                source_proc_id = canvas_inst.id
+            elif start_inst:
+                initial_grid = start_inst.output_value
+                source_proc_id = start_inst.id
+            else:
+                initial_grid = TRAIN_INPUT_GRIDS[t]
+                source_proc_id = None
+
+            print(f"buffer initial_grid source_proc_id {source_proc_id}")
+
+            # now always create a _new_ repaint_buffer action, seeded from initial_grid
+            buf = ActionInstance(
+                id=f"output_buffer_train_{t}",
+                action=registry.get_by_id("initialize_buffer"),
+                scenarioId=scenarioId,
+                ruleId=ruleId,
+                trainId=t,
+                testId=-1,
+                isTrain=True,
+                bindings={
+                    "initial_grid": ArgumentBinding(
+                        name="initial_grid",
+                        type="Grid",
+                        binding=BindingStatus.VARIABLE,
+                        value=initial_grid,
+                        source_procedure_id=source_proc_id
+                    )
+                },
+                output_var=f"repaint_buffer_{t}",
+                output_type="Grid",
+                output_value=initial_grid
+            )
+            action_instances.append(buf)
+            buffers[t] = buf
+
+        # chain repaints onto these buffers (mutating buffer.output_value each time)
+        for inst in list(action_instances):
+            if inst.toRepaint:
+                buffer_inst = buffers[inst.trainId]
+                print(f"inst.trainId {inst.trainId} ")
+                print("inst")
+                print(inst)
+                print("buffer_inst")
+                print(buffer_inst)
+                rep = build_repaint_instance(inst, buffer_inst)
+                action_instances.append(rep)
+                # update the shared buffer so the next paint sees this change
+                buffer_inst.output_value = rep.output_value
+
+
 def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str, current_rule: Rule) -> List[Procedure]:
     ruleId = current_rule.id
 
@@ -80,20 +161,6 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
 
     #with open(json_path, "r") as f:
     #    json_data = json.load(f)
-
-    # TRAIN
-    for trainId, item in enumerate(json_data.get("train", [])):
-        input_grid = item["input"]
-        ai = build_start_input(trainId, input_grid, True, scenarioId, ruleId)
-        print(f"📥 Added get_start_input for trainId={trainId}: {ai.id}")
-        action_instances.append(ai)
-
-    # TEST
-    for testId, item in enumerate(json_data.get("test", [])):
-        input_grid = item["input"]
-        ai = build_start_input(testId, input_grid, False, scenarioId, ruleId)
-        print(f"📥 Added get_start_input for testId={testId}: {ai.id}")
-        action_instances.append(ai)
 
     print("\n🔧 Running constant detection...")
     auto_find_constant_for_signature(action_instances)
@@ -145,6 +212,20 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
 
     return procedures
 
+
+def compute_get_start_input(action_instances, json_data, ruleId, scenarioId):
+    # TRAIN
+    for trainId, item in enumerate(json_data.get("train", [])):
+        input_grid = item["input"]
+        ai = build_start_input(trainId, input_grid, True, scenarioId, ruleId)
+        print(f"📥 Added get_start_input for trainId={trainId}: {ai.id}")
+        action_instances.append(ai)
+    # TEST
+    for testId, item in enumerate(json_data.get("test", [])):
+        input_grid = item["input"]
+        ai = build_start_input(testId, input_grid, False, scenarioId, ruleId)
+        print(f"📥 Added get_start_input for testId={testId}: {ai.id}")
+        action_instances.append(ai)
 
 
 def extract_rules_from_procedure(procedure: Procedure) -> str:
@@ -309,7 +390,7 @@ def auto_link_by_common_attribute(
         for path, binding in _iter_all_bindings(consumer.bindings):
             if binding.binding == BindingStatus.UNRESOLVED \
             and binding.value is not None \
-            and binding.type in ("Integer", "Color"):
+            and binding.type in ("Integer", "Color", "Grid"):
                 unresolved_by_path[path].append((consumer, binding))
                 if consumer.trainId != -1:
                     trainval_by_path[path].append((consumer.trainId, binding.value))
@@ -325,15 +406,32 @@ def auto_link_by_common_attribute(
         # pick the right attribute map
         if binding_type == "Integer":
             attr_map = GLOBAL.get_attributes_by_scenario_rule(scenarioId, ruleId)
+            action_spec = extract_common_attribute_action(attr_map, pairs, path, current_rule.tables)
         elif binding_type == "Color":
             attr_map = GLOBAL.get_attributes_colors_by_scenario_rule(scenarioId, ruleId)
+            action_spec = extract_common_attribute_action(attr_map, pairs, path, current_rule.tables)
+        elif binding_type == "Grid":
+            # 1) Build the reverse map: concrete-grid → sprite_analysis_id
+            sprite_data_id_map = GLOBAL.build_sprite_data_id_map(scenarioId, ruleId)
+
+            # 2) Convert your (trainId, rawGrid) pairs into (trainId, sa_id)
+            id_pairs: List[Tuple[int, int]] = []
+            for trainId, raw_grid in pairs:
+                # raw_grid is already a tuple-of-tuples
+                sa_id = sprite_data_id_map.get(raw_grid)
+                if sa_id is not None:
+                    id_pairs.append((trainId, sa_id))
+
+            # a map from sprite_unique_id → raw JSON grid
+            sprite_data_id_map = GLOBAL.build_sprite_data_id_map(scenarioId, ruleId)
+            action_spec = extract_common_sprite_grid_action(
+                id_pairs,
+                path,
+                current_rule.tables
+            )
         else:
             continue
 
-        # call your refactored function
-        action_spec = extract_common_attribute_action(
-            attr_map, pairs, path, current_rule.tables
-        )
         if action_spec is None:
             print(f"   ❌ No common attribute action for path {path}")
             continue
@@ -392,7 +490,6 @@ def auto_link_by_common_attribute(
                     ruleId=ruleId,
                     criteria=criteria,
                     attribute_name=output_attr,
-                    sprite_ids=sprite_ids,
                     trainId=train_id,
                     testId=test_id
                 )
@@ -405,7 +502,6 @@ def auto_link_by_common_attribute(
                     output_value=value,
                     criteria=criteria,
                     attribute_name=output_attr,
-                    sprite_ids=sprite_ids,
                     scenarioId=scenarioId,
                     ruleId=ruleId
                 )
@@ -459,6 +555,30 @@ def auto_link_by_common_attribute(
                 new_instances.append(instance)
                 binding.binding = BindingStatus.VARIABLE
                 binding.source_procedure_id = instance.id
+
+        # 3d) selectSpriteGridAction
+        elif action_spec["type"] == "selectSpriteGridAction":
+            # assume you’ve encoded this in your spec
+            criteria = action_spec["criteria"]
+            for consumer, binding in unresolved_by_path[path]:
+                grid = _aa_mod.select_sprite_grid_fn(
+                    scenarioId=scenarioId,
+                    ruleId=ruleId,
+                    criteria=criteria,
+                    trainId=consumer.trainId,
+                    testId=consumer.testId
+                )
+                inst = build_select_sprite_grid_instance(
+                    trainId=consumer.trainId,
+                    testId=consumer.testId,
+                    criteria=criteria,
+                    output_grid=grid,
+                    scenarioId=scenarioId,
+                    ruleId=ruleId
+                )
+                new_instances.append(inst)
+                binding.binding = BindingStatus.VARIABLE
+                binding.source_procedure_id = inst.id
 
         else:
             print(f"   ⚠️ Unknown action type {action_spec['type']} for path {path}")
@@ -976,7 +1096,29 @@ def evaluate_generic_procedures(
     return_execution_trace=False
 ):
     def get_original_step(proc: Procedure, cloned_step_id: str) -> Optional[ActionInstance]:
-        return proc.steps.get(cloned_step_id)
+        for inst in proc.steps.values():
+            if inst.id == cloned_step_id:
+                return inst
+        return None
+
+    def remove_failed_step(proc: Procedure, failed_step_id: str):
+        # find the dict‐key whose ActionInstance.id == failed_step_id
+        for key, inst in list(proc.steps.items()):
+            if inst.id == failed_step_id:
+                del proc.steps[key]
+                print(f"🗑 Removed failed step {failed_step_id} from procedure {proc.id}")
+                break
+
+    def truncate_after_end(proc: Procedure, end_step_id: str):
+        # proc.steps is an OrderedDict of id→ActionInstance
+        keys = list(proc.steps.keys())
+        try:
+            i = keys.index(end_step_id)
+        except ValueError:
+            return
+        for k in keys[i + 1:]:
+            del proc.steps[k]
+            print(f"🗑 Truncated step {k} after END in {proc.id}")
 
     def learn_from_success(proc: Procedure, selected_step: Optional[str]):
         if selected_step:
@@ -1039,9 +1181,16 @@ def evaluate_generic_procedures(
 
                 print(f"⚙️  Evaluating {step.action.name} with args: {resolved_args}")
                 output = step.action.function(**resolved_args)
+                print(f"⚙️ {step.id} = {output}")
                 step.output_value = output
                 context[step.id] = output
                 executed_steps.append(step.id)
+
+                #for b in step.bindings.values():
+                #    if b.binding == BindingStatus.BUFFER and b.source_procedure_id:
+                #        buf_inst = step.bufferInstance
+                #        buf_inst.output_value = output
+                #        print(f"🔄 Mutated buffer {buf_inst.id}.output_value = {output}")
 
                 if return_execution_trace:
                     trace.append({
@@ -1051,11 +1200,19 @@ def evaluate_generic_procedures(
                         "output": output,
                     })
 
-                if step.END:
-                    candidate_outputs.append((step.id, output))
-                    if expected_output is not None and not concrete_grids_equal(output, expected_output):
-                        print(f"🧑‍☠️ {step.id} marked inactive due to wrong output")
-                        step.active = False
+                if expected_output and mode == "train":
+                    isEND = concrete_grids_equal(output, expected_output)
+                    step.END = isEND
+                    if isEND:
+                        print(f"📌 END FOUND FOR {step.action.name}" )
+                        truncate_after_end(proc, step.id)
+
+                #if step.END == True:
+                #    candidate_outputs.append((step.id, output))
+                #    if expected_output is not None and not concrete_grids_equal(output, expected_output):
+                #        print(f"🧑‍☠️ {step.id} marked inactive due to wrong output")
+                #        step.active = False
+                #        remove_failed_step(proc, step.id)
 
             selected_output = None
             selected_step = None
@@ -1220,6 +1377,13 @@ def evaluate_step_with_multiple(step, input_grid, context):
         result = step.action.function(**args)
         step.output_value = result
         context[step.id] = result
+        # —— NEW: rewrite the buffer action’s own output_value
+        #for b in step.bindings.values():
+        #    if b.binding == BindingStatus.BUFFER and b.source_procedure_id:
+        #        buf_inst = step.bufferInstance
+        #        buf_inst.output_value = result
+        #        print(f"🔄 Mutated buffer {buf_inst.id}.output_value = {result}")
+
         print(f"Execution succeeded and stored in context: {step.id} produced {result}")
         return result
     except Exception as e:
@@ -1636,6 +1800,15 @@ def resolve_binding_recursive(binding, context, input_grid, step):
             ]
         else:
             raise ValueError("Unexpected sub_bindings type encountered.")
+
+    elif binding.binding == BindingStatus.BUFFER:
+        if step.bufferInstance:
+            buf_inst_id = step.bufferInstance.id
+            val = context[buf_inst_id]
+            print(f"  🧠 Resolving BUFFER binding from {binding.source_procedure_id}: {val!r}")
+            return val
+        else:
+            raise RuntimeError(f"No source_procedure_id on BUFFER binding {binding}")
 
     else:
         print(f"  🔚 Unhandled binding type {binding.binding} Returning value: {binding.value}")

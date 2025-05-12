@@ -677,6 +677,7 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
     attr["isFromSplit"] = flags.get("isFromSplit", False)
     attr["isFromHole"] = flags.get("isFromHole", False)
     attr["isFromCut"] = flags.get("isFromCut", False)
+    attr["isFromColorZone"] = flags.get("isFromColorZone", False)
 
     minX, minY, maxX, maxY = bbox
     attr["minX"] = minX
@@ -694,6 +695,11 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
         attr["bgColor"] = None
     else:
         attr["bgColor"] = background_color_sprite(sprite_obj)
+
+    # — NEW: per‐color counts & presence/absence/etc. —
+    # uses the color_counts_in_sprite(grid) helper defined below
+    per_color = color_counts_in_sprite(sprite)
+    attr.update(per_color)
 
     # For dimension, we can do:
     h = len(sprite)
@@ -890,7 +896,8 @@ def compute_split_sprites_by_ratio(input_grid, output_grid, filename, trainId, t
             "isGrid": False,
             "isFromSplit": True,
             "isFromHole": False,
-            "isFromCut": False
+            "isFromCut": False,
+            "isFromColorZone": False,
         }
         sprite = fill_sprite_attributes(grid, filename, trainId, testId, flags, subgrid, bbox)
         sprite["minX"], sprite["minY"], sprite["maxX"], sprite["maxY"] = bbox
@@ -948,7 +955,8 @@ def compute_splitter_sprite(grid, filename, trainId, testId, isInsideInput):
         "isGrid": False,
         "isFromSplit": True,
         "isFromHole": False,
-        "isFromCut": True
+        "isFromCut": True,
+        "isFromColorZone": False,
     }
 
     # --- Try vertical splitter detection ---
@@ -1304,7 +1312,8 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
                 "isGrid":False,
                 "isFromSplit":False,
                 "isFromHole":True,
-                "isFromCut":False
+                "isFromCut":False,
+                "isFromColorZone": False,
             }
             spr = fill_sprite_attributes(grid, filename, trainId, testId, flags, hole_grid, bbox)
             hole_obj = asobject(hole_grid)
@@ -1318,6 +1327,78 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
 
     return sprites
 
+def compute_sprites_color_zone(grid, filename, trainId, testId, isInsideInput):
+    """
+    Extract sprites from interior regions where a single color occupies at least
+    40% of its bounding box, and that bounding box does NOT touch the grid edge.
+    """
+    print("[ compute_sprites_color_zone ]")
+    sprites = []
+
+    height = len(grid)
+    width  = len(grid[0]) if height else 0
+
+    for color_name, color_value in COLOR_MAP.items():
+        # collect all coords of this color
+        coords = [(x, y)
+                  for y, row in enumerate(grid)
+                  for x, v in enumerate(row)
+                  if v == color_value]
+        if not coords:
+            continue
+
+        xs, ys = zip(*coords)
+        minX, maxX = min(xs), max(xs) + 1
+        minY, maxY = min(ys), max(ys) + 1
+        w, h = maxX - minX, maxY - minY
+        area = w * h
+
+        # size checks: area ≥ 9, both dims > 1
+        if area < 9 or w == 1 or h == 1:
+            continue
+
+        # reject if bbox touches any grid border
+        if minX == 0 and minY == 0 and maxX == width and maxY == height:
+            continue
+
+        # require ≥40% of pixels in box be this color
+        count_in_box = sum(
+            1
+            for row in grid[minY:maxY]
+            for v in row[minX:maxX]
+            if v == color_value
+        )
+        if count_in_box < 0.4 * area:
+            continue
+
+        # slice out subgrid
+        subgrid = [row[minX:maxX] for row in grid[minY:maxY]]
+
+        # prepare flags (including new isFromColorZone)
+        flags = {
+            "isInsideInput":    isInsideInput,
+            "isInsideOutput":   not isInsideInput,
+            "isInsideTrain":    (trainId != -1),
+            "isInsideTest":     (testId  != -1),
+            "isInsideBuffer":   False,
+            "isGrid":           False,
+            "isFromSplit":      False,
+            "isFromHole":       False,
+            "isFromCut":        False,
+            "isFromColorZone":  True,
+        }
+
+        # build the sprite record
+        spr = fill_sprite_attributes(
+            grid, filename, trainId, testId, flags,
+            subgrid, (minX, minY, maxX, maxY)
+        )
+        # ensure the new flag persists
+        spr["isFromColorZone"] = True
+
+        sprites.append(spr)
+
+    return sprites
 
 ###############################################
 # Processing JSON data to insert sprite_analysis records
@@ -1364,6 +1445,8 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     all_sprite_analysis_rows = []
     next_sprite_analysis_id = 1
 
+    _train_split_ratios = set()
+
     def process_item(item, is_input, index, isTrain):
         nonlocal next_sprite_analysis_id
         # 0. Basic info
@@ -1385,7 +1468,8 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
             "isGrid": True,
             "isFromSplit": False,
             "isFromHole": False,
-            "isFromCut": False
+            "isFromCut": False,
+            "isFromColorZone": False,
         }
 
         bbox = compute_bounding_box(grid)
@@ -1398,10 +1482,20 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
         all_sprite_analysis_rows.append(sprite_entire)
 
         # 2. Possibly do dimension-based splits (compute_split_sprites_by_ratio)
+        split_sprites = []
         if "output" in item:
-            split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
-        else:
-            split_sprites = []
+            if isTrain:
+                # always compute on train, *and* record its ratios
+                split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
+                for spl in split_sprites:
+                    _train_split_ratios.add((spl["width"], spl["height"]))
+            else:
+                # only split test if all train splits agreed on one ratio
+                if len(_train_split_ratios) == 1:
+                    split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
+                else:
+                    # no‐ops: leave split_sprites = []
+                    print(f"⏭ skipping test‐split because train ratios = {_train_split_ratios}")
         all_sprite_rows.extend(split_sprites)
 
         # Now also fill the new tables.
@@ -1491,6 +1585,43 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
                 hx1, hy1 = hs["maxX"], hs["maxY"]
                 hole_grid = [row[hx0:hx1] for row in grid[hy0:hy1]]
                 store_in_sprite_unique_and_occurrence(hs, hole_grid, sprite_global_data)
+
+        sprites_color_zone = compute_sprites_color_zone(grid, filename, trainId, testId, is_input)
+        # 0) prepare a set of all bounding‐boxes we’ve already seen
+        existing_boxes = {
+            (r["minX"], r["minY"], r["maxX"], r["maxY"])
+            for r in all_sprite_rows
+        }
+
+        # 1) filter out any color-zone sprites whose bbox is already in all_sprite_rows
+        new_color_zone_sprites = [
+            cz for cz in sprites_color_zone
+            if (cz["minX"], cz["minY"], cz["maxX"], cz["maxY"]) not in existing_boxes
+        ]
+
+        # 2) now add only the truly new ones
+        all_sprite_rows.extend(sprites_color_zone)
+
+        # Now assign IDs, register for analysis, slice out their subgrids, and store
+        for cz in sprites_color_zone:
+            cz["id"] = next_sprite_analysis_id
+            next_sprite_analysis_id += 1
+
+            # 4a) Add to the sprite_analysis staging list
+            all_sprite_analysis_rows.append(cz)
+            # all_sprite_analysis_rows was initialized at the top of process_sprites_from_json :contentReference[oaicite:2]{index=2}:contentReference[oaicite:3]{index=3}
+
+            # 4b) Re-slice the exact subgrid for this color‐zone
+            cx0, cy0 = cz["minX"], cz["minY"]
+            cx1, cy1 = cz["maxX"], cz["maxY"]
+            cz_grid = [row[cx0:cx1] for row in grid[cy0:cy1]]
+
+            # 4c) Finally, record it in sprite_unique / sprite_occurrence
+            store_in_sprite_unique_and_occurrence(
+                cz,  # your attribute dict
+                cz_grid,  # the extracted subgrid
+                sprite_global_data
+            )
 
     for index, item in enumerate(data.get("train", [])):
         if index < 30:
