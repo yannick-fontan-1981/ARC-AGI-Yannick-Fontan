@@ -1,6 +1,6 @@
 # grid_dsl.py
 
-from typing import Union, Tuple, List, Sequence
+from typing import Union, Tuple, List, Sequence, Iterable
 import json
 
 from typing import Tuple, List, Union
@@ -61,6 +61,63 @@ def shift(grid: Grid, di: int, dj: int) -> Grid:
             if 0 <= ni < rows and 0 <= nj < cols:
                 new_grid[ni][nj] = grid[i][j]
 
+    return tuple(tuple(row) for row in new_grid)
+
+def shift_with_background(
+    grid: Grid,
+    patch: Grid,
+    patch_min_x: int,
+    patch_min_y: int,
+    move_rel_x: int,
+    move_rel_y: int,
+    object_color: int,
+    background_color: int
+) -> Grid:
+    """
+    Shift a subgrid patch within the provided grid, ignoring anonymized (-8) pixels.
+
+    Parameters:
+      grid: the base grid to modify (e.g., anonymized output grid).
+      patch: the extracted object subgrid, with -8 for anonymized cells.
+      patch_min_x, patch_min_y: top-left coordinates of patch in the base grid.
+      move_rel_x, move_rel_y: the (dx, dy) offsets to move the patch.
+      obj_color: the color of the object cells in the patch.
+      background_color: color to fill in vacated cells.
+
+    Returns a new Grid with the patch moved and vacated cells filled.
+    """
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+
+    # Copy the base grid to a mutable buffer
+    new_grid = [list(row) for row in grid]
+
+    patch_h = len(patch)
+    patch_w = len(patch[0]) if patch_h else 0
+
+    # 1) Erase original patch cells, but only actual object pixels (ignore -8)
+    for i_local in range(patch_h):
+        for j_local in range(patch_w):
+            cell = patch[i_local][j_local]
+            if cell == object_color:
+                i = patch_min_y + i_local
+                j = patch_min_x + j_local
+                if 0 <= i < rows and 0 <= j < cols:
+                    new_grid[i][j] = background_color
+
+    # 2) Draw moved patch cells at new positions, ignore anonymized
+    for i_local in range(patch_h):
+        for j_local in range(patch_w):
+            cell = patch[i_local][j_local]
+            if cell == object_color:
+                i = patch_min_y + i_local
+                j = patch_min_x + j_local
+                ni = i + move_rel_y
+                nj = j + move_rel_x
+                if 0 <= ni < rows and 0 <= nj < cols:
+                    new_grid[ni][nj] = object_color
+
+    # 3) Return new grid frozen
     return tuple(tuple(row) for row in new_grid)
 
 
@@ -262,22 +319,22 @@ def crop(grid: tuple[tuple[int, ...], ...], minX: int, minY: int, width: int, he
 
 def fill_grid(mask: Grid, color: int) -> Grid:
     """
-    Given a mask grid where object pixels are marked with -8 and background with -1,
-    return a new grid where all -8 entries are replaced by the specified color,
+    Given a mask grid where object pixels are marked with -5 and background with -1,
+    return a new grid where all -5 entries are replaced by the specified color,
     and all other entries (background) remain unchanged (-1).
 
     Args:
-        mask: Grid of ints, with -8 for object mask, -1 for background
+        mask: Grid of ints, with -5 for object mask, -1 for background
         color: Integer color value to fill into the mask locations
 
     Returns:
-        A new Grid where each -8 is replaced by `color`, others unchanged.
+        A new Grid where each -5 is replaced by `color`, others unchanged.
     """
     # Collect each filled row in a list
     filled_rows: List[Tuple[int, ...]] = []
     for row in mask:
         filled_row = tuple(
-            (color if cell == -8 else cell)
+            (color if cell == -5 else cell)
             for cell in row
         )
         filled_rows.append(filled_row)

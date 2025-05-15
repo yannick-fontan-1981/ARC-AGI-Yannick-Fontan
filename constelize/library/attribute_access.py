@@ -1,6 +1,6 @@
 #constelize/library/attribute_access.py
 import json
-from typing import List, Tuple
+from typing import List, Tuple, Any, Optional
 
 import constelize.tools.globals as GLOBAL
 from constelize.core.action import Action
@@ -168,6 +168,58 @@ def select_sprite_grid_fn(
     raw = json.loads(sprite_tbl[chosen]["data"])
     return to_concrete_grid(raw)
 
+
+def select_object_grid_fn(
+    scenarioId: str,
+    ruleId:     str,
+    criteria:   List[Tuple[str, Any]],
+    trainId:    int | None = None,
+    testId:     int | None = None
+) -> Optional[Grid]:
+    """
+    Return the minimal object patch grid for the object_analysis entry that
+    best matches the given criteria (highest count of attr==val), filtered by
+    trainId/testId. If no row matches at least one criterion, return None.
+    """
+    obj_tbl = GLOBAL.load_object_analysis_table(scenarioId, ruleId)
+
+    best_oid = None
+    best_score = -1
+    # pick the object with highest match count
+    for oid, row in obj_tbl.items():
+        if trainId is not None and row.get("trainId") != trainId:
+            continue
+        if testId is not None and row.get("testId") != testId:
+            continue
+        # count satisfied criteria
+        score = sum(1 for attr, val in criteria if row.get(attr) == val)
+        if score > best_score:
+            best_score = score
+            best_oid = oid
+    # require at least one match
+    if best_oid is None or best_score <= 0:
+        return None
+
+    # parse chosen row and build patch as before
+    row = obj_tbl[best_oid]
+    coords_abs = json.loads(row.get("data", "[]"))
+    if not coords_abs:
+        return None
+    rows_coord = [r for r, _ in coords_abs]
+    cols_coord = [c for _, c in coords_abs]
+    min_r, max_r = min(rows_coord), max(rows_coord)
+    min_c, max_c = min(cols_coord), max(cols_coord)
+    height = max_r - min_r + 1
+    width  = max_c - min_c + 1
+    color = int(row.get("color", 0))
+
+    patch = [[-1 for _ in range(width)] for __ in range(height)]
+    for r, c in coords_abs:
+        lr, lc = r - min_r, c - min_c
+        patch[lr][lc] = color
+
+    return tuple(tuple(r) for r in patch)
+
 ACTIONS = [
     Action(
         id="get_start_input",
@@ -310,5 +362,23 @@ ACTIONS = [
       ],
       output_type="Grid",
       function=select_sprite_grid_fn
+    ),
+    Action(
+        id="select_object_grid",
+        name="Select Object Grid",
+        description=(
+            "Filter a list of objects by (attribute==value) criteria and return "
+            "the minimal object patch grid for the first match."
+        ),
+        category=ActionCategory.SELECTION_FILTERING,
+        input_arguments=[
+            ArgumentBinding("scenarioId", "String", binding=BindingStatus.INSTANCE),
+            ArgumentBinding("ruleId",     "String", binding=BindingStatus.INSTANCE),
+            ArgumentBinding("trainId",    "Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding("testId",     "Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding("criteria",   "List[Tuple[String,Integer]]", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=select_object_grid_fn
     )
 ]

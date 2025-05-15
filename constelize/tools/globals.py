@@ -89,6 +89,60 @@ def get_attributes_colors_by_scenario_rule(scenarioId: str, ruleId: str) -> Dict
                 return rule.attributes_by_input_and_colors
     return {}
 
+def build_object_data_id_map(
+    scenarioId: str,
+    ruleId:     str
+) -> Dict[int, Dict[Tuple[Tuple[int, ...], ...], int]]:
+    """
+    Return a map from each trainId to its objects’ shape patterns → object_analysis.id.
+    Each shape pattern is the minimal bounding patch with non-object cells as -1.
+
+    Steps:
+     1. Fetch object_analysis table: id → { "trainId", "data", "color" }.
+     2. Parse `data` JSON into list of absolute coordinates.
+     3. For each object, compute its bounding box from coords.
+     4. Build a patch grid of size (height×width), fill -1, then set object pixels.
+     5. Convert to tuple-of-tuples as dict key, grouped by trainId.
+    """
+    obj_tbl = load_object_analysis_table(scenarioId, ruleId)
+    object_data_id_map: Dict[int, Dict[Tuple[Tuple[int, ...], ...], int]] = {}
+
+    for oid, row in obj_tbl.items():
+        if int(row.get("isInsideInput", 0)) != 1:
+            continue
+        train_id = int(row.get("trainId", -1))
+        if train_id == -1:
+            continue
+        data_json = row.get("data")
+        if not data_json:
+            continue
+
+        # parse JSON into Python list of [r, c]
+        coords_abs: List[Tuple[int,int]] = json.loads(data_json)
+        if not coords_abs:
+            continue
+
+        # compute bounding box from coords
+        rows_coord = [r for r, _ in coords_abs]
+        cols_coord = [c for _, c in coords_abs]
+        min_r, max_r = min(rows_coord), max(rows_coord)
+        min_c, max_c = min(cols_coord), max(cols_coord)
+        height = max_r - min_r + 1
+        width  = max_c - min_c + 1
+        color = int(row.get("color", 0))
+
+        # build minimal patch grid with -1 padding
+        patch = [[-1 for _ in range(width)] for _ in range(height)]
+        for r, c in coords_abs:
+            local_r = r - min_r
+            local_c = c - min_c
+            patch[local_r][local_c] = color
+
+        # freeze to tuple-of-tuples for hashing
+        grid_key = tuple(tuple(row_vals) for row_vals in patch)
+        object_data_id_map.setdefault(train_id, {})[grid_key] = oid
+
+    return object_data_id_map
 
 def build_sprite_data_id_map(
     scenarioId: str,

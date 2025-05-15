@@ -5,7 +5,7 @@ from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
-    zoom, paint, Grid, crop, unzoom
+    zoom, paint, Grid, crop, unzoom, shift_with_background
 from typing import Tuple, Any, List, Dict
 
 
@@ -271,6 +271,29 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=initialize_buffer_fn,
+        deterministic=True,
+        pure=True
+    ),
+    Action(
+        id="move_object",
+        name="Move Object",
+        description=(
+            "Shifts a specified patch within a grid by given offsets (dy, dx), "
+            "and fills the vacated cells with a background color."
+        ),
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="patch_min_x", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="patch_min_y", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="move_rel_x", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="move_rel_y", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="object_color", type="Color", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="background_color", type="Color", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=shift_with_background,
         deterministic=True,
         pure=True
     )

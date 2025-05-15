@@ -8,7 +8,7 @@ import sys
 from sympy import false
 from solver.dsl import *
 import time
-from collections import OrderedDict
+from collections import OrderedDict, Counter
 
 
 def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isInsideInput: bool, global_data, conn):
@@ -92,17 +92,42 @@ def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isIn
 
         is_same_exactly_same = (base_shape == stored_version)
 
+        # Build all candidate transforms of the base shape
+        cands = {
+            "rot90": rot90Shape(base_shape),
+            "rot180": rot180Shape(base_shape),
+            "rot270": rot270Shape(base_shape),
+            "flipped_vert": vmirrorShape(base_shape),
+            "flipped_horiz": hmirrorShape(base_shape),
+            "flipped_vert_90": vmirrorShape(rot90Shape(base_shape)),
+            "flipped_horiz_90": hmirrorShape(rot90Shape(base_shape)),
+        }
+
+        # Determine which transform matches the stored version
+        flags = {
+            name: (sorted(variant) == sorted(stored_version))
+            for name, variant in cands.items()
+        }
+
+        # If shape is invariant under any transform, clear all flags
+        for name, variant in cands.items():
+            if sorted(variant) == sorted(base_shape):
+                flags = {n: False for n in flags}
+                break
+
+        # Also clear flags for trivial or first occurrence
         if pixel_count == 1 or is_same_exactly_same or is_first_occurrence:
-            rotated_90 = rotated_180 = rotated_270 = False
-            flipped_vert = flipped_horiz = flipped_vert_90 = flipped_horiz_90 = False
-        else:
-            rotated_90 = (sorted(stored_version) == sorted(rot90Shape(base_shape)))
-            rotated_180 = (sorted(stored_version) == sorted(rot180Shape(base_shape)))
-            rotated_270 = (sorted(stored_version) == sorted(rot270Shape(base_shape)))
-            flipped_vert = (sorted(stored_version) == sorted(vmirrorShape(base_shape)))
-            flipped_horiz = (sorted(stored_version) == sorted(hmirrorShape(base_shape)))
-            flipped_vert_90 = (sorted(stored_version) == sorted(vmirrorShape(rot90Shape(base_shape))))
-            flipped_horiz_90 = (sorted(stored_version) == sorted(hmirrorShape(rot90Shape(base_shape))))
+            flags = {n: False for n in flags}
+
+        # Unpack flags
+        rotated_90     = flags["rot90"]
+        rotated_180    = flags["rot180"]
+        rotated_270    = flags["rot270"]
+        flipped_vert   = flags["flipped_vert"]
+        flipped_horiz  = flags["flipped_horiz"]
+        flipped_vert_90 = flags["flipped_vert_90"]
+        flipped_horiz_90 = flags["flipped_horiz_90"]
+
 
         # --- Manage the shape_transformation record in memory ---
         trans_key = (stored_shape_id, color, rotated_90, rotated_180, rotated_270,
@@ -191,21 +216,32 @@ def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isIn
         )
         obj_row["adjacentBlocksCount"] = obj_row["orthoAdjacentBlocksCount"] + obj_row["diagAdjacentBlocksCount"]
 
-        ortho_neighbors = {index(grid, n) for r, c in toindices(obj)
-                           for n in dneighbors((r, c))
-                           if index(grid, n) is not None}
-        obj_row["orthoNeighborColorCount"] = len(ortho_neighbors)
-        obj_row["orthoNeighborColorList"] = ",".join(map(str, sorted(ortho_neighbors)))
-
-        diag_neighbors = {index(grid, n) for r, c in toindices(obj)
-                          for n in ineighbors((r, c))
-                          if index(grid, n) is not None}
-        obj_row["diagNeighborColorCount"] = len(diag_neighbors)
-        obj_row["diagNeighborColorList"] = ",".join(map(str, sorted(diag_neighbors)))
-
-        all_neighbors = ortho_neighbors | diag_neighbors
-        obj_row["neighborColorCount"] = len(all_neighbors)
-        obj_row["neighborColorList"] = ",".join(map(str, sorted(all_neighbors)))
+        # collect orthogonal neighbor colors, excluding None and the object’s own color
+        ortho_counter = Counter(
+            col
+            for r, c in toindices(obj)
+            for n in dneighbors((r, c))
+            if (col := index(grid, n)) is not None and col != color
+        )
+        # sort colors by descending frequency
+        ortho_sorted = [col for col, _ in ortho_counter.most_common()]
+        obj_row["orthoNeighborColorCount"] = len(ortho_sorted)
+        obj_row["orthoNeighborColorList"] = ",".join(map(str, ortho_sorted))
+        # collect diagonal neighbor colors with counts, excluding None and the object’s own color
+        diag_counter = Counter(
+            col
+            for r, c in toindices(obj)
+            for n in ineighbors((r, c))
+            if (col := index(grid, n)) is not None and col != color
+        )
+        diag_sorted = [col for col, _ in diag_counter.most_common()]
+        obj_row["diagNeighborColorCount"] = len(diag_sorted)
+        obj_row["diagNeighborColorList"] = ",".join(map(str, diag_sorted))
+        # combined neighbor colors with summed counts
+        combined_counter = ortho_counter + diag_counter
+        combined_sorted = [col for col, _ in combined_counter.most_common()]
+        obj_row["neighborColorCount"] = len(combined_sorted)
+        obj_row["neighborColorList"] = ",".join(map(str, combined_sorted))
 
         obj_row["diffGridColorObjectColor"] = colorcount(grid, obj_row["color"]) - len(obj)
         obj_row["sameColorBlocksCount"] = sum(1 for o in blocks_in if color_of(o) == obj_row["color"])
@@ -333,13 +369,40 @@ def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isIn
         # The occ_row will later be augmented with the foreign key "object_id".
         results.append((obj_row, occ_row))
 
-    obj_rows = [obj_row for obj_row, _ in results]
+    obj_rows = [obj_row for obj_row, occ_row in results]
     sorted_by_size = sorted(obj_rows, key=lambda r: r["pixelCount"], reverse=True)
     for rank, row in enumerate(sorted_by_size, start=1):
         row["sizeOrder"] = rank
 
     return results
 
+def compute_move_behind_color(input_grid, output_grid, pixels, obj_color, neighbor_colors=None):
+    """
+    Compute the color of the pixel(s) left behind when moving an object.
+    - pixels: iterable of (row,col) coordinates in the grid.
+    - obj_color: the color of the object being moved.
+    - neighbor_colors: optional list of neighbor-colors fallback.
+    Returns:
+      * common behind-color if all vacated pixels share the same color != obj_color
+      * else first element of neighbor_colors if provided and non-empty
+      * otherwise None.
+    """
+    if not pixels:
+        return None
+    # Colors in output at original positions
+    behind_colors = [output_grid[r][c] for r, c in pixels]
+    # Exclude object color
+    filtered = [col for col in behind_colors if col != obj_color]
+    if not filtered:
+        return None
+    _first = filtered[0]
+    # Uniform behind-color?
+    if all(col == _first for col in filtered):
+        return _first
+    # Fallback to most common neighbor color
+    if neighbor_colors:
+        return neighbor_colors[0]
+    return None
 
 def bulk_insert(conn, table, rows):
     """
@@ -356,6 +419,7 @@ def bulk_insert(conn, table, rows):
 
 
 def process_objects_from_json(filename, data, conn, clear_table=True):
+
     if clear_table:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM object_analysis;")
@@ -377,13 +441,21 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
     all_occ_rows = []  # For shape_occurrence rows.
     next_object_id = 1  # We assign object_analysis ids programmatically.
 
+    input_grids = {}
+    output_grids = {}
+    object_pixels = {}
+
     def process_items(items, is_input, isTrain):
         nonlocal next_object_id
         for idx, item in enumerate(items):
             if is_input:
                 grid = item.get("input")
+                if isTrain:
+                    input_grids[idx] = grid
             else:
                 grid = item.get("output")
+                if isTrain:
+                    output_grids[idx] = grid
                 if grid is None:
                     print(f"⚠️ Skipping test[{idx}] output: no 'output' field.")
                     continue  # skip this item if no output
@@ -396,6 +468,9 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
             for obj_row, occ_row in rows:
                 obj_row["id"] = next_object_id
                 occ_row["object_id"] = next_object_id
+                pixel_list = json.loads(obj_row["data"])
+                coords = [tuple(coord) for coord in pixel_list]
+                object_pixels[next_object_id] = coords
                 next_object_id += 1
                 all_obj_rows.append(obj_row)
                 all_occ_rows.append(occ_row)
@@ -411,7 +486,282 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
     bulk_insert(conn, "shape_transformation", global_data["trans_records"])
     bulk_insert(conn, "object_analysis", all_obj_rows)
     bulk_insert(conn, "shape_occurrence", all_occ_rows)
+
+    # now populate the relational flags & fields uniqueness in input vs output
+    cur = conn.cursor()
+    cur.executescript("""
+    -- 1) isObjectUnique
+    UPDATE object_analysis AS oa
+    SET isObjectUnique = CASE
+      WHEN oa.testId = -1 AND oa.isInsideInput = 1 THEN
+        (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+         FROM object_analysis i
+         WHERE i.trainId = oa.trainId
+           AND i.testId = -1
+           AND i.isInsideInput = 1
+           AND i.data = oa.data
+           AND i.color = oa.color)
+      ELSE NULL END;
+
+    -- 2) isTargetObjectPresent
+    UPDATE object_analysis AS oa
+    SET isTargetObjectPresent = CASE
+      WHEN oa.testId = -1 THEN
+        (SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END
+         FROM object_analysis o
+         WHERE o.trainId = oa.trainId
+           AND o.testId = -1
+           AND o.isInsideOutput = 1
+           AND o.data = oa.data)
+      ELSE NULL END;
+
+    -- 3) isTargetObjectUnique
+    UPDATE object_analysis AS oa
+    SET isTargetObjectUnique = CASE
+      WHEN oa.testId = -1 AND oa.isTargetObjectPresent = 1 THEN
+        (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+         FROM object_analysis o
+         WHERE o.trainId = oa.trainId
+           AND o.testId = -1
+           AND o.isInsideOutput = 1
+           AND o.data = oa.data
+           AND o.color = oa.color)
+      ELSE NULL END;
+
+    -- 4) isShapeUnique
+    UPDATE object_analysis AS oa
+    SET isShapeUnique = CASE
+      WHEN oa.testId = -1 AND oa.isInsideInput = 1 THEN
+        (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+         FROM object_analysis i
+         WHERE i.trainId = oa.trainId
+           AND i.testId = -1
+           AND i.isInsideInput = 1
+           AND i.data = oa.data)
+      ELSE NULL END;
+
+    -- 5) isTargetShapePresent
+    UPDATE object_analysis AS oa
+    SET isTargetShapePresent = CASE
+      WHEN oa.testId = -1 THEN
+        (SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END
+         FROM object_analysis o
+         WHERE o.trainId = oa.trainId
+           AND o.testId = -1
+           AND o.isInsideOutput = 1
+           AND o.data = oa.data)
+      ELSE NULL END;
+
+    -- 6) isTargetShapeUnique
+    UPDATE object_analysis AS oa
+    SET isTargetShapeUnique = CASE
+      WHEN oa.testId = -1 AND oa.isTargetShapePresent = 1 THEN
+        (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+         FROM object_analysis o
+         WHERE o.trainId = oa.trainId
+           AND o.testId = -1
+           AND o.isInsideOutput = 1
+           AND o.data = oa.data)
+      ELSE NULL END;
+
+    -- 7–10) isObjectOneToOne / OneToMany / ManyToOne / ManyToMany
+    UPDATE object_analysis
+    SET
+      isObjectOneToOne   = CASE WHEN isObjectUnique=1 AND isTargetObjectUnique=1 THEN 1 ELSE 0 END,
+      isObjectOneToMany  = CASE WHEN isObjectUnique=1 AND isTargetObjectUnique=0 AND isTargetObjectPresent=1 THEN 1 ELSE 0 END,
+      isObjectManyToOne  = CASE WHEN isObjectUnique=0 AND isTargetObjectUnique=1 THEN 1 ELSE 0 END,
+      isObjectManyToMany = CASE WHEN isObjectUnique=0 AND isTargetObjectUnique=0 AND isTargetObjectPresent=1 THEN 1 ELSE 0 END;
+
+    -- 11–14) isShapeOneToOne / OneToMany / ManyToOne / ManyToMany
+    UPDATE object_analysis
+    SET
+      isShapeOneToOne    = CASE WHEN isShapeUnique=1 AND isTargetShapeUnique=1 THEN 1 ELSE 0 END,
+      isShapeOneToMany   = CASE WHEN isShapeUnique=1 AND isTargetShapeUnique=0 AND isTargetShapePresent=1 THEN 1 ELSE 0 END,
+      isShapeManyToOne   = CASE WHEN isShapeUnique=0 AND isTargetShapeUnique=1 THEN 1 ELSE 0 END,
+      isShapeManyToMany  = CASE WHEN isShapeUnique=0 AND isTargetShapeUnique=0 AND isTargetShapePresent=1 THEN 1 ELSE 0 END;
+
+    -- 15) target_object_id
+    UPDATE object_analysis AS oa
+    SET target_object_id = (
+      SELECT o.id
+      FROM object_analysis o
+      WHERE o.trainId = oa.trainId
+        AND o.testId = -1
+        AND o.isInsideOutput = 1
+        AND o.data = oa.data
+        AND o.color = oa.color
+      LIMIT 1
+    )
+    WHERE oa.testId = -1
+      AND oa.isInsideInput = 1
+      AND oa.isObjectOneToOne = 1;
+
+    -- 16) isObjectDeleted
+    UPDATE object_analysis
+    SET isObjectDeleted = CASE WHEN isTargetObjectPresent=0 THEN 1 ELSE 0 END;
+
+    -- 17) isShapeDeleted
+    UPDATE object_analysis
+    SET isShapeDeleted  = CASE WHEN isTargetShapePresent=0 THEN 1 ELSE 0 END;
+
+    -- 18) isMoved
+    UPDATE object_analysis AS oa
+    SET isMoved = CASE
+      WHEN (oa.isObjectOneToOne=1 OR oa.isShapeOneToOne=1) AND EXISTS (
+            SELECT 1 FROM object_analysis t
+            WHERE t.id = oa.target_object_id
+              AND (t.minX != oa.minX OR t.minY != oa.minY)
+          ) THEN 1
+      ELSE 0 END;
+
+    -- 19) isRotatedOrFlipped
+    UPDATE object_analysis AS oa
+    SET isRotatedOrFlipped = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM shape_occurrence so
+        JOIN shape_transformation st ON so.shape_transformation_id = st.id
+        WHERE so.object_id = oa.id
+          AND (st.rotated_90=1 OR st.rotated_180=1 OR st.rotated_270=1
+               OR st.flipped_vert=1 OR st.flipped_horiz=1
+               OR st.flipped_vert_90=1 OR st.flipped_horiz_90=1)
+      ) THEN 1
+      ELSE 0 END;
+
+    -- 20) isRecolored
+    UPDATE object_analysis AS oa
+    SET isRecolored = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM shape_occurrence so
+        JOIN shape_transformation st ON so.shape_transformation_id = st.id
+        WHERE so.object_id = oa.id
+          AND st.color != oa.color
+      ) THEN 1
+      ELSE 0 END;
+
+    -- 21) isZoomed
+    UPDATE object_analysis AS oa
+    SET isZoomed = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM shape_occurrence so
+        JOIN shape_transformation st ON so.shape_transformation_id = st.id
+        WHERE so.object_id = oa.id
+          AND (st.zoom_x > 1 OR st.zoom_y > 1)
+      ) THEN 1
+      ELSE 0 END;
+
+    -- 22) isGlued
+    UPDATE object_analysis
+    SET isGlued = CASE
+      WHEN isObjectDeleted=1 AND isShapeDeleted=1 THEN 1 ELSE 0 END;
+
+    -- 23) moveRelX
+    UPDATE object_analysis AS oa
+    SET moveRelX = (
+      SELECT t.minX - oa.minX
+      FROM object_analysis t
+      WHERE t.id = oa.target_object_id
+    )
+    WHERE oa.target_object_id IS NOT NULL;
+
+    -- 24) moveRelY
+    UPDATE object_analysis AS oa
+    SET moveRelY = (
+      SELECT t.minY - oa.minY
+      FROM object_analysis t
+      WHERE t.id = oa.target_object_id
+    )
+    WHERE oa.target_object_id IS NOT NULL;
+
+    -- 25) moveBehindColor  (placeholder: leave NULL or implement in Python/SQL as needed)
+    UPDATE object_analysis
+    SET moveBehindColor = NULL;
+
+    -- 26) rotateOrFlip  (concatenate transformation names)
+    -- Done below
+
+    -- 27) recolored  (store the new color)
+    UPDATE object_analysis AS oa
+    SET recolored = (
+      SELECT CAST(st.color AS TEXT)
+      FROM shape_occurrence so
+      JOIN shape_transformation st ON so.shape_transformation_id = st.id
+      WHERE so.object_id = oa.id
+        AND st.color != oa.color
+      LIMIT 1
+    );
+
+    -- 28) zoomX
+    UPDATE object_analysis AS oa
+    SET zoomX = (
+      SELECT st.zoom_x
+      FROM shape_occurrence so
+      JOIN shape_transformation st ON so.shape_transformation_id = st.id
+      WHERE so.object_id = oa.id
+        AND st.zoom_x > 1
+      LIMIT 1
+    );
+
+    -- 29) zoomY
+    UPDATE object_analysis AS oa
+    SET zoomY = (
+      SELECT st.zoom_y
+      FROM shape_occurrence so
+      JOIN shape_transformation st ON so.shape_transformation_id = st.id
+      WHERE so.object_id = oa.id
+        AND st.zoom_y > 1
+      LIMIT 1
+    );
+    """)
+    cur.execute("""
+    UPDATE object_analysis
+    SET rotateOrFlip = (
+      SELECT rtrim(
+        (CASE WHEN st.rotated_90     = 1 THEN 'rot90,'     ELSE '' END)
+      || (CASE WHEN st.rotated_180    = 1 THEN 'rot180,'    ELSE '' END)
+      || (CASE WHEN st.rotated_270    = 1 THEN 'rot270,'    ELSE '' END)
+      || (CASE WHEN st.flipped_horiz  = 1 THEN 'flipH,'     ELSE '' END)
+      || (CASE WHEN st.flipped_vert   = 1 THEN 'flipV,'     ELSE '' END)
+      || (CASE WHEN st.flipped_horiz_90 = 1 THEN 'flipH90,'  ELSE '' END)
+      || (CASE WHEN st.flipped_vert_90  = 1 THEN 'flipV90,'  ELSE '' END)
+      , ','
+      )
+      FROM shape_occurrence so
+      JOIN shape_transformation st
+        ON so.shape_transformation_id = st.id
+      WHERE so.object_id = object_analysis.id
+      LIMIT 1
+    );
+    """)
+
+    moved_rows = cur.execute("""
+        SELECT oa.id, oa.trainId, oa.color, oa.neighborColorList
+        FROM object_analysis AS oa
+        WHERE testId=-1 AND ((oa.moveRelX IS NOT NULL AND oa.moveRelX != 0)
+           OR (oa.moveRelY IS NOT NULL AND oa.moveRelY != 0))
+    """).fetchall()
+
+    for obj_id, trainId, obj_color, neighborColorList in moved_rows:
+        ig = input_grids[trainId]
+        og = output_grids[trainId]
+        pixels = object_pixels[obj_id]
+        neighbor_colors = [int(c) for c in (neighborColorList or "").split(",") if c]
+        # Compute the background color left behind, with fallback to neighbor_colors[0]
+        behind = compute_move_behind_color(
+            ig, og, pixels,
+            obj_color,
+            neighbor_colors
+        )
+        cur.execute(
+            "UPDATE object_analysis SET moveBehindColor = ? WHERE id = ?",
+            (behind, obj_id)
+        )
+
+    # 4) finally, commit all of it in one go
     conn.commit()
+    conn.close()
 
 
 ###############################################

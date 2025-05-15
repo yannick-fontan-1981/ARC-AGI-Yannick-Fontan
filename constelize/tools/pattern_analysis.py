@@ -14,12 +14,13 @@ from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
-from constelize.tools.extract_common_attribute import extract_common_attribute_action, extract_common_sprite_grid_action
+from constelize.tools.extract_common_attribute import extract_common_attribute_action, \
+    extract_common_sprite_grid_action, extract_common_object_grid_action
 
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, \
     build_get_attribute_instance, build_select_sprite_and_attribute_instance, \
     build_select_object_and_attribute_instance, build_repaint_instance, TRAIN_INPUT_GRIDS, TRAIN_OUTPUT_GRIDS, \
-    build_select_sprite_grid_instance
+    build_select_sprite_grid_instance, build_select_object_grid_instance
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
 from constelize.tools.registry_singleton import registry
 from constelize.tools.sqlite_loader import load_sqlite_to_dict
@@ -423,12 +424,28 @@ def auto_link_by_common_attribute(
                     id_pairs.append((trainId, sa_id))
 
             # a map from sprite_unique_id → raw JSON grid
-            sprite_data_id_map = GLOBAL.build_sprite_data_id_map(scenarioId, ruleId)
             action_spec = extract_common_sprite_grid_action(
                 id_pairs,
                 path,
                 current_rule.tables
             )
+            if action_spec is None:
+                # 1) Build the nested reverse map: trainId → (grid → object_analysis_id)
+                object_data_id_map = GLOBAL.build_object_data_id_map(scenarioId, ruleId)
+
+                # 2) Convert your (trainId, rawGrid) pairs into (trainId, objectId)
+                id_pairs_obj: List[Tuple[int, int]] = []
+                for trainId, raw_grid in pairs:
+                    train_map = object_data_id_map.get(trainId, {})
+                    oid = train_map.get(raw_grid)
+                    if oid is not None:
+                        id_pairs_obj.append((trainId, oid))
+
+                action_spec = extract_common_object_grid_action(
+                    id_pairs_obj,
+                    path,
+                    current_rule.tables
+                )
         else:
             continue
 
@@ -462,8 +479,8 @@ def auto_link_by_common_attribute(
                     binding_type  = binding_type,
                     attribute_name= full_attr,
                     output_value  = value,
-                    scenarioId    = consumer.scenarioId,
-                    ruleId        = consumer.ruleId
+                    scenarioId    = scenarioId,
+                    ruleId        = current_rule.id
                 )
                 new_instances.append(inst)
                 binding.binding = BindingStatus.VARIABLE
@@ -569,6 +586,32 @@ def auto_link_by_common_attribute(
                     testId=consumer.testId
                 )
                 inst = build_select_sprite_grid_instance(
+                    trainId=consumer.trainId,
+                    testId=consumer.testId,
+                    criteria=criteria,
+                    output_grid=grid,
+                    scenarioId=scenarioId,
+                    ruleId=ruleId
+                )
+                new_instances.append(inst)
+                binding.binding = BindingStatus.VARIABLE
+                binding.source_procedure_id = inst.id
+
+        # 3d) selectObjectGridAction implementation
+        elif action_spec["type"] == "selectObjectGridAction":
+            # extract criteria encoded in spec
+            criteria = action_spec["criteria"]
+            for consumer, binding in unresolved_by_path[path]:
+                # call the object grid selection function
+                grid = _aa_mod.select_object_grid_fn(
+                    scenarioId=scenarioId,
+                    ruleId=ruleId,
+                    criteria=criteria,
+                    trainId=consumer.trainId,
+                    testId=consumer.testId
+                )
+                # build the ActionInstance for selectObjectGridAction
+                inst = build_select_object_grid_instance(
                     trainId=consumer.trainId,
                     testId=consumer.testId,
                     criteria=criteria,
@@ -839,6 +882,18 @@ def process_compound_binding_recursive(bindings: List[ArgumentBinding], path: st
     # First, handle non-compound sub-bindings directly.
     example_binding = bindings[0]
 
+    # 1) If this is a Grid at all, skip constant inference
+    if example_binding.type == "Grid":
+        # If you really want to also skip only fully anonymized grids, uncomment:
+        def is_full_anonymized(g):
+            return (
+                isinstance(g, tuple)
+                and all(cell == -8 for row in g for cell in row)
+            )
+        if all(is_full_anonymized(b.value) for b in bindings if b.value is not None):
+            print(f"[auto_find_constant_for_compound] Skipping fully anonymized grid at '{path}'")
+            return
+
     if example_binding.binding != BindingStatus.COMPOUND:
         # Collect values for this binding across all instances.
         values = [b.value for b in bindings if b.value is not None]
@@ -881,7 +936,7 @@ def process_compound_binding_recursive(bindings: List[ArgumentBinding], path: st
 
 def values_equal(v1, v2, type_name):
     if type_name == "Grid":
-        return concrete_grids_equal(v1, v2)
+        return grids_equal(v1, v2)
     elif type_name == "FrozenSet":
         return frozenset(v1) == frozenset(v2)
     elif type_name.startswith("Array<"):
@@ -1801,14 +1856,21 @@ def resolve_binding_recursive(binding, context, input_grid, step):
         else:
             raise ValueError("Unexpected sub_bindings type encountered.")
 
+
     elif binding.binding == BindingStatus.BUFFER:
         if step.bufferInstance:
             buf_inst_id = step.bufferInstance.id
-            val = context[buf_inst_id]
-            print(f"  🧠 Resolving BUFFER binding from {binding.source_procedure_id}: {val!r}")
-            return val
+            if buf_inst_id in context:
+                val = context[buf_inst_id]
+                print(f"  🧠 Resolving BUFFER binding from {buf_inst_id}: {val!r}")
+                return val
+            else:
+                print(f"  ⚠️ BUFFER binding failed: bufferInstance id '{buf_inst_id}' not found in context.")
+                print(f"     🔎 Available context keys: {list(context.keys())}")
+                return None
         else:
-            raise RuntimeError(f"No source_procedure_id on BUFFER binding {binding}")
+            print(f"  ⚠️ BUFFER binding failed: no bufferInstance defined on step.")
+            return None
 
     else:
         print(f"  🔚 Unhandled binding type {binding.binding} Returning value: {binding.value}")

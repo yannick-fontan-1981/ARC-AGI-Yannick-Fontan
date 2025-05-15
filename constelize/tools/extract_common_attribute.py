@@ -3,6 +3,97 @@ from collections import defaultdict
 from itertools import combinations, product
 from typing import Dict, Any, List, Tuple, Optional, Set
 
+def extract_common_object_grid_action(
+    pairs: List[Tuple[int, int]],
+    path: str,
+    tables: Dict[str, Dict[int, Dict[str, Any]]]
+) -> Optional[Dict[str, Any]]:
+    """
+    Identify discriminative object_analysis attributes for a set
+    of objects across training instances, and emit a selectObjectGridAction spec.
+
+    Steps:
+      1) Deduplicate target object_analysis IDs from the (trainId, oid) pairs.
+      2) Load each corresponding row from tables["object_analysis"].
+      3) Build the list of candidate columns (exclude metadata & raw data).
+      4) Find columns whose values are identical across all target rows.
+      5) From those, keep only columns that match exactly the target set (no extras).
+      6) Package and return the action spec with those criteria.
+    """
+    print("🔵 Starting verbose extract_common_object_grid_action")
+    print(f"  • Binding path: {path!r}")
+    print(f"  • Incoming (trainId, object_analysis_id) pairs: {pairs!r}")
+
+    # 1) Deduplicate and collect target IDs
+    target_ids: List[int] = []
+    for train_id, oid in pairs:
+        if oid not in target_ids:
+            target_ids.append(oid)
+    print(f"  • Deduplicated object_analysis IDs: {target_ids!r}")
+    if not target_ids:
+        print("❌ No object IDs found → aborting.")
+        return None
+
+    # 2) Retrieve rows for those IDs
+    obj_tbl = tables.get("object_analysis", {})
+    print(f"  • Loaded object_analysis table with {len(obj_tbl)} rows")
+    target_rows: List[Dict[str, Any]] = []
+    for oid in target_ids:
+        row = obj_tbl.get(oid)
+        if row is None:
+            print(f"❌ Missing row for object_analysis.id={oid} → aborting.")
+            return None
+        print(f"    – Row for ID={oid}: {row}")
+        target_rows.append(row)
+    print(f"  • Retrieved {len(target_rows)} target rows")
+
+    # 3) Identify candidate columns to test
+    exclude = {"id", "trainId", "testId", "data"}
+    all_columns = list(target_rows[0].keys())
+    candidate_cols = [col for col in all_columns if col not in exclude]
+    print(f"  • Candidate columns (excluding {exclude}): {candidate_cols!r}")
+
+    # 4) Find columns with identical values across all targets
+    common: List[Tuple[str, Any]] = []
+    for col in candidate_cols:
+        first_val = target_rows[0].get(col)
+        if all(row.get(col) == first_val for row in target_rows[1:]):
+            common.append((col, first_val))
+    print(f"  • Common attributes across targets: {common!r}")
+    if not common:
+        print("❌ No attributes common to all targets → aborting.")
+        return None
+
+    # 5) Filter for discriminative criteria among input objects only
+    discriminative: List[Tuple[str, Any]] = []
+    target_set = set(target_ids)
+    for col, val in common:
+        matching_ids = {
+            oid for oid, row in obj_tbl.items()
+            if row.get("isInsideInput") == 1
+               and row.get("testId") == -1
+               and row.get(col) == val
+        }
+        print(f"    – Testing ({col!r} == {val!r}) on input objects: matches IDs {sorted(matching_ids)!r}")
+        if matching_ids == target_set:
+            discriminative.append((col, val))
+            print(f"      ✓ {col!r} is discriminative among inputs")
+        else:
+            print(f"      ✗ {col!r} not discriminative (matches {sorted(matching_ids)!r}, target {sorted(target_set)!r})")
+    print(f"  • Final discriminative criteria: {discriminative!r}")
+    if not discriminative:
+        print("❌ No discriminative criteria remain → aborting.")
+        return None
+
+    # 6) Build and return the action spec
+    spec = {
+        "type":     "selectObjectGridAction",
+        "criteria": discriminative,
+        "path":     path
+    }
+    print(f"✅ Emitting action spec: {spec!r}")
+    print("🔵 Completed extract_common_object_grid_action")
+    return spec
 
 def extract_common_sprite_grid_action(
     pairs: List[Tuple[int, int]],

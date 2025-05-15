@@ -10,7 +10,7 @@ from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
-    Grid, fill_grid
+    Grid, fill_grid, shift, shift_with_background
 from constelize.library.pattern_detection import detect_noise, denoise_grid
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint
 from constelize.tools.registry_singleton import registry
@@ -721,6 +721,53 @@ def build_select_sprite_grid_instance(
       isToOutput=False
     )
 
+def build_select_object_grid_instance(
+    trainId:    int,
+    testId:     int,
+    criteria:   List[Tuple[str, Any]],
+    output_grid: Grid,
+    scenarioId: str,
+    ruleId:     str
+) -> ActionInstance:
+    from constelize.core.binding import BindingStatus
+    action = registry.get_by_id("select_object_grid")
+    inst_id = f"select_object_grid_{scenarioId}_{ruleId}_train{trainId}_test{testId}"
+    return ActionInstance(
+        id=inst_id,
+        action=action,
+        bindings={
+            "scenarioId": ArgumentBinding(
+                name="scenarioId", type="String",
+                binding=BindingStatus.INSTANCE, value=scenarioId
+            ),
+            "ruleId": ArgumentBinding(
+                name="ruleId", type="String",
+                binding=BindingStatus.INSTANCE, value=ruleId
+            ),
+            "trainId": ArgumentBinding(
+                name="trainId", type="Integer",
+                binding=BindingStatus.CONTEXT, value=trainId
+            ),
+            "testId": ArgumentBinding(
+                name="testId", type="Integer",
+                binding=BindingStatus.CONTEXT, value=testId
+            ),
+            "criteria": ArgumentBinding(
+                name="criteria", type="List[Tuple[String,int]]",
+                binding=BindingStatus.CONSTANT, value=criteria
+            ),
+        },
+        output_var="selected_object_grid",
+        output_value=output_grid,
+        output_type="Grid",
+        scenarioId=scenarioId,
+        ruleId=ruleId,
+        trainId=trainId,
+        testId=testId,
+        isTrain=(testId == -1),
+        isToOutput=False
+    )
+
 def build_repaint_instance(
     instance: ActionInstance,
     buffer_inst: ActionInstance
@@ -1261,7 +1308,7 @@ class CreateObjectFactToAction(FactToActionMapping):
 
         # Build mask grid as list of lists, then convert to tuple of tuples
         mask_grid_list = [
-            [-8 if (min_r + y, min_c + x) in coords_set else -1
+            [-5 if (min_r + y, min_c + x) in coords_set else -1
              for x in range(width)]
             for y in range(height)
         ]
@@ -1307,6 +1354,134 @@ class CreateObjectFactToAction(FactToActionMapping):
             END=False
         )
 
+class MoveObjectFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("move_object", "move_object", "isMoved")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        query = """
+        SELECT
+          oa.id AS object_id,
+          oa.trainId,
+          oa.testId,
+          oa.color AS color,
+          oa.minX AS patch_min_x,
+          oa.minY AS patch_min_y,
+          oa.moveRelX AS move_rel_x,
+          oa.moveRelY AS move_rel_y,
+          oa.moveBehindColor AS background_color,
+          oa.width,
+          oa.height,
+          oa.data
+        FROM object_analysis AS oa
+        WHERE oa.isMoved = 1
+          AND oa.isInsideInput = 1
+          AND oa.isRotatedOrFlipped = 0
+          AND oa.isRecolored = 0
+          AND oa.isZoomed = 0
+        """
+        cursor = conn.execute(query)
+        cols = [col[0] for col in cursor.description]
+        rows = cursor.fetchall()
+        return [dict(zip(cols, row)) for row in rows]
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        # Offsets and colors
+        object_color = int(row["color"])
+        bg_color = int(row.get("background_color", 0))
+        move_rel_x = int(row["move_rel_x"])
+        move_rel_y = int(row["move_rel_y"])
+
+        # Patch bounding box
+        patch_min_x = int(row["patch_min_x"])
+        patch_min_y = int(row["patch_min_y"])
+        patch_w = int(row["width"])
+        patch_h = int(row["height"])
+
+        # Reconstruct patch as a 2D grid with anonymization of non-object pixels
+        base_input = TRAIN_INPUT_GRIDS[row["trainId"]]
+        patch = tuple(
+            tuple(
+                base_input[patch_min_y + i][patch_min_x + j]
+                if base_input[patch_min_y + i][patch_min_x + j] == object_color else -1
+                for j in range(patch_w)
+            )
+            for i in range(patch_h)
+        )
+
+        # Create anonymized output grid
+        base_output = TRAIN_OUTPUT_GRIDS[row["trainId"]]
+        rows_out = len(base_output)
+        cols_out = len(base_output[0]) if rows_out else 0
+        anon_grid = tuple(tuple(-8 for _ in range(cols_out)) for _ in range(rows_out))
+
+        # Perform shift, producing updated_grid
+        updated_grid = shift_with_background(
+            anon_grid,
+            patch,
+            patch_min_x,
+            patch_min_y,
+            move_rel_x,
+            move_rel_y,
+            object_color,
+            bg_color
+        )
+
+        #print(grid_to_pretty_string(updated_grid))
+
+        action = registry.get_by_id(self.action_id)
+        # Bind all 8 parameters as UNRESOLVED
+        bindings = {
+            "grid": ArgumentBinding(
+                name="grid", type="Grid",
+                binding=BindingStatus.UNRESOLVED, value=anon_grid
+            ),
+            "patch": ArgumentBinding(
+                name="patch", type="Grid",
+                binding=BindingStatus.UNRESOLVED, value=patch
+            ),
+            "patch_min_x": ArgumentBinding(
+                name="patch_min_x", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=patch_min_x
+            ),
+            "patch_min_y": ArgumentBinding(
+                name="patch_min_y", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=patch_min_y
+            ),
+            "move_rel_x": ArgumentBinding(
+                name="move_rel_x", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=move_rel_x
+            ),
+            "move_rel_y": ArgumentBinding(
+                name="move_rel_y", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=move_rel_y
+            ),
+            "object_color": ArgumentBinding(
+                name="object_color", type="Color",
+                binding=BindingStatus.UNRESOLVED, value=object_color
+            ),
+            "background_color": ArgumentBinding(
+                name="background_color", type="Color",
+                binding=BindingStatus.UNRESOLVED, value=bg_color
+            ),
+        }
+
+        return ActionInstance(
+            id=f"move_object_{row['object_id']}#{getUniqueId()}",
+            action=action,
+            bindings=bindings,
+            output_var="updated_grid",
+            output_value=updated_grid,
+            output_type=action.output_type,
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=(row["trainId"] != -1),
+            isToOutput=True,
+            END=False
+        )
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -1326,6 +1501,7 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     SpriteComputationFactToAction(),
     DenoiseFactToAction(),
     ZoomOutFactToAction(),
-    CreateObjectFactToAction()
+    CreateObjectFactToAction(),
+    MoveObjectFactToAction()
 ]
 

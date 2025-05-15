@@ -436,6 +436,41 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         isPath BOOLEAN,
         isTree BOOLEAN,
         
+        -- ► NEW per‐train mapping & relational fields
+        isObjectUnique BOOLEAN,
+        isTargetObjectPresent BOOLEAN,
+        isTargetObjectUnique BOOLEAN,
+        isShapeUnique BOOLEAN,
+        isTargetShapePresent BOOLEAN,
+        isTargetShapeUnique BOOLEAN,
+    
+        isObjectOneToOne BOOLEAN,
+        isObjectOneToMany BOOLEAN,
+        isObjectManyToOne BOOLEAN,
+        isObjectManyToMany BOOLEAN,
+        isShapeOneToOne BOOLEAN,
+        isShapeOneToMany BOOLEAN,
+        isShapeManyToOne BOOLEAN,
+        isShapeManyToMany BOOLEAN,
+    
+        target_object_id INTEGER,
+        isObjectDeleted BOOLEAN,
+        isShapeDeleted BOOLEAN,
+        isMoved BOOLEAN,
+        isRotatedOrFlipped BOOLEAN,
+        isRecolored BOOLEAN,
+        isZoomed BOOLEAN,
+        isGlued BOOLEAN,
+    
+        moveRelX INTEGER,
+        moveRelY INTEGER,
+        moveBehindColor INTEGER,
+    
+        rotateOrFlip TEXT,
+        recolored TEXT,
+        zoomX INTEGER,
+        zoomY INTEGER,
+        
         data TEXT NOT NULL
     );
     """)
@@ -476,7 +511,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
     # Create table: shape_occurrence
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS shape_occurrence (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY,        
         shape_id INTEGER NOT NULL,
         shape_transformation_id INTEGER NOT NULL,
         isInsideInput BOOLEAN NOT NULL DEFAULT 0,
