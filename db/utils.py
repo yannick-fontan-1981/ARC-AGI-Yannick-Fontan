@@ -316,6 +316,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         area INTEGER,
         pixelCount INTEGER,
         sizeOrder INTEGER,
+        sizeOrderDesc INTEGER,
         hasOddPixelCount BOOLEAN,
         hasEvenPixelCount BOOLEAN,
         areaPerimeter INTEGER,
@@ -464,6 +465,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
     
         moveRelX INTEGER,
         moveRelY INTEGER,
+        newPosX INTEGER,
+        newPosY INTEGER,
         moveBehindColor INTEGER,
     
         rotateOrFlip TEXT,
@@ -566,6 +569,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         area INTEGER,
         pixelCount INTEGER,
         sizeOrder INTEGER,
+        sizeOrderDesc INTEGER,
         hasOddPixelCount BOOLEAN,
         hasEvenPixelCount BOOLEAN,
         areaPerimeter INTEGER,
@@ -642,6 +646,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sprite_unique (
             id INTEGER PRIMARY KEY,
+            sprite_id INTEGER NOT NULL,
             trainId INTEGER NOT NULL DEFAULT -1,
             testId INTEGER NOT NULL DEFAULT -1,
             filename TEXT NOT NULL,

@@ -299,6 +299,7 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
         color_count = color_counts_in_sprite(sprite_grid)
         rec = {
             "id": produced_id,
+            "sprite_id": attr_dict["id"],
             "trainId": attr_dict["trainId"],
             "testId": attr_dict["testId"],
             "filename": attr_dict.get("filename"),
@@ -1630,6 +1631,38 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
 
     for index, item in enumerate(data.get("test", [])):
         process_item(item, True, index, False)
+
+    # 1. Group by trainId and testId
+    grouped_by_id = defaultdict(list)
+    for row in all_sprite_rows:
+        if row.get("isInsideTrain"):
+            key = f"train#{row['trainId']}"
+        elif row.get("isInsideTest"):
+            key = f"test#{row['testId']}"
+        else:
+            continue  # Skip rows not in train or test
+        grouped_by_id[key].append(row)
+
+    # 2. Compute sizeOrder and sizeOrderDesc for each group
+    for group_key, rows in grouped_by_id.items():
+        sorted_desc = sorted(rows, key=lambda r: r["pixelCount"], reverse=True)
+        for rank, row in enumerate(sorted_desc, start=1):
+            row["sizeOrder"] = rank
+
+        sorted_asc = sorted(rows, key=lambda r: r["pixelCount"])
+        for rank, row in enumerate(sorted_asc, start=1):
+            row["sizeOrderDesc"] = rank
+
+    # 3. Copy these values into the rows that will be inserted into the DB
+    id_to_sprite_row = {r["id"]: r for r in all_sprite_rows if "id" in r}
+    for row in all_sprite_analysis_rows:
+        src = id_to_sprite_row.get(row.get("id"))
+        if src:
+            row["sizeOrder"] = src.get("sizeOrder", -1)
+            row["sizeOrderDesc"] = src.get("sizeOrderDesc", -1)
+        else:
+            row["sizeOrder"] = -1
+            row["sizeOrderDesc"] = -1
 
     bulk_insert(conn, "sprite_analysis", all_sprite_analysis_rows)
     bulk_insert(conn, "sprite_unique", sprite_global_data["sprite_unique_records"])

@@ -354,10 +354,9 @@ def extract_common_attribute_action(
             group, all_objects, tables, table_key="object_analysis"
         )
         print(f"    Object group {group} → criteria: {crit}")
-        if crit:
-            # choose an output_attr (fall back to path if no exact match)
-            obj_sample = next(iter(tables["object_analysis"].values()), {})
-            output_attr = path if path in obj_sample else crit[0][0]
+        output_attr = next(iter(common_columns_obj), None)
+        print(f"    output attribute: {output_attr}")
+        if crit and output_attr:
             action = {
                 "type":             "selectObjectAndAttributeAction",
                 "criteria":         crit,
@@ -534,16 +533,23 @@ def group_values_by_train(pairs):
     return values_by_train
 
 
-def intersect_common_columns(path, per_train_common):
-    print("\n==> 3) Intersect across trains")
-    cols = set.intersection(*per_train_common.values())
-    # prioritize `path` first
-    if path in cols:
-        rest = sorted(cols - {path})
-        common_columns = [path] + rest
+def intersect_common_columns(path: str, per_train_common: Dict[int, Set[str]]) -> List[str]:
+    print("==> 3) Intersect across trains (with verbose tracking)")
+    common_columns = None
+
+    for tid, cols in per_train_common.items():
+        print(f"  Train {tid} has common columns: {sorted(cols)}")
+        if common_columns is None:
+            common_columns = set(cols)
+        else:
+            print(f"    ∩ with previous: {sorted(common_columns)}")
+            common_columns &= cols
+            print(f"    → intersection now: {sorted(common_columns)}")
+
+    if not common_columns:
+        print("⚠️ Intersection is empty — no column common to all trains.")
     else:
-        common_columns = sorted(cols)
-    print("    common_columns (prioritized):", common_columns)
+        print(f"✅ Final common columns: {sorted(common_columns)}")
     return common_columns
 
 def compute_common_columns(

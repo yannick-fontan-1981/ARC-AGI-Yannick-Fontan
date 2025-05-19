@@ -14,6 +14,7 @@ class Scenario:
     rule_to_launch_before: Rule = None
     rule_to_analyse: Rule = None
     to_launch_next: List["Scenario"] = field(default_factory=list)
+    from_fallback: Optional[bool] = False
 
     def run(self) -> Dict[str, Any]:
         scope: Dict[str, Any] = dict(self.input_data)

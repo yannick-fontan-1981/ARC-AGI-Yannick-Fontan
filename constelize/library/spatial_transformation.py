@@ -44,6 +44,25 @@ def canvas_by_ratio_fn(grid, ratio_width: int, ratio_height: int):
     new_height = height * ratio_height
     return tuple(tuple(-8 for _ in range(new_width)) for _ in range(new_height))
 
+def canvas_by_object_size_fn(object_width: int, object_height: int) -> Grid:
+    """
+    Build a blank (anonymized) canvas whose dimensions exactly match
+    the given object size.
+
+    Parameters:
+      - grid:       the original input grid (ignored here except for signature)
+      - obj_width:  the target width (number of columns)
+      - obj_height: the target height (number of rows)
+
+    Returns:
+      A new Grid of shape (obj_height, obj_width), where every cell is -8.
+    """
+    # Use -8 for “anonymized” background, consistent with canvas_by_ratio_fn
+    return tuple(
+        tuple(-8 for _ in range(object_width))
+        for _ in range(object_height)
+    )
+
 def sprite_computation_paint(canvas: Grid, sub_sprites: List[Grid], positions: List[Dict[str, int]]) -> Grid:
     from constelize.dsl.grid_dsl import paint
     result = canvas
@@ -197,7 +216,7 @@ ACTIONS = [
         id="canvas_by_ratio",
         name="Canvas by Ratio",
         description="Compute a blank canvas based on the input grid and given width/height ratios.",
-        category=ActionCategory.MAPPING_TRANSFORMATION,
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
         input_arguments=[
             ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.INPUT_GRID),
             ArgumentBinding(name="ratio_width", type="Integer", binding=BindingStatus.UNRESOLVED),
@@ -205,6 +224,21 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=canvas_by_ratio_fn
+    ),
+    Action(
+        id="canvas_by_object_size",
+        name="Canvas by Object Size",
+        description=(
+            "Produce a blank (anonymized) canvas whose dimensions match exactly "
+            "the given object_width and object_height."
+        ),
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="object_width",  type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="object_height", type="Integer", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=canvas_by_object_size_fn
     ),
     Action(
         id="crop_sprite",
@@ -265,7 +299,7 @@ ACTIONS = [
         id="initialize_buffer",
         name="Initialize Buffer",
         description="Pass-through action to initialize the shared buffer with the input grid.",
-        category=ActionCategory.ATTRIBUTE_ACCESS,
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
         input_arguments=[
             ArgumentBinding(name="initial_grid", type="Grid", binding=BindingStatus.VARIABLE)
         ],
@@ -289,6 +323,8 @@ ACTIONS = [
             ArgumentBinding(name="patch_min_y", type="Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="move_rel_x", type="Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="move_rel_y", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="new_pos_x", type="Integer", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="new_pos_y", type="Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="object_color", type="Color", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="background_color", type="Color", binding=BindingStatus.UNRESOLVED),
         ],

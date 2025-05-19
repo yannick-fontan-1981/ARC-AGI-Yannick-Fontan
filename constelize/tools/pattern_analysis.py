@@ -14,20 +14,21 @@ from constelize.core.typesystem import can_convert
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
+from constelize.library.color_symbol_manipulation import set_output_bg_color_fn
 from constelize.tools.extract_common_attribute import extract_common_attribute_action, \
-    extract_common_sprite_grid_action, extract_common_object_grid_action
+    extract_common_sprite_grid_action, extract_common_object_grid_action, find_minimal_selection_criteria_for_table
 
 from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_start_input, \
     build_get_attribute_instance, build_select_sprite_and_attribute_instance, \
     build_select_object_and_attribute_instance, build_repaint_instance, TRAIN_INPUT_GRIDS, TRAIN_OUTPUT_GRIDS, \
-    build_select_sprite_grid_instance, build_select_object_grid_instance
+    build_select_sprite_grid_instance, build_select_object_grid_instance, build_set_output_bg_color_fact_to_action
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
 from constelize.tools.registry_singleton import registry
 from constelize.tools.sqlite_loader import load_sqlite_to_dict
 
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Set
 import traceback
 import constelize.tools.binding_train_map as btm
 
@@ -40,6 +41,21 @@ def table_for_fact(fact_name: str) -> str:
         "flipped_horizontal": "symmetry",
         "flipped_vertical": "symmetry",
     }.get(fact_name, fact_name)
+
+def extract_bg_colors_from_template(
+    template: Grid,
+    actual:   Grid
+) -> Set[int]:
+    """
+    Look at every position where `template[i][j] == -1` and
+    collect actual[i][j] into a set of candidate background colors.
+    """
+    colors: Set[int] = set()
+    for i, row in enumerate(template):
+        for j, v in enumerate(row):
+            if v == -1 or v == -8:
+                colors.add(actual[i][j])
+    return colors
 
 def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rule: Rule) -> List:
     ruleId = current_rule.id
@@ -60,6 +76,32 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                     action_instances.append(instance)
                     if concrete_grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
                         instance.END = True
+                    elif instance.END == False and grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
+                        if instance.action.id == "move_object":
+                            print("extract_bg_colors_from_template")
+                        # 1) look up all the real colors under the “-1” or “-8” holes in our template
+                        bg_colors = extract_bg_colors_from_template(
+                            instance.output_value,
+                            TRAIN_OUTPUT_GRIDS[instance.trainId]
+                        )
+                        # 2) if there’s exactly one candidate color, emit a setOutputBgColorFactToAction
+                        if len(bg_colors) == 1:
+                            bg_color = next(iter(bg_colors))
+                            output_value = set_output_bg_color_fn(instance.output_value, bg_color)
+                            set_bg_inst = build_set_output_bg_color_fact_to_action(
+                                trainId=instance.trainId,
+                                testId=instance.testId,
+                                bg_color=bg_color,
+                                input_value=instance.output_value,
+                                output_value=output_value,
+                                source_producer_id=instance.id,
+                                scenarioId=scenarioId,
+                                ruleId=ruleId
+                            )
+                            action_instances.append(set_bg_inst)
+                            print(f"set_output_bg_color {bg_color}")
+                            set_bg_inst.END = True
+
                 except Exception as e:
                     # ——— EXTRA DEBUG LOGGING ———————————————————————————————————————————————
                     print(f"[DEBUG gen_instances] mapping.fact_name = {mapping.fact_name}")
@@ -162,6 +204,11 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
 
     #with open(json_path, "r") as f:
     #    json_data = json.load(f)
+
+    new_instances = create_suggested_action_instances(action_instances, current_rule.tables, scenarioId, current_rule.id)
+    if new_instances:
+        action_instances = action_instances + new_instances
+
 
     print("\n🔧 Running constant detection...")
     auto_find_constant_for_signature(action_instances)
@@ -280,6 +327,12 @@ def auto_link_by_value_and_type(action_instances: list):
             def recursively_process_bindings(binding: ArgumentBinding, path: str):
                 nonlocal successful_links, skipped_links, failed_links
 
+                # ── 0) if there’s a user‐attached suggestion, don’t auto‐link it at all ──────
+                if getattr(binding, "suggested_action", None):
+                    print(f"    📝 Found suggested_action={binding.suggested_action!r}, skipping auto-link for '{path}'")
+                    skipped_links += 1
+                    return
+
                 print(f"🔗 Attempting to resolve binding '{path}'")
                 print(f"    ➤ Required type: {binding.type}, Current status: {binding.binding}, Current value: {binding.value}")
 
@@ -298,7 +351,11 @@ def auto_link_by_value_and_type(action_instances: list):
                     skipped_links += 1
                     return
 
-                if hasattr(binding, "per_train_value") and trainId in binding.per_train_value:
+                if (
+                        hasattr(binding, "per_train_value")
+                        and trainId in binding.per_train_value
+                        and getattr(binding, "suggested_action", None) is None
+                ):
                     binding.value = binding.per_train_value[trainId]
                     binding.binding = BindingStatus.CONSTANT
                     print(f"    💉 Injected per-train constant for trainId={trainId}: {binding.value}")
@@ -321,7 +378,7 @@ def auto_link_by_value_and_type(action_instances: list):
                         print(f"    ⛔ Avoiding link from {producer.action.id} to {consumer.action.id} due to avoid_map")
                         continue
 
-                    if binding.value is not None and not values_equal(value, binding.value, binding.type):
+                    if binding.value is not None and not values_equal(value, binding.value, binding):
                         #print(f"    ❌ Value mismatch with producer {producer.id}")
                         #print(f"       value {value}")
                         #print(f"       binding.value {binding.value}")
@@ -347,6 +404,17 @@ def auto_link_by_value_and_type(action_instances: list):
                         found = True
                         skipped_links += 1
                         break
+
+                    # ── if the user attached a suggested_attribute, drop any
+                    #    select_object_and_attribute producers that don’t match it
+                    suggested_attribute = getattr(binding, "suggested_attribute", None)
+                    if suggested_attribute:
+                        print("check before linking if matching suggested_attribute")
+                        attr_bind = producer.bindings.get("attribute_name")
+                        attr = attr_bind.value if attr_bind else None
+                        if attr != suggested_attribute:
+                            print(f"    ⚠️ Skipping producer {producer.id} for '{binding.name}': expected attribute='{suggested_attribute}', got '{attr}'")
+                            continue
 
                     print(f"    🔗 Linking {producer.id} → {consumer.id}.{path}")
                     link_producer_to_consumer(binding, producer, consumer, path)
@@ -550,7 +618,6 @@ def auto_link_by_common_attribute(
                     ruleId=ruleId,
                     criteria=criteria,
                     attribute_name=output_attr,
-                    object_ids=object_ids,
                     trainId=train_id,
                     testId=test_id
                 )
@@ -563,7 +630,6 @@ def auto_link_by_common_attribute(
                     output_value=value,
                     criteria=criteria,
                     attribute_name=output_attr,
-                    object_ids=object_ids,
                     scenarioId=scenarioId,
                     ruleId=ruleId
                 )
@@ -677,6 +743,203 @@ def flatten_binding(binding: ArgumentBinding) -> Tuple[bool, any]:
             all_const = False
     return (all_const, flat_vals)
 
+def create_suggested_action_instances(
+    action_instances: List[ActionInstance],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    scenarioId: str,
+    ruleId: str
+) -> List[ActionInstance]:
+    print("🔍 Starting create_suggested_action_instances")
+    # 1) Gather all suggestions, keyed by (action_type → key → trainId)
+    # key is None for selectObjectGridAction, attribute name for the two others.
+    suggestions_by_action: Dict[
+      str,
+      Dict[Any, Dict[int, Tuple[ActionInstance, ArgumentBinding, int, Any]]]
+    ] = defaultdict(lambda: defaultdict(dict))
+
+    for inst in action_instances:
+        tid = inst.trainId
+        for bind in inst.bindings.values():
+            action = getattr(bind, "suggested_action", None)
+            if action not in {
+                "selectSpriteAndAttributeAction",
+                "selectObjectGridAction",
+                "selectObjectAndAttributeAction"
+            }:
+                continue
+
+            if action == "selectObjectGridAction":
+                key = None
+                thing_id = getattr(bind, "suggested_object_id")
+            else:
+                # both sprite+attribute and object+attribute
+                key = getattr(bind, "suggested_attribute")
+                if action == "selectSpriteAndAttributeAction":
+                    thing_id = getattr(bind, "suggested_sprite_id")
+                else:  # selectObjectAndAttributeAction
+                    thing_id = getattr(bind, "suggested_object_id")
+
+            suggestions_by_action[action][key][tid] = (
+                inst, bind, inst.testId, thing_id
+            )
+            print(f"  – Queued {action} for train {tid} key={key} id={thing_id}")
+
+    new_instances: List[ActionInstance] = []
+
+    # 2) For each action type, handle its groups
+    for action, groups in suggestions_by_action.items():
+        for key, per_train in groups.items():
+            train_ids = sorted(per_train.keys())
+            print(f"\n  • Processing {action!r} (key={key}) for trains {train_ids}")
+
+            if action == "selectSpriteAndAttributeAction":
+                # — exactly your existing sprite+attribute code —
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                all_input_sids = [
+                    sid for sid, row in tables["sprite_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group, all_ids=all_input_sids,
+                    tables=tables, table_key="sprite_analysis"
+                )
+                criteria = [
+                  (c, v) for c, v in criteria
+                  if c not in {"trainId","testId","isInsideInput","isInsideOutput",
+                               "isInsideTrain","isInsideTest","isFromSplit"}
+                ]
+                if not criteria:
+                    print(f"    ⚠️ no criteria for {key!r}, skipping")
+                    continue
+
+                for tid in train_ids:
+                    inst, bind, test_id, sid = per_train[tid]
+                    value = _aa_mod.select_sprite_and_attribute_fn(
+                        scenarioId, ruleId,
+                        criteria=criteria,
+                        attribute_name=key,
+                        trainId=tid, testId=test_id
+                    )
+                    sel = build_select_sprite_and_attribute_instance(
+                        trainId=tid, testId=test_id,
+                        binding_type="Integer",
+                        output_value=value,
+                        criteria=criteria,
+                        attribute_name=key,
+                        scenarioId=scenarioId, ruleId=ruleId
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    print(f"    ↳ linked sprite-attr step {sel.id}")
+                    new_instances.append(sel)
+
+            elif action == "selectObjectGridAction":
+                # 2a) gather the object‐IDs your bindings suggested
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                print(f"    ▶️ Positive object‐ID group: {group}")
+                # 2b) all objects seen in any input
+                all_input_oids = [
+                    oid for oid, row in tables["object_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                print(f"    ▶️ Negative pool (all input object‐IDs): {all_input_oids}")
+                # 2c) find minimal discrimination criteria in object_analysis
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_oids,
+                    tables=tables,
+                    table_key="object_analysis"
+                )
+                # filter out your standard metadata columns:
+                exclude = {"trainId", "testId", "isInsideInput", "isInsideOutput",
+                           "isInsideTrain", "isInsideTest", "isFromSplit"}
+                criteria = [(c, v) for c, v in criteria if c not in exclude]
+                print(f"    ▶️ Object‐grid criteria: {criteria!r}")
+                if not criteria:
+                    print("    ⚠️ No discriminating criteria for object‐grid → skipping")
+                    continue
+                # 2d) for each train, fetch & build the selectObjectGrid instance
+                for tid in train_ids:
+                    inst, bind, test_id, _oid = per_train[tid]
+                    grid_val = _aa_mod.select_object_grid_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_object_grid_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        output_grid=grid_val,
+                        criteria=criteria,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    print(f"    ↳ linked object‐grid step {sel.id}")
+                    new_instances.append(sel)
+
+            elif action == "selectObjectAndAttributeAction":
+                # a) build the positive group of object‐IDs for this attribute
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                print(f"    ▶️ Positive object-ID group for `{key}`: {group}")
+                # b) build the negative pool: all object-IDs seen in any input
+                all_input_oids = [
+                    oid for oid, row in tables["object_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                print(f"    ▶️ Negative pool (all input object-IDs): {all_input_oids}")
+                # c) find minimal discriminating criteria over object_analysis
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_oids,
+                    tables=tables,
+                    table_key="object_analysis"
+                )
+                # drop metadata cols
+                exclude = {
+                    "trainId", "testId",
+                    "isInsideInput", "isInsideOutput",
+                    "isInsideTrain", "isInsideTest",
+                    "isFromSplit"
+                }
+                criteria = [(c, v) for c, v in criteria if c not in exclude]
+                print(f"    ▶️ Discrimination criteria for `{key}`: {criteria!r}")
+                if not criteria:
+                    print(f"    ⚠️ No discriminating criteria for `{key}` → skipping")
+                    continue
+                # d) for each train, fetch & build the selectObjectAndAttribute instance
+                for tid in train_ids:
+                    inst, bind, test_id, _oid = per_train[tid]
+                    value = _aa_mod.select_object_and_attribute_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        attribute_name=key,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_object_and_attribute_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        binding_type="Integer",
+                        output_value=value,
+                        criteria=criteria,
+                        attribute_name=key,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
+                    )
+                    # link it back
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    print(f"    ↳ linked object-attr step {sel.id}")
+                    new_instances.append(sel)
+
+    print(f"\n✅ Generated {len(new_instances)} suggested steps")
+    return new_instances
+
 def auto_find_constant_for_signature(action_instances: List[ActionInstance]) -> None:
     """
     Level 1 constant detection (per your spec):
@@ -750,8 +1013,9 @@ def auto_find_constant_for_signature(action_instances: List[ActionInstance]) -> 
             for inst in matched.values():
                 for name, value in sig:
                     b = inst.bindings[name]
-                    b.binding = BindingStatus.CONSTANT
-                    b.value = value
+                    if b.binding == BindingStatus.UNRESOLVED:
+                        b.binding = BindingStatus.CONSTANT
+                        b.value = value
 
             print(f"[auto_find_constant_for_signature] "
                   f"Action '{action_id}' sig={sig} → promoted to CONSTANT")
@@ -812,7 +1076,7 @@ def auto_find_constant_without_compound(action_instances: List[ActionInstance]) 
                 # Stabilize: mark CONSTANT on every instance (train or test)
                 for inst in instances:
                     b = inst.bindings.get(arg_name)
-                    if b:
+                    if b and b.binding == BindingStatus.UNRESOLVED:
                         b.binding = BindingStatus.CONSTANT
                         b.value   = first_val
                 print(f"[auto_find_constant_without_compound] Action '{action_id}', "
@@ -901,8 +1165,9 @@ def process_compound_binding_recursive(bindings: List[ArgumentBinding], path: st
         # Only set to CONSTANT if values exist for all bindings and all identical.
         if len(values) == len(bindings) and all(val == values[0] for val in values):
             for b in bindings:
-                b.binding = BindingStatus.CONSTANT
-                b.value = values[0]
+                if b.binding == BindingStatus.UNRESOLVED:
+                    b.binding = BindingStatus.CONSTANT
+                    b.value = values[0]
             print(
                 f"[auto_find_constant_for_compound] Sub-binding '{path}' stabilized as CONSTANT with value: {values[0]}")
         else:
@@ -934,16 +1199,22 @@ def process_compound_binding_recursive(bindings: List[ArgumentBinding], path: st
         print(f"[auto_find_constant_for_compound] Unexpected sub_bindings type at '{path}'")
 
 
-def values_equal(v1, v2, type_name):
+def values_equal(v1, v2, binding):
+    type_name = binding.type
+    use_anonymized = binding.use_anonymized
     if type_name == "Grid":
-        return grids_equal(v1, v2)
+        if use_anonymized:
+            return grids_equal(v1, v2)
+        else:
+            return concrete_grids_equal(v1, v2)
     elif type_name == "FrozenSet":
         return frozenset(v1) == frozenset(v2)
     elif type_name.startswith("Array<"):
         subtype = type_name[6:-1]  # extrait "Grid" de "Array<Grid>"
+        subBinding = ArgumentBinding(use_anonymized=use_anonymized, type="subtype")
         if len(v1) != len(v2):
             return False
-        return all(values_equal(a, b, subtype) for a, b in zip(v1, v2))
+        return all(values_equal(a, b, subBinding) for a, b in zip(v1, v2))
     elif type_name == "Coord":
         return v1.get("x") == v2.get("x") and v1.get("y") == v2.get("y")
     else:
@@ -1180,7 +1451,7 @@ def evaluate_generic_procedures(
             original_step = get_original_step(proc, selected_step)
             if original_step:
                 original_step.END = True
-                print(f"💾 Learned END=True on step {selected_step} for procedure {proc.id}")
+                print(f"💾 Learned END=True on step {original_step.id} for procedure {proc.id}")
 
     def fallback_if_no_end(proc_clone: Procedure, candidate_outputs: List):
         if not candidate_outputs:
@@ -1197,7 +1468,9 @@ def evaluate_generic_procedures(
     for proc in procedures:
         for idx, example in enumerate(dataset):
             input_grid = example.get("input")
-            expected_output = example.get("output")  # can be missing
+            expected_output = None
+            if mode == "train":
+                expected_output = example.get("output")  # can be missing
 
             trainId = idx if mode == "train" else -1
             testId = -1 if mode == "train" else idx
@@ -1241,12 +1514,6 @@ def evaluate_generic_procedures(
                 context[step.id] = output
                 executed_steps.append(step.id)
 
-                #for b in step.bindings.values():
-                #    if b.binding == BindingStatus.BUFFER and b.source_procedure_id:
-                #        buf_inst = step.bufferInstance
-                #        buf_inst.output_value = output
-                #        print(f"🔄 Mutated buffer {buf_inst.id}.output_value = {output}")
-
                 if return_execution_trace:
                     trace.append({
                         "step_id": step.id,
@@ -1261,13 +1528,6 @@ def evaluate_generic_procedures(
                     if isEND:
                         print(f"📌 END FOUND FOR {step.action.name}" )
                         truncate_after_end(proc, step.id)
-
-                #if step.END == True:
-                #    candidate_outputs.append((step.id, output))
-                #    if expected_output is not None and not concrete_grids_equal(output, expected_output):
-                #        print(f"🧑‍☠️ {step.id} marked inactive due to wrong output")
-                #        step.active = False
-                #        remove_failed_step(proc, step.id)
 
             selected_output = None
             selected_step = None
@@ -1538,46 +1798,52 @@ def generate_submission_file_from_scenarios(
     num_tests = len(arc_data.get("test", []))
 
     if results_by_scenario is not None:
-        # Collect best predictions per testId
-        best_outputs_by_testId = {}
+        # 1) gather ALL (grid, accuracy) per testId
+        from collections import defaultdict
+        outputs_by_test = defaultdict(list)
 
         for scenario in valid_scenarios:
-            scenario_id = scenario.id
-            results = results_by_scenario.get(scenario_id, [])
-
-            for r in results:
+            for r in results_by_scenario.get(scenario.id, []):
                 tid = r.get("testId", -1)
                 if tid < 0:
                     continue
-                acc = r.get("pixel_accuracy", 0.0)
-                current_best = best_outputs_by_testId.get(tid)
+                outputs_by_test[tid].append(
+                    (r["evaluated_output"], r.get("pixel_accuracy", 0.0))
+                )
 
-                if current_best is None or acc > current_best["pixel_accuracy"]:
-                    best_outputs_by_testId[tid] = {
-                        "evaluated_output": r.get("evaluated_output"),
-                        "pixel_accuracy": acc,
-                        "procedure_id": r.get("procedure_id"),
-                    }
-
+        # 2) for each testId, sort → dedupe → take 2
         for tid in range(num_tests):
-            best = best_outputs_by_testId.get(tid)
-            if best is None:
-                print(f"⚠️ No result for testId={tid}, fallback to [[0],[0],[0]]")
-                best_output = [[0], [0], [0]]
-            else:
-                best_output = best["evaluated_output"]
-                print(f"✅ testId={tid} uses proc={best['procedure_id']} with accuracy={best['pixel_accuracy']:.2f}")
+            candidates = outputs_by_test.get(tid, [])
+            # sort descending by pixel_accuracy
+            candidates.sort(key=lambda x: x[1], reverse=True)
 
-            # Convert tuple to list if needed
-            if isinstance(best_output, tuple):
-                best_output = [list(row) for row in best_output]
-            elif not isinstance(best_output, list) or not all(isinstance(row, list) for row in best_output):
-                print(f"⚠️ Invalid output format for testId={tid}, fallback to default.")
-                best_output = [[0], [0], [0]]
+            # dedupe by grid content
+            unique_grids = []
+            for grid, _ in candidates:
+                if not any(grids_equal(grid, g) for g in unique_grids):
+                    unique_grids.append(grid)
+
+            if len(unique_grids) > 2:
+                # todo : resolve when more that 2 unique attempts
+                print("WARNING MORE THAN 2 UNIQUE ATTEMPTS !")
+
+            # pad or trim to exactly two attempts
+            if len(unique_grids) == 0:
+                unique_grids = [[[0]], [[0]]]
+            elif len(unique_grids) == 1:
+                unique_grids = [unique_grids[0], unique_grids[0]]
+            else:
+                unique_grids = unique_grids[:2]
+
+            # helper to convert tuple→list
+            def to_list(g):
+                if isinstance(g, tuple):
+                    return [list(row) for row in g]
+                return g
 
             submission[task_id].append({
-                "attempt_1": best_output,
-                "attempt_2": best_output
+                "attempt_1": to_list(unique_grids[0]),
+                "attempt_2": to_list(unique_grids[1]),
             })
     else:
         test_data = arc_data.get("test", [])
@@ -1707,7 +1973,7 @@ def print_test_results(test_results: List[dict], output_path: str) -> None:
             print(line)
             f.write(line + "\n")
 
-def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_path: str, output_path: str) -> None:
+def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_path: str, output_path: str) -> bool:
     """
     Compare the predictions in submission.json with the outputs in the ARC file.
     Writes a report indicating success/failure and a pixel match score where applicable.
@@ -1775,6 +2041,7 @@ def compare_submission_to_arc_outputs(task_id: str, arc_data: dict, submission_p
                 print(f"⚠️ testId={r['testId']}: {r['reason']}\n")
                 f.write(f"⚠️ testId={r['testId']}: {r['reason']}\n")
     print(f"📊 Comparison report written to {output_path}")
+    return any(r.get("success") is True for r in results)
 
 
 def resolve_binding_recursive(binding, context, input_grid, step):
@@ -1830,13 +2097,13 @@ def resolve_binding_recursive(binding, context, input_grid, step):
             if "get_start_input" in resolved_id:
                 print(f"✩ {resolved_id} return the input grid !")
                 return input_grid
-            if resolved_id == binding.source_procedure_id:
-                print(f"⛔ Skipping self-link for {resolved_id} on MULTIPLE")
+            if resolved_id == step.id:
+                print(f"⛔ Skipping self-link for {resolved_id} on MULTIPLE step.id: {step.id}")
                 continue
             if resolved_id in context:
                 print(f"✩ MULTIPLE binding: using candidate {resolved_id} for {binding.name}")
                 return context[resolved_id]
-        print(f"⚠️ MULTIPLE with no resolved candidate found in context: {binding.candidates}")
+        print(f"⚠️ MULTIPLE with no resolved candidate found in context: {binding.candidates} candidate.producer_id: {resolved_id}")
         print(f"   🔎 Available context keys: {list(context.keys())}")
         return None
 

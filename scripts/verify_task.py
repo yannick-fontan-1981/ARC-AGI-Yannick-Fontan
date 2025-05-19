@@ -8,6 +8,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict
+from typing import Set, Tuple, List, Iterable, Mapping
 
 from joblib._multiprocessing_helpers import mp
 
@@ -15,7 +16,7 @@ import constelize.tools.globals as GLOBAL
 import constelize.library.attribute_access as _aa_mod
 import constelize.tools.binding_train_map as btm
 from constelize.core.binding import BindingStatus, ArgumentBinding
-from constelize.core.procedure import Procedure
+from constelize.core.procedure import Procedure, ActionInstance
 from constelize.core.rule import Rule
 from constelize.core.scenario import Scenario
 from constelize.tools.fact_to_action_mapping import load_end_outputs_from_json, load_json_inputs_from_json
@@ -247,21 +248,61 @@ def test_file(
 
     valid_scenario = filter_successful_scenarios()
 
+    if not valid_scenario:
+        print("⚠️ No fully successful generic procedure found. Skipping test execution.")
+        print_total_time(results_path)
+        return False
+
+    # At least one generic proc passed training; if there's a test set, compare now
     if valid_scenario:
-        print("🎯 At least one scenario with generic procedure passed all training examples. Running on test set...")
+        print("🎯 Running successful procedure(s) on test set...")
         results_by_scenario = evaluate_generic_procedures_on_scenarios("test", data, valid_scenario)
         print_test_results_by_scenario(results_by_scenario, results_path, data)
         generate_submission_file_from_scenarios(task_id, valid_scenario, data, submission_path, results_by_scenario)
-        compare_submission_to_arc_outputs(task_id, data, submission_path, comparison_path)
+        # our updated compare now returns True if any attempt succeeded
+        compare_result =  compare_submission_to_arc_outputs(task_id, data, submission_path, comparison_path)
+        # if any test entry has an "output", return the compare_result,
+        # otherwise fall back to valid_scenario
+        test_entries = data.get("test", [])
+        if isinstance(test_entries, dict):
+            has_output = any(e.get("output") is not None for e in test_entries.values())
+        else:
+            has_output = any(e.get("output") is not None for e in test_entries)
+        print_total_time(results_path)
+        return compare_result if has_output else valid_scenario
     else:
-        print("⚠️ No fully successful generic procedure found. Skipping test execution.")
+        # no test outputs available → treat training success as overall success
+        print_total_time(results_path)
+        return True
 
+
+def print_total_time(results_path):
     total_time = time.time() - start_time
     print(f"\n⏱️ Total verification time: {total_time:.2f} seconds")
     print("✅ Evaluation completed. Results saved to", results_path)
 
-    return bool(valid_scenario)
 
+def procedure_uses_suggestions(proc: Procedure) -> bool:
+    for step in proc.steps.values():
+        for b in step.bindings.values():
+            if getattr(b, "suggested_action", None) is not None:
+                return True
+    return False
+
+def strip_suggestions_from_proc(proc: Procedure) -> Procedure:
+    newp = copy.deepcopy(proc)
+    for step in newp.steps.values():
+        for b in step.bindings.values():
+            # zap all the suggestion metadata
+            for attr in ("suggested_action",
+                         "suggested_sprite_id",
+                         "suggested_object_id",
+                         "suggested_attribute"):
+                setattr(b, attr, None)
+            # if we’d left it as UNRESOLVED, turn it into CONSTANT
+            if b.binding == BindingStatus.UNRESOLVED:
+                b.binding = BindingStatus.CONSTANT
+    return newp
 
 def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, json_path, raw_json, results_path):
     scenarioId = current_scenario.id
@@ -302,9 +343,39 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     # normalize + squeeze + deep copy
     normalized_procs = normalize_procedures_with_levels(list(procedures.values()), scenarioId, ruleId)
     generic_with_unresolved = squeeze_with_unresolved(normalized_procs, scenarioId, ruleId)
-    generic_procs = copy.deepcopy(generic_with_unresolved)
+    generic_procs = split_contender_procs(generic_with_unresolved)
+
+    # If exactly one END‐marked instance exists among all candidate procs,
+    # drop every other proc so only that lineage remains.
+    end_pairs = [
+        (p, inst)
+        for p in generic_procs
+        for inst in p.steps.values()
+        if getattr(inst, "END", False)
+    ]
+    if len(end_pairs) == 1:
+        proc_to_keep, _ = end_pairs[0]
+        generic_procs = [p for p in generic_procs if p.id == proc_to_keep.id]
+        print(f"ℹ️  Pruned to single‐END lineage: keeping proc {proc_to_keep.id}")
+
+    normalized_splits = []
+    for idx, proc in enumerate(generic_procs, start=1):
+        # 1) normalize this single proc
+        norm_proc = normalize_procedures_with_levels(
+            [proc],
+            proc.scenarioId,
+            proc.ruleId
+        )[0]  # normalize_procedures_with_levels returns a list :contentReference[oaicite:2]{index=2}:contentReference[oaicite:3]{index=3}
+        normalized_splits.append(norm_proc)
+        # 2) print exactly like squeeze_with_unresolved does:
+        print(
+            f"\n🧬 Final normalized_split_{idx}")  # similar to “Final generic_proc_X” :contentReference[oaicite:4]{index=4}:contentReference[oaicite:5]{index=5}
+        for sid, step in norm_proc.steps.items():
+            print(f"   {sid} ({step.action.id})")
+
+    generic_procs_copy = copy.deepcopy(normalized_splits)
     # === EVALUATION & PRUNING on TRAIN ===
-    train_results = evaluate_generic_procedures("train", generic_procs, data, scenarioId, ruleId)
+    train_results = evaluate_generic_procedures("train", generic_procs_copy, data, scenarioId, ruleId)
     # write training results
     with open(results_path, "w") as f:
         f.write("✅ TRAINING RESULTS:\n")
@@ -312,9 +383,19 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
             status = "✅" if r["success"] else "❌"
             f.write(f"{status} trainId={r['trainId']}, proc={r['procedure_id']}\n")
     current_rule.procedures = normalized_procs
-    current_rule.generic_procs = generic_procs
+    # record train_results & pick only those procs that were 100% successful
     current_rule.train_results = train_results
     successful = filter_successful_procedures(train_results)
+    if not successful:
+        print("❌ No successful procedures found.")
+
+    # prune out any procedures that did *not* pass on every training example
+    pruned = [p for p in generic_procs_copy if p.id in successful]
+    if len(pruned) < len(generic_procs_copy):
+        print(f"ℹ️  Pruned {len(generic_procs_copy) - len(pruned)} procedures; {len(pruned)} remain for testing")
+
+    current_rule.generic_procs = pruned
+
     if not successful:
         print("❌ No successful procedures found.")
 
@@ -341,6 +422,106 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
                 results_path
             )
 
+def split_contender_procs(generic_procs: list[Procedure]) -> list[Procedure]:
+
+    def collect_lineage(proc: Procedure, start_id: str) -> set[str]:
+        lineage = set()
+
+        def walk_bindings(bind):
+            """Yield bind and recurse into any nested sub_bindings."""
+            yield bind
+            sub = getattr(bind, "sub_bindings", None)
+            if sub:
+                children = sub.values() if isinstance(sub, Mapping) else (
+                    sub if isinstance(sub, Iterable) else []
+                )
+                for child in children:
+                    # only recurse into things that look like a Binding
+                    if hasattr(child, "source_procedure_id"):
+                        yield from walk_bindings(child)
+
+        def dfs(step_id: str):
+            # **GUARD**: skip any source id we no longer have
+            if step_id not in proc.steps:
+                print(f"   ⚠️  step {step_id!r} not in proc.steps, skipping")
+                return
+            if step_id in lineage:
+                return
+            lineage.add(step_id)
+            inst = proc.steps[step_id]
+
+            for bind_name, bind in inst.bindings.items():
+                for b in walk_bindings(bind):
+                    src = getattr(b, "source_procedure_id", None)
+                    if src:
+                        path = getattr(b, "path", "")
+                        print(f"   • via {bind_name}{'.'+path if path else ''} ← {src}")
+                        dfs(src)
+
+        print(f"↪ collect_lineage for proc={proc.id}, starting at END step={start_id}")
+        dfs(start_id)
+        print(f"→ lineage collected: {sorted(lineage)}\n")
+        return lineage
+
+    # 1) find every (proc, inst) where inst.END == True
+    end_pairs = [
+        (proc, inst)
+        for proc in generic_procs
+        for inst in proc.steps.values()
+        if getattr(inst, "END", False)
+    ]
+    # 2) if there's exactly one END, prune *that* proc to its lineage —
+    #    this will drop any stray steps (like a second move_object).
+    if len(end_pairs) == 1:
+        proc, end_inst = end_pairs[0]
+        lineage_ids = collect_lineage(proc, end_inst.id)
+        # always keep these two entry‐points
+        for sid, step in proc.steps.items():
+            if step.action.id in ("get_start_input", "get_attribute"):
+                lineage_ids.add(sid)
+
+        sub_steps = {
+            sid: copy.deepcopy(proc.steps[sid])
+            for sid in proc.steps
+            if sid in lineage_ids
+        }
+        return [
+            Procedure(
+                id=proc.id,
+                scenarioId=proc.scenarioId,
+                ruleId=proc.ruleId,
+                steps=sub_steps
+            )
+        ]
+    # 3) if there are no ENDs, bail out as before
+    if len(end_pairs) == 0:
+        return generic_procs
+
+    contender_procs = []
+    for proc, end_inst in end_pairs:
+        print(f"   • Splitting proc={proc.id} at END step={end_inst.id}")
+        lineage_ids = collect_lineage(proc, end_inst.id)
+
+        # always keep get_start_input & get_attribute
+        for sid, step in proc.steps.items():
+            if step.action.id in ("get_start_input", "get_attribute"):
+                lineage_ids.add(sid)
+
+        sub_steps = {
+            sid: copy.deepcopy(proc.steps[sid])
+            for sid in proc.steps
+            if sid in lineage_ids
+        }
+        contender_procs.append(
+            Procedure(
+                id=f"{proc.id}_contender_{end_inst.id}",
+                scenarioId=proc.scenarioId,
+                ruleId=proc.ruleId,
+                steps=sub_steps
+            )
+        )
+
+    return contender_procs
 
 if __name__ == "__main__":
     # ---- ARG PARSING & PATH SETUP ----
@@ -375,16 +556,16 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "5582e5ca"
     #DEFAULT_TASK_ID = "8be77c9e"
     #DEFAULT_TASK_ID = "c9e6f938"
-    #DEFAULT_TASK_ID = "2dee498d"
+    #DEFAULT_TASK_ID = "2dee498d" # 1/2 try to improve crop
 
     # Training 3
     #DEFAULT_TASK_ID = "1cf80156"
     #DEFAULT_TASK_ID = "32597951"
     #DEFAULT_TASK_ID = "25ff71a9"
     #DEFAULT_TASK_ID = "0b148d64"
-    DEFAULT_TASK_ID = "1f85a75f"
+    #DEFAULT_TASK_ID = "1f85a75f" # 1/2 try to improve crop
     #DEFAULT_TASK_ID = "23b5c85d"
-    #DEFAULT_TASK_ID = "9ecd008a"
+    DEFAULT_TASK_ID = "9ecd008a"
     #DEFAULT_TASK_ID = "ac0a08a4"
     #DEFAULT_TASK_ID = "be94b721"
     #DEFAULT_TASK_ID = "c909285e"

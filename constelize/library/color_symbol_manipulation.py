@@ -1,7 +1,7 @@
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
-from constelize.dsl.grid_dsl import recolor_sprite
+from constelize.dsl.grid_dsl import recolor_sprite, Grid
 
 
 def recolor(value: int, patch) -> frozenset:
@@ -26,6 +26,19 @@ def mostcolor(element) -> int:
 def leastcolor(element) -> int:
     values = [v for r in element for v in r] if isinstance(element, tuple) else [v for v, _ in element]
     return min(set(values), key=values.count)
+
+def set_output_bg_color_fn(grid: Grid, bg_color: int) -> Grid:
+    """
+    Return a new grid where every -1 cell in `grid`
+    has been replaced by `bg_color`.
+    """
+    return tuple(
+        tuple(
+            bg_color if cell == -1 or cell == -8 else cell
+            for cell in row
+        )
+        for row in grid
+    )
 
 ACTIONS = [
     Action(
@@ -110,5 +123,19 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=recolor_sprite
+    ),
+    Action(
+        id="set_output_bg_color",
+        name="Set Output Background Color",
+        description="Replace every '-1' or '-8' hole in a grid with the specified background color.",
+        category=ActionCategory.MAPPING_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="grid",    type="Grid",    binding=BindingStatus.VARIABLE),
+            ArgumentBinding(name="bg_color", type="Integer", binding=BindingStatus.UNRESOLVED),
+        ],
+        output_type="Grid",
+        function=set_output_bg_color_fn,
+        deterministic=True,
+        pure=True
     ),
 ]

@@ -149,7 +149,7 @@ def build_attributes_by_input_and_values(values_by_input: dict[str, dict[str, in
     return attributes_by_input_and_values
 
 
-def extract_common_attribute_action(
+def extract_common_attribute_action_old_to_remove(
     attributes_by_input_and_values: Dict[str, Dict[int, List[str]]],
     pairs: List[Tuple[int, int]],
     path: str,

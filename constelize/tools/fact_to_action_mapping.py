@@ -12,7 +12,8 @@ from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background
 from constelize.library.pattern_detection import detect_noise, denoise_grid
-from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint
+from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
+    canvas_by_object_size_fn
 from constelize.tools.registry_singleton import registry
 
 # Global unique ID counter for ActionInstances.
@@ -533,6 +534,95 @@ class CanvasByRatioFactToAction(FactToActionMapping):
             END=False
         )
 
+class CanvasByObjectSizeFactToAction(FactToActionMapping):
+    def __init__(self):
+        # fact_name is just a label; action_id must match the registered action
+        super().__init__("canvas_by_object_size", "canvas_by_object_size")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        query = """
+        SELECT DISTINCT
+            inp.trainId,
+            inp.testId,			
+            obj.id AS object_id,
+            inp.width  AS input_width,
+            inp.height AS input_height,
+            outp.width AS output_width,
+            outp.height AS output_height,
+            obj.width AS object_width,
+            obj.height AS object_height
+        FROM sprite_analysis AS inp
+        JOIN sprite_analysis AS outp
+          ON inp.trainId = outp.trainId
+         AND inp.testId  = outp.testId
+        JOIN object_analysis AS obj
+          ON obj.trainId = inp.trainId
+         AND obj.testId  = inp.testId
+         AND obj.isInsideInput = 1
+        WHERE
+          inp.isInsideInput   = 1
+          AND inp.isGrid       = 1
+          AND outp.isInsideOutput = 1
+          AND outp.isGrid      = 1
+          -- grid sizes must differ
+          AND (outp.width != inp.width OR outp.height != inp.height)
+          -- and there must be an object whose size exactly equals the output
+          AND obj.width  = outp.width
+          AND obj.height = outp.height
+        """
+        cursor = conn.execute(query)
+        cols = [d[0] for d in cursor.description]
+        rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+        # 2) Bail out if no candidate at all
+        if not rows:
+            return []
+
+        # 3) Which trains actually matched?
+        found_tids = {r["trainId"] for r in rows if r["trainId"] != -1}
+
+        # 4) Expected trains from TRAIN_INPUT_GRIDS
+        expected_tids = set(TRAIN_INPUT_GRIDS.keys())
+
+        # 5) Only proceed if every train has at least one row
+        if found_tids != expected_tids:
+            return []
+
+        return rows
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        # 1) Extract the object’s target size
+        obj_w = int(row["object_width"])
+        obj_h = int(row["object_height"])
+
+        # 2) Look up the right input grid
+        trainId, testId = row["trainId"], row["testId"]
+
+        # 3) Build the new canvas sized to fit that object
+        output_grid = canvas_by_object_size_fn(obj_w, obj_h)
+
+        # 4) Produce the ActionInstance
+        return ActionInstance(
+            id=f"canvas_by_object_size#{getUniqueId()}",
+            action=self.action,
+            bindings={
+                "object_width":   ArgumentBinding("object_width",    "Integer", binding=BindingStatus.UNRESOLVED, value=obj_w),
+                "object_height":  ArgumentBinding("object_height",   "Integer", binding=BindingStatus.UNRESOLVED, value=obj_h),
+            },
+            output_var="canvas_grid",
+            output_value=output_grid,
+            output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
+            trainId=trainId,
+            testId=testId,
+            isTrain=(trainId != -1),
+            isToOutput=True,
+            END=False
+        )
+
 # =============================================================================
 # build_start_input: Now modified to use BindingStatus.INPUT_GRID
 # =============================================================================
@@ -652,7 +742,6 @@ def build_select_object_and_attribute_instance(
     output_value: Any,
     criteria: List[Tuple[str, Any]],
     attribute_name: str,
-    object_ids: List[int],
     scenarioId: str,
     ruleId: str
 ) -> ActionInstance:
@@ -677,7 +766,6 @@ def build_select_object_and_attribute_instance(
             "testId":         ArgumentBinding("testId",         "Integer",                     binding=BindingStatus.CONTEXT,  value=testId),
             "criteria":       ArgumentBinding("criteria",       "List[Tuple[String,Integer]]", binding=BindingStatus.CONSTANT, value=criteria),
             "attribute_name": ArgumentBinding("attribute_name", "String",                      binding=BindingStatus.CONSTANT, value=attribute_name),
-            "object_ids":     ArgumentBinding("object_ids",     "List[Integer]",               binding=BindingStatus.CONSTANT, value=object_ids),
         },
         output_var=f"select_{attribute_name}",
         output_type=binding_type,
@@ -808,6 +896,56 @@ def build_repaint_instance(
         bufferInstance=buffer_inst
     )
 
+def build_set_output_bg_color_fact_to_action(
+    trainId:             int,
+    testId:              int,
+    bg_color:            int,
+    input_value:         Grid,
+    output_value:        Grid,
+    source_producer_id:  str,
+    scenarioId:          str,
+    ruleId:              str
+) -> ActionInstance:
+    """
+    Build an ActionInstance for the `set_output_bg_color_fact_to_action`
+    which fills all `-1` pixels in `input_value` with `bg_color`, producing
+    `output_value`.
+    """
+    # 1) Look up the action in the registry
+    action = registry.get_by_id("set_output_bg_color")  # adapt this ID to your registration
+
+    # 2) Construct a unique instance ID
+    inst_id = (
+        f"set_output_bg_color_{scenarioId}_{ruleId}_"
+        f"{source_producer_id}_train{trainId}_test{testId}"
+    )
+
+    # 3) Build and return the ActionInstance
+    return ActionInstance(
+        id=inst_id,
+        action=action,
+        bindings={
+            "bg_color":      ArgumentBinding("bg_color",      "Integer", binding=BindingStatus.UNRESOLVED, value=bg_color),
+            "grid":          ArgumentBinding(
+                                name="grid",
+                                type="Grid",
+                                binding=BindingStatus.VARIABLE,
+                                value=input_value,
+                                source_procedure_id=source_producer_id,
+                                use_anonymized=False
+                              ),
+        },
+        output_var="filled_grid",
+        output_type="Grid",
+        output_value=output_value,
+        trainId=trainId,
+        testId=testId,
+        isTrain=(testId == -1),
+        isToOutput=True,
+        scenarioId=scenarioId,
+        ruleId=ruleId
+    )
+
 class RecolorSpriteFactToAction(FactToActionMapping):
     def __init__(self):
         super().__init__("recolor_sprite", "recolor_sprite")
@@ -869,7 +1007,8 @@ class CropSpriteFactToAction(FactToActionMapping):
 
     def _test_function(self, conn):
         query = """
-        SELECT
+        SELECT distinct
+		  su.sprite_id AS sprite_id,
           so.trainId   AS trainId,
           so.testId    AS testId,
           so.minX      AS minX,
@@ -913,17 +1052,94 @@ class CropSpriteFactToAction(FactToActionMapping):
             id=f"crop_sprite_{row['trainId']}_{row['minX']}_{row['minY']}#{getUniqueId()}",
             action=registry.get_by_id("crop_sprite"),
             bindings={
-                "grid": ArgumentBinding("grid", "Grid", binding=BindingStatus.INPUT_GRID),
-                "minX": ArgumentBinding("minX", "Integer", binding=BindingStatus.UNRESOLVED, value=row["minX"]),
-                "minY": ArgumentBinding("minY", "Integer", binding=BindingStatus.UNRESOLVED, value=row["minY"]),
-                "width": ArgumentBinding("width", "Integer", binding=BindingStatus.UNRESOLVED, value=row["width"]),
-                "height": ArgumentBinding("height", "Integer", binding=BindingStatus.UNRESOLVED, value=row["height"]),
+                "grid": ArgumentBinding("grid", "Grid",        binding=BindingStatus.INPUT_GRID),
+                "minX": ArgumentBinding("minX", "Integer",     binding=BindingStatus.UNRESOLVED, value=row["minX"],   suggested_action="selectSpriteAndAttributeAction", suggested_sprite_id=row["sprite_id"], suggested_attribute="minX"),
+                "minY": ArgumentBinding("minY", "Integer",     binding=BindingStatus.UNRESOLVED, value=row["minY"],   suggested_action="selectSpriteAndAttributeAction", suggested_sprite_id=row["sprite_id"], suggested_attribute="minY"),
+                "width": ArgumentBinding("width", "Integer",   binding=BindingStatus.UNRESOLVED, value=row["width"],  suggested_action="selectSpriteAndAttributeAction", suggested_sprite_id=row["sprite_id"], suggested_attribute="width"),
+                "height": ArgumentBinding("height", "Integer", binding=BindingStatus.UNRESOLVED, value=row["height"], suggested_action="selectSpriteAndAttributeAction", suggested_sprite_id=row["sprite_id"], suggested_attribute="height"),
             },
             output_var="cropped_sprite",
             output_value=cropped,
             output_type="Grid",
             scenarioId=row["scenarioId"],
             ruleId=row["ruleId"],
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=(row["trainId"] != -1),
+            isToOutput=True
+        )
+
+# todo : improve object_analysis and this select
+class CropObjectFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("crop_object", "crop_object")
+
+    def _test_function(self, conn: sqlite3.Connection) -> list[dict]:
+        # find every object that ends up in the output (but wasn’t in the input)
+        query = """
+        SELECT
+            oa.id        AS object_id,
+            oa.trainId   AS trainId,
+            oa.testId    AS testId,
+            oa.minX      AS minX,
+            oa.minY      AS minY,
+            (oa.maxX - oa.minX) AS width,
+            (oa.maxY - oa.minY) AS height,
+            oa.data      AS data
+        FROM object_analysis oa
+        WHERE oa.isInsideInput  = 0
+          AND oa.isInsideOutput = 1
+        """
+        cursor = conn.execute(query)
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        print(f"[DEBUG crop_object] row → {row}")
+        # pick the right grid
+        raw = TRAIN_INPUT_GRIDS if row["trainId"] != -1 else TEST_INPUT_GRIDS
+        grid = to_concrete_grid(raw[row["trainId"] if row["trainId"] != -1 else row["testId"]])
+
+        # perform the actual crop
+        cropped = crop(
+            grid,
+            int(row["minX"]),
+            int(row["minY"]),
+            int(row["width"]),
+            int(row["height"])
+        )
+        print("[DEBUG crop_object] cropped →")
+        print(grid_to_pretty_string(cropped))
+
+        # build the instance, but leave every dimension UNRESOLVED
+        # and tag them so we can suggest a selectObjectAndAttributeAction later
+        return ActionInstance(
+            id=f"crop_object_{row['trainId']}_{row['minX']}_{row['minY']}#{getUniqueId()}",
+            action=registry.get_by_id("crop_object"),
+            bindings={
+                "grid":   ArgumentBinding("grid",   "Grid",    binding=BindingStatus.INPUT_GRID),
+                "minX":   ArgumentBinding("minX",   "Integer", binding=BindingStatus.UNRESOLVED, value=row["minX"],
+                                          suggested_action="selectObjectAndAttributeAction",
+                                          suggested_object_id=row["object_id"],
+                                          suggested_attribute="minX"),
+                "minY":   ArgumentBinding("minY",   "Integer", binding=BindingStatus.UNRESOLVED, value=row["minY"],
+                                          suggested_action="selectObjectAndAttributeAction",
+                                          suggested_object_id=row["object_id"],
+                                          suggested_attribute="minY"),
+                "width":  ArgumentBinding("width",  "Integer", binding=BindingStatus.UNRESOLVED, value=row["width"],
+                                          suggested_action="selectObjectAndAttributeAction",
+                                          suggested_object_id=row["object_id"],
+                                          suggested_attribute="width"),
+                "height": ArgumentBinding("height", "Integer", binding=BindingStatus.UNRESOLVED, value=row["height"],
+                                          suggested_action="selectObjectAndAttributeAction",
+                                          suggested_object_id=row["object_id"],
+                                          suggested_attribute="height"),
+            },
+            output_var="cropped_object",
+            output_value=cropped,
+            output_type="Grid",
+            scenarioId=row.get("scenarioId"),
+            ruleId=row.get("ruleId"),
             trainId=row["trainId"],
             testId=row["testId"],
             isTrain=(row["trainId"] != -1),
@@ -1370,7 +1586,9 @@ class MoveObjectFactToAction(FactToActionMapping):
           oa.minX AS patch_min_x,
           oa.minY AS patch_min_y,
           oa.moveRelX AS move_rel_x,
-          oa.moveRelY AS move_rel_y,
+          oa.moveRelY AS move_rel_y,          
+          oa.newPosX AS new_pos_x,
+          oa.newPosY AS new_pos_y,
           oa.moveBehindColor AS background_color,
           oa.width,
           oa.height,
@@ -1397,19 +1615,25 @@ class MoveObjectFactToAction(FactToActionMapping):
         # Patch bounding box
         patch_min_x = int(row["patch_min_x"])
         patch_min_y = int(row["patch_min_y"])
+        new_pos_x = int(row["new_pos_x"])
+        new_pos_y = int(row["new_pos_y"])
         patch_w = int(row["width"])
         patch_h = int(row["height"])
 
-        # Reconstruct patch as a 2D grid with anonymization of non-object pixels
-        base_input = TRAIN_INPUT_GRIDS[row["trainId"]]
-        patch = tuple(
-            tuple(
-                base_input[patch_min_y + i][patch_min_x + j]
-                if base_input[patch_min_y + i][patch_min_x + j] == object_color else -1
-                for j in range(patch_w)
-            )
-            for i in range(patch_h)
-        )
+        if bg_color == -1:
+            move_rel_x = 0
+            move_rel_y = 0
+            patch_min_x = 0
+            patch_min_y = 0
+
+        # now extract the patch, anonymizing everything that isn't the object:
+        coords: list[list[int]] = json.loads(row["data"])
+        patch_grid = [[-1 for _ in range(patch_w)] for __ in range(patch_h)]
+        for i_off, j_off in coords:
+            # guard in case data contains out-of-bounds:
+            if 0 <= i_off < patch_h and 0 <= j_off < patch_w:
+                patch_grid[i_off][j_off] = object_color
+        patch = tuple(tuple(r) for r in patch_grid)
 
         # Create anonymized output grid
         base_output = TRAIN_OUTPUT_GRIDS[row["trainId"]]
@@ -1425,11 +1649,14 @@ class MoveObjectFactToAction(FactToActionMapping):
             patch_min_y,
             move_rel_x,
             move_rel_y,
+            new_pos_x,
+            new_pos_y,
             object_color,
             bg_color
         )
 
-        #print(grid_to_pretty_string(updated_grid))
+        print("MoveObjectFactToAction")
+        print(grid_to_pretty_string(updated_grid))
 
         action = registry.get_by_id(self.action_id)
         # Bind all 8 parameters as UNRESOLVED
@@ -1440,23 +1667,16 @@ class MoveObjectFactToAction(FactToActionMapping):
             ),
             "patch": ArgumentBinding(
                 name="patch", type="Grid",
-                binding=BindingStatus.UNRESOLVED, value=patch
+                binding=BindingStatus.UNRESOLVED, value=patch, use_anonymized=False,
+                suggested_action="selectObjectGridAction", suggested_object_id=row["object_id"]
             ),
-            "patch_min_x": ArgumentBinding(
-                name="patch_min_x", type="Integer",
-                binding=BindingStatus.UNRESOLVED, value=patch_min_x
+            "new_pos_x": ArgumentBinding(
+                name="new_pos_x", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=new_pos_x
             ),
-            "patch_min_y": ArgumentBinding(
-                name="patch_min_y", type="Integer",
-                binding=BindingStatus.UNRESOLVED, value=patch_min_y
-            ),
-            "move_rel_x": ArgumentBinding(
-                name="move_rel_x", type="Integer",
-                binding=BindingStatus.UNRESOLVED, value=move_rel_x
-            ),
-            "move_rel_y": ArgumentBinding(
-                name="move_rel_y", type="Integer",
-                binding=BindingStatus.UNRESOLVED, value=move_rel_y
+            "new_pos_y": ArgumentBinding(
+                name="new_pos_y", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=new_pos_y
             ),
             "object_color": ArgumentBinding(
                 name="object_color", type="Color",
@@ -1467,6 +1687,47 @@ class MoveObjectFactToAction(FactToActionMapping):
                 binding=BindingStatus.UNRESOLVED, value=bg_color
             ),
         }
+
+        if bg_color == -1:
+            # constant bindings for patch coordinates
+            bindings["patch_min_x"] = ArgumentBinding(
+                name="patch_min_x", type="Integer",
+                binding=BindingStatus.CONSTANT, value=patch_min_x
+            )
+            bindings["patch_min_y"] = ArgumentBinding(
+                name="patch_min_y", type="Integer",
+                binding=BindingStatus.CONSTANT, value=patch_min_y
+            )
+            bindings["move_rel_x"] = ArgumentBinding(
+                name="move_rel_x", type="Integer",
+                binding=BindingStatus.CONSTANT, value=move_rel_x
+            )
+            bindings["move_rel_y"] = ArgumentBinding(
+                name="move_rel_y", type="Integer",
+                binding=BindingStatus.CONSTANT, value=move_rel_y
+            )
+        else:
+            # unresolved with suggestions
+            bindings["patch_min_x"] = ArgumentBinding(
+                name="patch_min_x", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=patch_min_x,
+                suggested_action="selectObjectAndAttributeAction",
+                suggested_object_id=row["object_id"], suggested_attribute="minX"
+            )
+            bindings["patch_min_y"] = ArgumentBinding(
+                name="patch_min_y", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=patch_min_y,
+                suggested_action="selectObjectAndAttributeAction",
+                suggested_object_id=row["object_id"], suggested_attribute="minY"
+            )
+            bindings["move_rel_x"] = ArgumentBinding(
+                name="move_rel_x", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=move_rel_x
+            )
+            bindings["move_rel_y"] = ArgumentBinding(
+                name="move_rel_y", type="Integer",
+                binding=BindingStatus.UNRESOLVED, value=move_rel_y
+            )
 
         return ActionInstance(
             id=f"move_object_{row['object_id']}#{getUniqueId()}",
@@ -1496,12 +1757,13 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     ZoomFactToAction(),
     RepeatedSpriteFactToAction(),
     CanvasByRatioFactToAction(),
+    CanvasByObjectSizeFactToAction(),
     RecolorSpriteFactToAction(),
-    CropSpriteFactToAction(),
     SpriteComputationFactToAction(),
     DenoiseFactToAction(),
     ZoomOutFactToAction(),
     CreateObjectFactToAction(),
-    MoveObjectFactToAction()
+    MoveObjectFactToAction(),
+    CropSpriteFactToAction(),
 ]
 

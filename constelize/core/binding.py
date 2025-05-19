@@ -1,3 +1,4 @@
+#constelize/core/binding.py
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
@@ -39,3 +40,8 @@ class ArgumentBinding:
     sub_bindings_length_value: Optional[int] = None
     # hash representing the sub-bidding path, the producer and the consumer
     binding_hash: Optional[str] = field(default=None, init=False)
+    suggested_action: Optional[str] = None
+    suggested_attribute: Optional[str] = None
+    suggested_sprite_id: Optional[str] = None
+    suggested_object_id: Optional[str] = None
+    use_anonymized: Optional[bool] = True

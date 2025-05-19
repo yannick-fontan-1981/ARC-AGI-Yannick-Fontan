@@ -373,35 +373,55 @@ def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isIn
     sorted_by_size = sorted(obj_rows, key=lambda r: r["pixelCount"], reverse=True)
     for rank, row in enumerate(sorted_by_size, start=1):
         row["sizeOrder"] = rank
+    sorted_by_size_asc = sorted(obj_rows, key=lambda r: r["pixelCount"])
+    for rank, row in enumerate(sorted_by_size_asc, start=1):
+        row["sizeOrderDesc"] = rank
 
     return results
 
 def compute_move_behind_color(input_grid, output_grid, pixels, obj_color, neighbor_colors=None):
     """
-    Compute the color of the pixel(s) left behind when moving an object.
-    - pixels: iterable of (row,col) coordinates in the grid.
-    - obj_color: the color of the object being moved.
-    - neighbor_colors: optional list of neighbor-colors fallback.
-    Returns:
-      * common behind-color if all vacated pixels share the same color != obj_color
-      * else first element of neighbor_colors if provided and non-empty
-      * otherwise None.
+    Compute the color left behind when an object moves.
+
+    Returns -1 whenever the output no longer covers the original pixels
+    or whenever nothing else can be found.
     """
     if not pixels:
-        return None
-    # Colors in output at original positions
+        print("→ No pixels, returning -1")
+        return -1
+
+    H = len(output_grid)
+    W = len(output_grid[0]) if H else 0
+
+    # 1) Out-of-bounds check
+    for r, c in pixels:
+        if r < 0 or r >= H or c < 0 or c >= W:
+            print(f"→ Pixel {(r,c)} outside output grid, returning -1")
+            return -1
+
+    # 2) Gather what’s in those spots now
     behind_colors = [output_grid[r][c] for r, c in pixels]
-    # Exclude object color
+    print("  behind_colors:", behind_colors)
+
+    # 3) Remove any that still equal the object’s color
     filtered = [col for col in behind_colors if col != obj_color]
     if not filtered:
-        return None
-    _first = filtered[0]
-    # Uniform behind-color?
-    if all(col == _first for col in filtered):
-        return _first
-    # Fallback to most common neighbor color
+        print("→ All spots are still obj_color, returning -1")
+        return -1
+
+    # 4) Uniform-color?
+    first = filtered[0]
+    if all(col == first for col in filtered):
+        print(f"→ Uniform behind-color = {first}")
+        return first
+
+    # 5) Fallback to neighbor_colors if you passed them
     if neighbor_colors:
+        print(f"→ Non-uniform but neighbor_colors provided, returning {neighbor_colors[0]}")
         return neighbor_colors[0]
+
+    # 6) Give up → None
+    print("→ Non-uniform and no neighbor_colors, returning None")
     return None
 
 def bulk_insert(conn, table, rows):
@@ -670,6 +690,24 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
     UPDATE object_analysis AS oa
     SET moveRelY = (
       SELECT t.minY - oa.minY
+      FROM object_analysis t
+      WHERE t.id = oa.target_object_id
+    )
+    WHERE oa.target_object_id IS NOT NULL;
+    
+    -- 23b) newPosX
+    UPDATE object_analysis AS oa
+    SET newPosX = (
+      SELECT t.minX
+      FROM object_analysis t
+      WHERE t.id = oa.target_object_id
+    )
+    WHERE oa.target_object_id IS NOT NULL;
+
+    -- 24b) newPosY
+    UPDATE object_analysis AS oa
+    SET newPosY = (
+      SELECT t.minY
       FROM object_analysis t
       WHERE t.id = oa.target_object_id
     )

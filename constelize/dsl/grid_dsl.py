@@ -70,6 +70,8 @@ def shift_with_background(
     patch_min_y: int,
     move_rel_x: int,
     move_rel_y: int,
+    new_pos_x: int,
+    new_pos_y: int,
     object_color: int,
     background_color: int
 ) -> Grid:
@@ -96,26 +98,37 @@ def shift_with_background(
     patch_w = len(patch[0]) if patch_h else 0
 
     # 1) Erase original patch cells, but only actual object pixels (ignore -8)
-    for i_local in range(patch_h):
-        for j_local in range(patch_w):
-            cell = patch[i_local][j_local]
-            if cell == object_color:
-                i = patch_min_y + i_local
-                j = patch_min_x + j_local
-                if 0 <= i < rows and 0 <= j < cols:
-                    new_grid[i][j] = background_color
+    if background_color != -1:
+        for i_local in range(patch_h):
+            for j_local in range(patch_w):
+                cell = patch[i_local][j_local]
+                if cell == object_color:
+                    i = patch_min_y + i_local
+                    j = patch_min_x + j_local
+                    if 0 <= i < rows and 0 <= j < cols:
+                        new_grid[i][j] = background_color
 
     # 2) Draw moved patch cells at new positions, ignore anonymized
-    for i_local in range(patch_h):
-        for j_local in range(patch_w):
-            cell = patch[i_local][j_local]
-            if cell == object_color:
-                i = patch_min_y + i_local
-                j = patch_min_x + j_local
-                ni = i + move_rel_y
-                nj = j + move_rel_x
-                if 0 <= ni < rows and 0 <= nj < cols:
-                    new_grid[ni][nj] = object_color
+    if background_color == -1:
+        # place at absolute new_pos_x, new_pos_y:
+        for i_local in range(patch_h):
+            for j_local in range(patch_w):
+                if patch[i_local][j_local] == object_color:
+                    ni = new_pos_y + i_local
+                    nj = new_pos_x + j_local
+                    if 0 <= ni < rows and 0 <= nj < cols:
+                        new_grid[ni][nj] = object_color
+    else:
+        for i_local in range(patch_h):
+            for j_local in range(patch_w):
+                cell = patch[i_local][j_local]
+                if cell == object_color:
+                    i = patch_min_y + i_local
+                    j = patch_min_x + j_local
+                    ni = i + move_rel_y
+                    nj = j + move_rel_x
+                    if 0 <= ni < rows and 0 <= nj < cols:
+                        new_grid[ni][nj] = object_color
 
     # 3) Return new grid frozen
     return tuple(tuple(row) for row in new_grid)
@@ -277,8 +290,8 @@ def grids_equal(grid1, grid2) -> bool:
         if len(row1) != len(row2):
             return False
         for cell1, cell2 in zip(row1, row2):
-            # −8 is a wildcard
-            if cell1 == -8 or cell2 == -8:
+            # −8 is a wildcard, -1 is out of object or sprite
+            if cell1 == -8 or cell2 == -8 or cell1 == -1 or cell2 == -1:
                 continue
             if cell1 != cell2:
                 return False
