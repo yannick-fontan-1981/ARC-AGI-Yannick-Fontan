@@ -1,8 +1,10 @@
 #constelize/core/scenario.py
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from constelize.core.rule import Rule  # You'll need to create rule.py
+from constelize.dsl.grid_dsl import Grid
+
 
 @dataclass
 class Scenario:
@@ -15,6 +17,7 @@ class Scenario:
     rule_to_analyse: Rule = None
     to_launch_next: List["Scenario"] = field(default_factory=list)
     from_fallback: Optional[bool] = False
+    new_sprites: Dict[str, List[Tuple[Tuple[int, ...], ...]]] = field(default_factory=dict)
 
     def run(self) -> Dict[str, Any]:
         scope: Dict[str, Any] = dict(self.input_data)

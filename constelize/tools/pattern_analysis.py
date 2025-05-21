@@ -69,6 +69,10 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                 print("FACT_TO_ACTION_MAPPING denoise")
             rows = mapping.test_function(conn)
             for row in rows:
+                # skip any rows with invalid trainId
+                if row.get("trainId") not in TRAIN_OUTPUT_GRIDS:
+                    print(f"⚠️  Skipping build for mapping {mapping.fact_name}: invalid trainId={row.get('trainId')}")
+                    continue
                 try:
                     row["scenarioId"] = scenarioId
                     row["ruleId"] = ruleId
@@ -125,15 +129,17 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
 def compute_buffer_and_repaint(action_instances, ruleId, scenarioId):
     if not any(inst.END for inst in action_instances):
         buffers: Dict[int, ActionInstance] = {}
-        train_ids = {inst.trainId for inst in action_instances}
+        # only consider valid train IDs (skip any -1 or missing)
+        train_ids = {t for t in {inst.trainId for inst in action_instances} if t in TRAIN_INPUT_GRIDS}
 
         for t in train_ids:
             # 1) Look for canvas_by_ratio
-            canvas_inst = next(
-                (i for i in action_instances
-                 if i.trainId == t and i.action.id == "canvas_by_ratio"),
-                None
-            )
+            # look up the canvas instance, but skip if action is missing or id mismatches
+            canvas_inst = None
+            for i in action_instances:
+                if i.trainId == t and getattr(i.action, "id", None) == "canvas_by_ratio":
+                    canvas_inst = i
+                    break
 
             # 2) If no canvas, look for get_start_input
             start_inst = None
@@ -184,7 +190,7 @@ def compute_buffer_and_repaint(action_instances, ruleId, scenarioId):
 
         # chain repaints onto these buffers (mutating buffer.output_value each time)
         for inst in list(action_instances):
-            if inst.toRepaint:
+            if inst.toRepaint and inst.trainId in buffers:
                 buffer_inst = buffers[inst.trainId]
                 print(f"inst.trainId {inst.trainId} ")
                 print("inst")
@@ -1298,42 +1304,79 @@ def pixel_accuracy(grid1, grid2):
     return {"matching": matching, "total": total, "accuracy": accuracy}
 
 
-def preprocess_arc_with_action(arc_data: dict,
-                               action_inst) -> dict:
+def preprocess_arc_with_action(arc_data: dict, action_inst) -> dict:
     """
-    Apply `generic_proc.action_producing_output.action.function`
-    to every train‐ and test‐input in arc_data, returning a fresh
-    in-memory ARC dict with those transformed inputs.
+    Apply `action_inst.action.function` to every train and test input in arc_data,
+    injecting all of the action’s bindings (including scenarioId, trainId, testId)
+    plus the input grid itself. Overrides CONTEXT bindings for trainId/testId
+    based on the index of each example, so new_sprites keys are correct.
+    Returns a new ARC-style dict with transformed inputs.
     """
-    fn = action_inst.action.function                     # the raw Python function
-    # figure out the function's single argument name (e.g. "grid")
-    arg_name = next(iter(action_inst.bindings.keys()))
+    fn = action_inst.action.function
+    print("preprocess_arc_with_action")
+    print("action_inst.bindings", action_inst.bindings)
 
-    # transform the train set
+    # Transform the train set
     new_train = []
-    for ex in arc_data["train"]:
+    for train_idx, ex in enumerate(arc_data["train"]):
         inp = ex["input"]
-        # call fn as either fn(inp) or fn(**{arg_name: inp})
+        # Build kwargs from bindings:
+        # - INPUT_GRID → the example’s grid
+        # - CONTEXT trainId/testId → override based on this loop
+        # - other constants/INSTANCE → use binding.value
+        kwargs = {}
+        for name, binding in action_inst.bindings.items():
+            if binding.binding == BindingStatus.INPUT_GRID:
+                kwargs[name] = inp
+            elif binding.binding == BindingStatus.CONTEXT:
+                if name == "trainId":
+                    kwargs[name] = train_idx
+                elif name == "testId":
+                    kwargs[name] = -1
+                else:
+                    kwargs[name] = binding.value
+            else:
+                kwargs[name] = binding.value
+
+        # Call the action function with full kwargs (fall back to single-arg)
         try:
-            out = fn(inp)
+            out = fn(**kwargs)
         except TypeError:
-            out = fn(**{arg_name: inp})
+            out = fn(inp)
+
         new_train.append({
             "input": out,
             "output": ex["output"]
         })
 
-    # transform the test set (if any)
+    # Transform the test set (if any)
     new_test = []
-    for ex in arc_data.get("test", []):
+    for test_idx, ex in enumerate(arc_data.get("test", [])):
         inp = ex["input"]
+        kwargs = {}
+        for name, binding in action_inst.bindings.items():
+            if binding.binding == BindingStatus.INPUT_GRID:
+                kwargs[name] = inp
+            elif binding.binding == BindingStatus.CONTEXT:
+                if name == "trainId":
+                    kwargs[name] = -1
+                elif name == "testId":
+                    kwargs[name] = test_idx
+                else:
+                    kwargs[name] = binding.value
+            else:
+                kwargs[name] = binding.value
+
         try:
-            out = fn(inp)
+            out = fn(**kwargs)
         except TypeError:
-            out = fn(**{arg_name: inp})
+            out = fn(inp)
+
         new_test.append({"input": out})
 
     return {"train": new_train, "test": new_test}
+
+
 
 def evaluate_generic_procedures_on_scenarios(mode: str, data: dict, scenarios: list):
     """

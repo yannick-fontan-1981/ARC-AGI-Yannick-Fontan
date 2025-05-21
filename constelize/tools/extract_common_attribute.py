@@ -790,7 +790,6 @@ def common_attributes_by_train_value_pairs(
             # if no common column **names** in this train, bail out
             if not common_for_train:
                 print(f"no common column **names** in this train, bail out")
-                exit(0)
                 return []
 
         per_train_common[train_id] = common_for_train  # type: ignore
@@ -799,7 +798,6 @@ def common_attributes_by_train_value_pairs(
     common_attrs = set.intersection(*per_train_common.values()) if per_train_common else set()
     if not common_attrs:
         print(f"not common_attrs")
-        exit(0)
         return []
 
     # 4) split out table#row → column, but only for columns we kept
@@ -844,7 +842,6 @@ def common_attributes_by_train_value_pairs(
     for table, ids in object_rows_by_table.items():
         print(f"[OBJECT] {table}: {sorted(ids)}")
 
-    exit(0)
     return (
         sorted(common_attrs),
         {t: set(ids) for t, ids in sprite_rows_by_table.items()},

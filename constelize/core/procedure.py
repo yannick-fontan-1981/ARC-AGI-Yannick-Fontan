@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 from constelize.core.action import Action
 from constelize.core.binding import BindingStatus, ArgumentBinding
+from constelize.dsl.grid_dsl import Grid
 
 
 @dataclass

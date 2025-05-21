@@ -307,7 +307,26 @@ def strip_suggestions_from_proc(proc: Procedure) -> Procedure:
 def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, json_path, raw_json, results_path):
     scenarioId = current_scenario.id
     ruleId = current_rule.id
-    run_analysis_scripts(raw_json, inline=True, name=json_path)
+
+    # 1) deserialize the incoming ARC JSON
+    payload = json.loads(raw_json)
+
+    # 2) convert your new_sprites (tuple‐of‐tuples) into lists so they're JSON‐serializable
+    serial_sprites = {}
+    for key, grids in current_scenario.new_sprites.items():
+        serial_sprites[key] = []
+        for grid in grids:
+            # grid is Tuple[Tuple[int,...],...]
+            serial_sprites[key].append([list(row) for row in grid])
+
+    # 3) embed under a top‐level field
+    payload["new_sprites"] = serial_sprites
+
+    # 4) re‐dump to a single JSON string
+    raw_with_sprites = json.dumps(payload)
+
+    run_analysis_scripts(raw_with_sprites, inline=True, name=json_path)
+
     # 2) inject the sqlite‐derived attributes
     _tables = load_all_tables_from_sqlite(db_path)
     _values = build_values_by_input(db_path)
@@ -402,9 +421,6 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
         #print(f"current_scenario.to_launch_next: {current_scenario.to_launch_next}")
         for scenario in current_scenario.to_launch_next:
             print(f"scenario to launch next: {scenario.id}")
-            if scenario.id != "scenario_denoise_2":
-                print(f"infinite loop to launch next: {scenario.id}")
-                exit(0)
             pre_rule = scenario.rule_to_launch_before
             generic_proc = pre_rule.proc_producing_output
             action_inst = generic_proc.action_producing_output
@@ -412,6 +428,9 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
             new_raw_json = json.dumps(new_arc_data)
             mem_path = scenario.id
             print(f"new_raw_json: {new_raw_json}")
+            print("current_scenario.new_sprites")
+            print(current_scenario.new_sprites)
+            scenario.new_sprites = current_scenario.new_sprites
             generate_scenarios_and_rules(
                 scenario,
                 scenario.rule_to_analyse,
@@ -565,16 +584,16 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "0b148d64"
     #DEFAULT_TASK_ID = "1f85a75f" # 1/2 try to improve crop
     #DEFAULT_TASK_ID = "23b5c85d"
-    DEFAULT_TASK_ID = "9ecd008a"
-    #DEFAULT_TASK_ID = "ac0a08a4"
-    #DEFAULT_TASK_ID = "be94b721"
-    #DEFAULT_TASK_ID = "c909285e"
-    #DEFAULT_TASK_ID = "f25ffba3"
-    #DEFAULT_TASK_ID = "c1d99e64"
-    #DEFAULT_TASK_ID = "b91ae062"
-    #DEFAULT_TASK_ID = "3aa6fb7a"
-    #DEFAULT_TASK_ID = "7b7f7511"
-    #DEFAULT_TASK_ID = "4258a5f9"
+    #DEFAULT_TASK_ID = "9ecd008a" # find missing sprite in symmetry
+    DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
+    #DEFAULT_TASK_ID = "be94b721" # select greater sprite (sizeOrder 2 ?)
+    #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
+    #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
+    #DEFAULT_TASK_ID = "c1d99e64" # lightCycle !
+    #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
+    #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
+    #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Repeated sprite ?
+    #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 
     trainings_number = 3
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
@@ -603,3 +622,135 @@ if __name__ == "__main__":
         print(f"⚠️ Overall test_file timed out: {te}")
         success = False
 
+
+    # Training 4
+    #DEFAULT_TASK_ID = "2dc579da"
+    #DEFAULT_TASK_ID = "28bf18c6"
+    #DEFAULT_TASK_ID = "3af2c5a8"
+    #DEFAULT_TASK_ID = "44f52bb0"
+    #DEFAULT_TASK_ID = "62c24649"
+    #DEFAULT_TASK_ID = "67e8384a"
+    #DEFAULT_TASK_ID = "7468f01a"
+    #DEFAULT_TASK_ID = "662c240a"
+    #DEFAULT_TASK_ID = "42a50994"
+    #DEFAULT_TASK_ID = "56ff96f3"
+    #DEFAULT_TASK_ID = "50cb2852"
+    #DEFAULT_TASK_ID = "4347f46a"
+    #DEFAULT_TASK_ID = "46f33fce"
+    #DEFAULT_TASK_ID = "a740d043"
+    #DEFAULT_TASK_ID = "a79310a0"
+    #DEFAULT_TASK_ID = "aabf363d"
+    #DEFAULT_TASK_ID = "ae4f1146"
+    #DEFAULT_TASK_ID = "b27ca6d3"
+    #DEFAULT_TASK_ID = "ce22a75a"
+    #DEFAULT_TASK_ID = "dc1df850"
+    #DEFAULT_TASK_ID = "f25fbde4"
+    #DEFAULT_TASK_ID = "44d8ac46"
+    #DEFAULT_TASK_ID = "1e0a9b12"
+    #DEFAULT_TASK_ID = "0d3d703e"
+    #DEFAULT_TASK_ID = "3618c87e"
+    #DEFAULT_TASK_ID = "1c786137"
+
+    # Training 5
+    #DEFAULT_TASK_ID = "8efcae92"
+    #DEFAULT_TASK_ID = "445eab21"
+    #DEFAULT_TASK_ID = "6f8cd79b"
+    #DEFAULT_TASK_ID = "2013d3e2"
+    #DEFAULT_TASK_ID = "41e4d17e"
+    #DEFAULT_TASK_ID = "9565186b"
+    #DEFAULT_TASK_ID = "aedd82e4"
+    #DEFAULT_TASK_ID = "bb43febb"
+    #DEFAULT_TASK_ID = "e98196ab"
+    #DEFAULT_TASK_ID = "f76d97a5"
+    #DEFAULT_TASK_ID = "ce9e57f2"
+    #DEFAULT_TASK_ID = "22eb0ac0"
+    #DEFAULT_TASK_ID = "9f236235"
+    #DEFAULT_TASK_ID = "a699fb00"
+
+    # Training 6
+    #DEFAULT_TASK_ID = "46442a0e"
+    #DEFAULT_TASK_ID = "7fe24cdd"
+    #DEFAULT_TASK_ID = "0ca9ddb6"
+    #DEFAULT_TASK_ID = "543a7ed5"
+    #DEFAULT_TASK_ID = "0520fde7"
+    #DEFAULT_TASK_ID = "dae9d2b5"
+    #DEFAULT_TASK_ID = "8d5021e8"
+    #DEFAULT_TASK_ID = "928ad970"
+    #DEFAULT_TASK_ID = "b60334d2"
+    #DEFAULT_TASK_ID = "b94a9452"
+    #DEFAULT_TASK_ID = "d037b0a7"
+    #DEFAULT_TASK_ID = "d0f5fe59"
+    #DEFAULT_TASK_ID = "e3497940"
+    #DEFAULT_TASK_ID = "e9afcf9a"
+    #DEFAULT_TASK_ID = "48d8fb45"
+    #DEFAULT_TASK_ID = "d406998b"
+    #DEFAULT_TASK_ID = "5117e062"
+    #DEFAULT_TASK_ID = "3906de3d"
+    #DEFAULT_TASK_ID = "00d62c1b"
+    #DEFAULT_TASK_ID = "7b6016b9"
+    #DEFAULT_TASK_ID = "67385a82"
+    #DEFAULT_TASK_ID = "a5313dff"
+    #DEFAULT_TASK_ID = "ea32f347"
+    #DEFAULT_TASK_ID = "d631b094"
+    #DEFAULT_TASK_ID = "10fcaaa3"
+
+    # Training 7
+    #DEFAULT_TASK_ID = "007bbfb7"
+    #DEFAULT_TASK_ID = "496994bd"
+    #DEFAULT_TASK_ID = "1f876c06"
+    #DEFAULT_TASK_ID = "05f2a901"
+    #DEFAULT_TASK_ID = "39a8645d"
+    #DEFAULT_TASK_ID = "1b2d62fb"
+    #DEFAULT_TASK_ID = "90c28cc7"
+    #DEFAULT_TASK_ID = "b6afb2da"
+    #DEFAULT_TASK_ID = "b9b7f026"
+    #DEFAULT_TASK_ID = "ba97ae07"
+    #DEFAULT_TASK_ID = "c9f8e694"
+    #DEFAULT_TASK_ID = "d23f8c26"
+    #DEFAULT_TASK_ID = "d5d6de2d"
+    #DEFAULT_TASK_ID = "dbc1a6ce"
+    #DEFAULT_TASK_ID = "ded97339"
+    #DEFAULT_TASK_ID = "ea786f4a"
+    #DEFAULT_TASK_ID = "08ed6ac7"
+    #DEFAULT_TASK_ID = "40853293"
+    #DEFAULT_TASK_ID = "5521c0d9"
+    #DEFAULT_TASK_ID = "f8ff0b80"
+    #DEFAULT_TASK_ID = "85c4e7cd"
+    #DEFAULT_TASK_ID = "d2abd087"
+    #DEFAULT_TASK_ID = "017c7c7b"
+    #DEFAULT_TASK_ID = "363442ee"
+    #DEFAULT_TASK_ID = "5168d44c"
+    #DEFAULT_TASK_ID = "e9614598"
+    #DEFAULT_TASK_ID = "d9fac9be"
+
+    # Training 8
+    #DEFAULT_TASK_ID = "e50d258f"
+    #DEFAULT_TASK_ID = "810b9b61"
+    #DEFAULT_TASK_ID = "54d82841"
+    #DEFAULT_TASK_ID = "60b61512"
+    #DEFAULT_TASK_ID = "25d8a9c8"
+    #DEFAULT_TASK_ID = "239be575"
+    #DEFAULT_TASK_ID = "67a423a3"
+    #DEFAULT_TASK_ID = "5c0a986e"
+    #DEFAULT_TASK_ID = "6430c8c4"
+    #DEFAULT_TASK_ID = "94f9d214"
+    #DEFAULT_TASK_ID = "a1570a43"
+    #DEFAULT_TASK_ID = "ce4f8723"
+    #DEFAULT_TASK_ID = "d13f3404"
+    #DEFAULT_TASK_ID = "dc433765"
+    #DEFAULT_TASK_ID = "f2829549"
+    #DEFAULT_TASK_ID = "fafffa47"
+    #DEFAULT_TASK_ID = "fcb5c309"
+    #DEFAULT_TASK_ID = "ff805c23"
+    #DEFAULT_TASK_ID = "e76a88a6"
+    #DEFAULT_TASK_ID = "7c008303"
+    #DEFAULT_TASK_ID = "7f4411dc"
+    #DEFAULT_TASK_ID = "b230c067"
+    #DEFAULT_TASK_ID = "e8593010"
+    #DEFAULT_TASK_ID = "6d75e8bb"
+    #DEFAULT_TASK_ID = "3f7978a0"
+    #DEFAULT_TASK_ID = "1190e5a7"
+    #DEFAULT_TASK_ID = "6e02f1e3"
+    #DEFAULT_TASK_ID = "a61f2674"
+
+    # Training 9

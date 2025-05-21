@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from typing import List, Optional, Dict, Any, Tuple
+from collections import Counter
 from collections import defaultdict
 from itertools import product
 
@@ -11,7 +12,8 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background
-from constelize.library.pattern_detection import detect_noise, denoise_grid
+from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
+    extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
     canvas_by_object_size_fn
 from constelize.tools.registry_singleton import registry
@@ -1364,7 +1366,118 @@ class DenoiseFactToAction(FactToActionMapping):
 
         # 4. Mark this instance as needing its own rule
         inst.IN_SEPARATE_RULE = True
+        return inst
 
+class FixSymmetryFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("fix_symmetry", "fix_symmetry")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn):
+        print("\n🔍 Running FixSymmetryFactToAction._test_function")
+        results = []
+        skipped = []
+        for trainId, grid in TRAIN_INPUT_GRIDS.items():
+            print(f"  ▶️ Checking trainId={trainId}")
+            h = len(grid)
+            w = len(grid[0]) if h else 0
+            print(f"    Grid size: {h}x{w}")
+            if h < 10 or w < 10:
+                print("    ⚠️ Grid too small (<10x10), skipping")
+                skipped.append(trainId)
+                continue
+            sym_rows = sum(all(row[j] == row[w-1-j] for j in range(w)) for row in grid)
+            sym_cols = sum(all(grid[i][j] == grid[h-1-i][j] for i in range(h)) for j in range(w))
+            pct_rows, pct_cols = sym_rows / h, sym_cols / w
+            print(f"    Symmetric rows: {sym_rows}/{h} ({pct_rows:.2%}), cols: {sym_cols}/{w} ({pct_cols:.2%})")
+            isH, isV = pct_rows >= 0.75, pct_cols >= 0.75
+            print(f"    Detected isH={isH}, isV={isV}")
+            if not (isH or isV):
+                print("    ❌ Neither symmetry meets threshold, skipping")
+                skipped.append(trainId)
+                continue
+
+            holes_H = []
+            holes_V = []
+            if isH:
+                holes_H = [(i, j) for i in range(h) for j in range(w) if grid[i][j] != grid[i][w-1-j]]
+            if isV:
+                holes_V = [(i, j) for i in range(h) for j in range(w) if grid[i][j] != grid[h-1-i][j]]
+            merged_holes = holes_H + holes_V
+            # 2. Gather the pixel values at those coordinates
+            colors = [grid[i][j] for (i, j) in merged_holes]
+            # 3. Count frequencies and pick the most common
+            color_counts = Counter(colors)
+            mode_color, mode_count = color_counts.most_common(1)[0]
+            print(f"Most frequent hole‐color is {mode_color} (appears {mode_count} times)")
+            filtered_holes = [
+                (i, j)
+                for (i, j) in merged_holes
+                if grid[i][j] == mode_color
+            ]
+
+            print(f"Filtered holes (only color={mode_color}): {filtered_holes}")
+
+            if not filtered_holes:
+                print("    ⚠️ No holes to fix after filtering, skipping")
+                skipped.append(trainId)
+                continue
+            axeX, axeY = (w-1)/2, (h-1)/2
+            results.append({
+                "sprite_unique_id": None,
+                "trainId": trainId,
+                "testId": -1,
+                "isHorizontal": int(isH),
+                "isVertical":   int(isV),
+                "axeX": axeX,
+                "axeY": axeY,
+                "Holes": filtered_holes
+            })
+            print(f"    ✅ Appended symmetry fix task for trainId={trainId}")
+        if skipped:
+            return []
+        return results
+
+    def _build_function(self, row):
+        trainId = row["trainId"]
+        testId = row["testId"]
+        scenarioId = row["scenarioId"]
+        print(f"\n🔧 Running FixSymmetryFactToAction._build_function for trainId={trainId}")
+        grid = TRAIN_INPUT_GRIDS[trainId]
+        holes = row["Holes"]
+        #print("    Original grid:")
+        #print(grid_to_pretty_string(grid))
+        fixed = apply_symmetry_fill(grid, row['isHorizontal'], row['isVertical'], holes)
+        print("   🔄 Resulting filled grid:")
+        print(grid_to_pretty_string(fixed))
+        sprites = extract_connected_components(fixed, holes)
+        print(f"    🆕 NEW_SPRITES count={len(sprites)}")
+        for idx, sp in enumerate(sprites):
+            print(f"      🖼️ Sprite[{idx}]:")
+            print(grid_to_pretty_string(sp))
+        inst = ActionInstance(
+            id=f"fix_symmetry_{trainId}#{getUniqueId()}",
+            action=registry.get_by_id("fix_symmetry"),
+            bindings={
+                "grid":       ArgumentBinding(name="grid",       type="Grid", binding=BindingStatus.INPUT_GRID, value=grid),
+                "scenarioId": ArgumentBinding(name="scenarioId", type="String", binding=BindingStatus.INSTANCE, value=scenarioId),
+                "trainId":    ArgumentBinding(name="trainId",    type="Integer", binding=BindingStatus.CONTEXT, value=trainId),
+                "testId":     ArgumentBinding(name="testId",     type="Integer", binding=BindingStatus.CONTEXT, value=testId),
+            },
+            output_var="fixed_grid",
+            output_type="Grid",
+            output_value=fixed,
+            scenarioId=row.get("scenarioId"),
+            ruleId=row.get("ruleId"),
+            trainId=trainId,
+            testId=-1,
+            isTrain=True,
+            isToOutput=True
+        )
+        inst.IN_SEPARATE_RULE = True
+        inst.NEW_SPRITES = sprites
+        print(f"    📦 Generated ActionInstance with NEW_SPRITES={sprites}")
         return inst
 
 class ZoomOutFactToAction(FactToActionMapping):
@@ -1765,5 +1878,6 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     CreateObjectFactToAction(),
     MoveObjectFactToAction(),
     CropSpriteFactToAction(),
+    FixSymmetryFactToAction(),
 ]
 

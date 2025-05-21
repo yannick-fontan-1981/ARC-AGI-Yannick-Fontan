@@ -554,6 +554,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         isFromHole BOOLEAN,
         isFromCut BOOLEAN,
         isFromColorZone BOOLEAN,
+        isFromPrevious BOOLEAN,
 
         minX INTEGER,
         minY INTEGER,

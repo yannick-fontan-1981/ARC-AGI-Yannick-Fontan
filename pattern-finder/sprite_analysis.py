@@ -311,6 +311,10 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
         }
         global_data["sprite_unique_records"].append(rec)
 
+        if attr_dict["isFromPrevious"]:
+            print("isFromPrevious record")
+            print(rec)
+
     current_tid = attr_dict["trainId"]
     best_identity = None
     found_any = False
@@ -679,6 +683,7 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
     attr["isFromHole"] = flags.get("isFromHole", False)
     attr["isFromCut"] = flags.get("isFromCut", False)
     attr["isFromColorZone"] = flags.get("isFromColorZone", False)
+    attr["isFromPrevious"] = flags.get("isFromPrevious", False)
 
     minX, minY, maxX, maxY = bbox
     attr["minX"] = minX
@@ -899,6 +904,7 @@ def compute_split_sprites_by_ratio(input_grid, output_grid, filename, trainId, t
             "isFromHole": False,
             "isFromCut": False,
             "isFromColorZone": False,
+            "isFromPrevious": False,
         }
         sprite = fill_sprite_attributes(grid, filename, trainId, testId, flags, subgrid, bbox)
         sprite["minX"], sprite["minY"], sprite["maxX"], sprite["maxY"] = bbox
@@ -958,6 +964,7 @@ def compute_splitter_sprite(grid, filename, trainId, testId, isInsideInput):
         "isFromHole": False,
         "isFromCut": True,
         "isFromColorZone": False,
+        "isFromPrevious": False,
     }
 
     # --- Try vertical splitter detection ---
@@ -1315,6 +1322,7 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
                 "isFromHole":True,
                 "isFromCut":False,
                 "isFromColorZone": False,
+                "isFromPrevious": False,
             }
             spr = fill_sprite_attributes(grid, filename, trainId, testId, flags, hole_grid, bbox)
             hole_obj = asobject(hole_grid)
@@ -1387,6 +1395,7 @@ def compute_sprites_color_zone(grid, filename, trainId, testId, isInsideInput):
             "isFromHole":       False,
             "isFromCut":        False,
             "isFromColorZone":  True,
+            "isFromPrevious":   False,
         }
 
         # build the sprite record
@@ -1471,6 +1480,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
             "isFromHole": False,
             "isFromCut": False,
             "isFromColorZone": False,
+            "isFromPrevious": False,
         }
 
         bbox = compute_bounding_box(grid)
@@ -1624,10 +1634,70 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
                 sprite_global_data
             )
 
+    new_sprites = data.get("new_sprites", {})
+
+    for key, grids in new_sprites.items():
+        trainId, testId = map(int, key.split("#"))
+        # pick the full grid either from train or test
+        if trainId >= 0:
+            full_grid = data["train"][trainId]["input"]
+        else:
+            full_grid = data["test"][testId]["input"]
+
+        for sprite_grid in grids:
+            # compute sprite size
+            h, w = len(sprite_grid), len(sprite_grid[0])
+            # slide‐match to find its exact location
+            found = False
+            minX, minY, maxX, maxY = 0, 0, w, h
+            for minY in range(len(full_grid) - h + 1):
+                for minX in range(len(full_grid[0]) - w + 1):
+                    if all(
+                            full_grid[minY + y][minX + x] == sprite_grid[y][x]
+                            for y in range(h) for x in range(w)
+                    ):
+                        maxY, maxX = minY + h, minX + w
+                        found = True
+                        break
+                if found: break
+            if not found:
+                minX, minY, maxX, maxY = 0, 0, w, h
+
+            # build your flags exactly as before (here I added your "isFromPrevious")
+            flags = {
+                "isInsideInput": True,
+                "isInsideOutput": False,
+                "isInsideTrain": (trainId != -1),
+                "isInsideTest": (testId != -1),
+                "isInsideBuffer": False,
+                "isGrid": False,
+                "isFromSplit": False,
+                "isFromHole": False,
+                "isFromCut": False,
+                "isFromColorZone": False,
+                "isFromPrevious": True,
+            }
+
+            # **this** single call does all the work of fill_sprite_attributes for you:
+            spr = fill_sprite_attributes(
+                full_grid,  # the big input grid
+                filename,
+                trainId,
+                testId,
+                flags,
+                sprite_grid,  # the small sprite itself
+                (minX, minY, maxX, maxY)
+            )  # ← signature is def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox): :contentReference[oaicite:0]{index=0}
+
+            # now stash it just like you did:
+            spr["id"] = next_sprite_analysis_id
+            next_sprite_analysis_id += 1
+            all_sprite_analysis_rows.append(spr)
+            store_in_sprite_unique_and_occurrence(spr, sprite_grid, sprite_global_data)
+
     for index, item in enumerate(data.get("train", [])):
-        if index < 30:
-            process_item(item, True, index, True)  # Process input grid.
-            process_item(item, False, index, True)  # Process output grid.
+        process_item(item, True, index, True)  # Process input grid.
+        process_item(item, False, index, True)  # Process output grid.
 
     for index, item in enumerate(data.get("test", [])):
         process_item(item, True, index, False)
