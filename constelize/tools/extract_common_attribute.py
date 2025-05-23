@@ -210,17 +210,33 @@ def extract_common_attribute_action(
       7) early getAttributeAction return if applicable
     """
 
+    print("=== extract_common_attribute_action START ===")
+    print(f"Path: {path!r}")
+    print(f"Input pairs (trainId,testId): {pairs}")
+    print(f"Loaded tables: {list(tables.keys())}")
+    print(f"Attributes buckets: {list(attributes_by_input_and_values.keys())}")
+
+    # 0) Group criteria values by train
     values_by_train = group_values_by_train(pairs)
+    print("1) group_values_by_train →")
+    for tid, vals in values_by_train.items():
+        print(f"   Train {tid}: {vals}")
 
     # ∎ very first: look for a common FIRST_SIGHT_ANALYSIS attribute
+    print("2) Computing per-train common columns for 'first_sight_analysis'")
     per_train_fsa = compute_common_columns(
         attributes_by_input_and_values,
         values_by_train,
         "first_sight_analysis",
     )
+    print(f"   per_train_fsa: {per_train_fsa}")
+
+    print("3) Intersect and prioritize across trains")
     fsa_common = intersect_and_prioritize(path, per_train_fsa)
+    print(f"   fsa_common: {fsa_common}")
+
     if fsa_common:
-        # if any first_sight_analysis.<col> is constant across all trains, return it
+        print(f"4) Found common first_sight_analysis.{fsa_common[0]}, returning GET_ATTRIBUTE")
         return {
             "type": "getAttributeAction",
             "attribute": f"first_sight_analysis.{fsa_common[0]}"
@@ -237,8 +253,6 @@ def extract_common_attribute_action(
     #if not cols:
     #    print("    → No common columns across trains → returning None")
     #    return None
-
-
 
     # 4) Build per-train list of table#rowId for those columns
     per_train_rows = compute_per_train_rows(attributes_by_input_and_values, common_columns, values_by_train)

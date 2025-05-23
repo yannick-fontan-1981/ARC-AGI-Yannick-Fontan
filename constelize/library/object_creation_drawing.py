@@ -48,7 +48,7 @@ ACTIONS = [
         description="Return the bounding box outline of a patch or object",
         category=ActionCategory.OBJECT_CREATION_DRAWING,
         input_arguments=[
-            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED)
+            ArgumentBinding(name="patch", type="Grid", binding=BindingStatus.UNRESOLVED)
         ],
         output_type="Indices",
         function=box
@@ -61,7 +61,7 @@ ACTIONS = [
         input_arguments=[
             ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="value", type="Integer", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED)
+            ArgumentBinding(name="patch", type="Grid", binding=BindingStatus.UNRESOLVED)
         ],
         output_type="Grid",
         function=fill

@@ -64,8 +64,16 @@ def build_values_by_input(db_path: str):
 
     # 🧩 1. Columns to keep from first_sight_analysis (only input-related)
     input_columns_first_sight_analysis = [
-        "widthInput", "heightInput", "diffWidthHeightInput", "ratioWidthHeightInput",
-        "areaInput", "countBlocksInput", "countZonesInput", "countColorsInput"
+        "widthInput",
+        "heightInput",
+        "diffWidthHeightInput",
+        "ratioWidthHeightInput",
+        "areaInput",
+        "countBlocksInput",
+        "countZonesInput",
+        "countColorsInput",
+        "countColorsWithoutBgInput",
+        "countPixelsAloneInput"
     ]
     first_sight = tables.get("first_sight_analysis", {})
     for row_id, row_data in first_sight.items():

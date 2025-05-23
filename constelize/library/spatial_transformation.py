@@ -58,9 +58,12 @@ def canvas_by_object_size_fn(object_width: int, object_height: int) -> Grid:
       A new Grid of shape (obj_height, obj_width), where every cell is -8.
     """
     # Use -8 for “anonymized” background, consistent with canvas_by_ratio_fn
+    w = int(object_width)
+    h = int(object_height)
+
     return tuple(
-        tuple(-8 for _ in range(object_width))
-        for _ in range(object_height)
+        tuple(-8 for _ in range(w))
+        for __ in range(h)
     )
 
 def sprite_computation_paint(canvas: Grid, sub_sprites: List[Grid], positions: List[Dict[str, int]]) -> Grid:
@@ -91,10 +94,10 @@ ACTIONS = [
         category=ActionCategory.SPATIAL_TRANSFORMATION,
         function=shift,
         input_arguments=[
-            ArgumentBinding(name="patch", type="Patch"),
+            ArgumentBinding(name="patch", type="Grid"),
             ArgumentBinding(name="directions", type="IntegerTuple")
         ],
-        output_type="Patch",
+        output_type="Grid",
         description="Shift a patch by a directional vector."
     ),
     Action(
@@ -103,9 +106,9 @@ ACTIONS = [
         category=ActionCategory.SPATIAL_TRANSFORMATION,
         function=normalize,
         input_arguments=[
-            ArgumentBinding(name="patch", type="Patch")
+            ArgumentBinding(name="patch", type="Grid")
         ],
-        output_type="Patch",
+        output_type="Grid",
         description="Shift a patch so its upper-left corner aligns to (0, 0)."
     ),
     Action(
@@ -318,7 +321,7 @@ ACTIONS = [
         category=ActionCategory.SPATIAL_TRANSFORMATION,
         input_arguments=[
             ArgumentBinding(name="grid", type="Grid", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED),
+            ArgumentBinding(name="patch", type="Grid", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="patch_min_x", type="Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="patch_min_y", type="Integer", binding=BindingStatus.UNRESOLVED),
             ArgumentBinding(name="move_rel_x", type="Integer", binding=BindingStatus.UNRESOLVED),

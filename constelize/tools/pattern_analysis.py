@@ -3,7 +3,7 @@
 import copy
 import json
 import sqlite3
-from collections import defaultdict
+from collections import defaultdict, Counter
 from itertools import product
 
 import constelize.tools.globals as GLOBAL
@@ -11,6 +11,7 @@ from constelize.core.binding import BindingStatus, LinkCandidate, ArgumentBindin
 from constelize.core.rule import Rule
 from constelize.core.scenario import Scenario
 from constelize.core.typesystem import can_convert
+from constelize.dsl.dsl import blocks, zones, numcolors, height, width
 from constelize.dsl.grid_dsl import grid_to_pretty_string, grids_equal, Grid, concrete_grids_equal
 
 import constelize.library.attribute_access as _aa_mod
@@ -24,7 +25,7 @@ from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, buil
     build_select_sprite_grid_instance, build_select_object_grid_instance, build_set_output_bg_color_fact_to_action
 from constelize.core.procedure import Procedure, evaluate_procedure, ActionInstance
 from constelize.tools.registry_singleton import registry
-from constelize.tools.sqlite_loader import load_sqlite_to_dict
+from constelize.tools.sqlite_loader import load_sqlite_to_dict, load_all_tables_from_sqlite
 
 from constelize.tools.registry_cli import register_procedure
 from constelize.library.mapping_transformation import as_grid
@@ -80,7 +81,7 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                     action_instances.append(instance)
                     if concrete_grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
                         instance.END = True
-                    elif instance.END == False and grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
+                    if instance.action.id == "move_object" and grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
                         if instance.action.id == "move_object":
                             print("extract_bg_colors_from_template")
                         # 1) look up all the real colors under the “-1” or “-8” holes in our template
@@ -88,23 +89,27 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                             instance.output_value,
                             TRAIN_OUTPUT_GRIDS[instance.trainId]
                         )
-                        # 2) if there’s exactly one candidate color, emit a setOutputBgColorFactToAction
+                        bg_color = 0
                         if len(bg_colors) == 1:
                             bg_color = next(iter(bg_colors))
-                            output_value = set_output_bg_color_fn(instance.output_value, bg_color)
-                            set_bg_inst = build_set_output_bg_color_fact_to_action(
-                                trainId=instance.trainId,
-                                testId=instance.testId,
-                                bg_color=bg_color,
-                                input_value=instance.output_value,
-                                output_value=output_value,
-                                source_producer_id=instance.id,
-                                scenarioId=scenarioId,
-                                ruleId=ruleId
-                            )
-                            action_instances.append(set_bg_inst)
-                            print(f"set_output_bg_color {bg_color}")
-                            set_bg_inst.END = True
+                        output_value = set_output_bg_color_fn(instance.output_value, bg_color)
+                        set_bg_inst = build_set_output_bg_color_fact_to_action(
+                            trainId=instance.trainId,
+                            testId=instance.testId,
+                            bg_color=bg_color,
+                            input_value=instance.output_value,
+                            output_value=output_value,
+                            source_producer_id=instance.id,
+                            scenarioId=scenarioId,
+                            ruleId=ruleId
+                        )
+                        action_instances.append(set_bg_inst)
+                        print(f"input_value {instance.output_value}")
+                        print(f"source_producer_id {instance.id}")
+                        print(f"output_value {output_value}")
+                        print(f"set_output_bg_color {bg_color}")
+                        instance.END = False
+                        set_bg_inst.END = True
 
                 except Exception as e:
                     # ——— EXTRA DEBUG LOGGING ———————————————————————————————————————————————
@@ -214,7 +219,6 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
     new_instances = create_suggested_action_instances(action_instances, current_rule.tables, scenarioId, current_rule.id)
     if new_instances:
         action_instances = action_instances + new_instances
-
 
     print("\n🔧 Running constant detection...")
     auto_find_constant_for_signature(action_instances)
@@ -695,6 +699,8 @@ def auto_link_by_common_attribute(
                 binding.binding = BindingStatus.VARIABLE
                 binding.source_procedure_id = inst.id
 
+                print(f"-> selectObjectGridAction {inst.id} linked to {consumer.id} {binding.name} ")
+
         else:
             print(f"   ⚠️ Unknown action type {action_spec['type']} for path {path}")
 
@@ -884,7 +890,7 @@ def create_suggested_action_instances(
                     )
                     bind.binding = BindingStatus.VARIABLE
                     bind.source_procedure_id = sel.id
-                    print(f"    ↳ linked object‐grid step {sel.id}")
+                    print(f"    ↳ linked object‐grid step {sel.id} {inst.id}")
                     new_instances.append(sel)
 
             elif action == "selectObjectAndAttributeAction":
@@ -1831,6 +1837,7 @@ def generate_submission_file_from_scenarios(
     valid_scenarios: List[Scenario],
     arc_data: dict,
     output_path: str,
+    db_path,
     results_by_scenario: Optional[dict] = None
 ) -> None:
     """
@@ -1867,8 +1874,9 @@ def generate_submission_file_from_scenarios(
                     unique_grids.append(grid)
 
             if len(unique_grids) > 2:
-                # todo : resolve when more that 2 unique attempts
                 print("WARNING MORE THAN 2 UNIQUE ATTEMPTS !")
+                unique_grids = pick_the_2_most_similar_by_ratio_diff(unique_grids, db_path)
+                print(f"⏭ Collapsed to 2 candidates by ratio/diff similarity")
 
             # pad or trim to exactly two attempts
             if len(unique_grids) == 0:
@@ -1904,6 +1912,466 @@ def generate_submission_file_from_scenarios(
     with open(output_path, "w") as f:
         json.dump(submission, f)
     print(f"📤 Submission file written to {output_path}")
+
+FEATURE_KEYS = [
+    "ratioWidthInputOutput", "diffWidthInputOutput",
+    "ratioHeightInputOutput","diffHeightInputOutput",
+    "diffWidthHeightInput","diffWidthHeightOutput",
+    "ratioWidthHeightInput","ratioWidthHeightOutput",
+    "ratioAreaInputOutput","diffAreaInputOutput",
+    "ratioBlocksInputOutput","diffBlocksInputOutput",
+    "ratioZonesInputOutput","diffZonesInputOutput",
+    "ratioBlocksAreaOutput","diffRatioBlocksAreaInputOutput",
+    "ratioZonesAreaOutput","diffRatioZonesAreaInputOutput",
+    "diffColorsInputOutput","diffSumColorsInputOutput",
+    "ratioColorsBlocksOutput","ratioColorsZonesOutput",
+    "diffRatioColorsBlocksInputOutput","diffRatioColorsZonesInputOutput",
+    "firstMostColorOutput","countFirstMostColorOutput",
+    "secondMostColorOutput","countSecondMostColorOutput",
+    "diffFirstSecondMostColorOutput",
+    "firstLeastColorOutput","countFirstLeastColorOutput",
+    "secondLeastColorOutput","countSecondLeastColorOutput",
+    "diffFirstSecondLeastColorOutput",
+    "diffFirstMostColorInputOutput","diffSecondMostColorInputOutput",
+    "diffFirstLeastColorInputOutput","diffSecondLeastColorInputOutput",
+    "diffOnePixelBlocksInputOutput",
+    "countColorsWithoutBgOutput","countPixelsAloneOutput",
+    "countUniqueBlockShapesOutput","diffUniqueBlockShapesInputOutput",
+    "countUniqueZoneShapesOutput","diffUniqueZoneShapesInputOutput",
+    "countRectanglesOutput","diffRectanglesInputOutput",
+    "countSquaresOutput","diffSquaresInputOutput",
+    "countStraightLineOutput","diffStraightLineInputOutput",
+    "countSameBlocksInputOutput","countRecoloredBlocksInputOutput",
+    "countSameZonesInputOutput","countRecoloredZonesInputOutput",
+    "countBlockTouchingBorderOutput"
+]
+
+
+def count_blocks(grid):
+    try:
+        return len(blocks(grid))
+    except Exception as e:
+        raise RuntimeError(f"[count_blocks] failed on grid {grid}: {e}")
+
+def count_zones(grid):
+    """Number of contiguous color‐zones (including background)."""
+    return len(zones(grid))
+
+def count_colors(grid):
+    """
+    Number of distinct values in the grid.
+    This avoids the ARC-DSL `numcolors` / `palette` mismatch.
+    """
+    try:
+        return len({cell for row in grid for cell in row})
+    except Exception as e:
+        # re-raise with more context
+        raise RuntimeError(f"[count_colors] failed on grid of size "
+                           f"{len(grid)}×{(len(grid[0]) if grid else 0)}: {e}")
+def count_unique_block_shapes(grid):
+    """
+    Number of distinct block-shapes (up to translation), given
+    that blocks(grid) returns a frozenset of (color, (r,c)) pairs.
+    """
+    shapes = set()
+    for blk in blocks(grid):
+        # blk is a frozenset of (color, (r,c)) tuples
+        coords = []
+        for color, coord in blk:
+            # coord is a (r,c) tuple
+            coords.append(coord)
+        # now normalize
+        rs = [r for r, c in coords]
+        cs = [c for r, c in coords]
+        min_r, min_c = min(rs), min(cs)
+        norm = frozenset((r - min_r, c - min_c) for r, c in coords)
+        shapes.add(norm)
+    return len(shapes)
+
+def count_unique_zone_shapes(grid):
+    """
+    Number of distinct zone-shapes (up to translation).
+    Each entry in zones(grid) is a frozenset of (color, (r,c)) pairs.
+    """
+    shapes = set()
+    for zn in zones(grid):
+        try:
+            # unpack (color, coord) → coord
+            coords = [coord for color, coord in zn]
+            rs = [r for r, c in coords]
+            cs = [c for r, c in coords]
+            min_r, min_c = min(rs), min(cs)
+            # normalize each coordinate
+            norm = frozenset((r - min_r, c - min_c) for r, c in coords)
+        except Exception as e:
+            print("[ERROR in count_unique_zone_shapes]")
+            print(" Offending zone:", repr(zn))
+            print(f" Grid size: {len(grid)}×{len(grid[0]) if grid else 0}")
+            traceback.print_exc()
+            raise
+        shapes.add(norm)
+    return len(shapes)
+
+def count_rectangles(grid):
+    """
+    Count blocks whose area == width*height of its bounding box,
+    unpacking each (color, (r,c)) pair correctly.
+    """
+    cnt = 0
+    for blk in blocks(grid):
+        try:
+            # blk is a frozenset of (color, (r,c)) tuples
+            coords = [coord for color, coord in blk]
+            rs = [r for r, c in coords]
+            cs = [c for r, c in coords]
+            h = max(rs) - min(rs) + 1
+            w = max(cs) - min(cs) + 1
+            if len(coords) == h * w:
+                cnt += 1
+        except Exception:
+            print("[ERROR in count_rectangles]")
+            print(" Offending block:", repr(blk))
+            print(f" Grid size: {len(grid)}×{(len(grid[0]) if grid else 0)}")
+            traceback.print_exc()
+            raise
+    return cnt
+
+def count_squares(grid):
+    """
+    Count those rectangles that also have width == height.
+    """
+    cnt = 0
+    for blk in blocks(grid):
+        try:
+            coords = [coord for color, coord in blk]
+            rs = [r for r, c in coords]
+            cs = [c for r, c in coords]
+            h = max(rs) - min(rs) + 1
+            w = max(cs) - min(cs) + 1
+            if len(coords) == h * w and h == w:
+                cnt += 1
+        except Exception:
+            print("[ERROR in count_squares]")
+            print(" Offending block:", repr(blk))
+            traceback.print_exc()
+            raise
+    return cnt
+
+def count_straight_lines(grid):
+    """
+    Count blocks that form a 1×N or N×1 line.
+    """
+    cnt = 0
+    for blk in blocks(grid):
+        try:
+            coords = [coord for color, coord in blk]
+            rs = [r for r, c in coords]
+            cs = [c for r, c in coords]
+            h = max(rs) - min(rs) + 1
+            w = max(cs) - min(cs) + 1
+            if len(coords) == h * w and (h == 1 or w == 1):
+                cnt += 1
+        except Exception:
+            print("[ERROR in count_straight_lines]")
+            print(" Offending block:", repr(blk))
+            traceback.print_exc()
+            raise
+    return cnt
+
+def count_block_touching_border(grid):
+    """
+    Count how many connected blocks touch the grid border.
+    Expects `blocks(grid)` to yield frozensets of (color, (r,c)) pairs.
+    """
+    H = len(grid)
+    W = len(grid[0]) if H else 0
+    cnt = 0
+
+    for blk in blocks(grid):
+        try:
+            # unpack each (color, coord) tuple
+            coords = [coord for color, coord in blk]
+            # if any cell lands on the 0 or H-1/W-1 border, count it
+            if any(r in (0, H - 1) or c in (0, W - 1) for r, c in coords):
+                cnt += 1
+        except Exception:
+            print("[ERROR in count_block_touching_border]")
+            print(" Offending block:", repr(blk))
+            print(f" Grid size: {H}×{W}")
+            traceback.print_exc()
+            raise
+
+    return cnt
+
+def count_colors_without_bg(grid):
+    """Count distinct non-zero colors."""
+    # all colors minus background (0)
+    return len({cell for row in grid for cell in row if cell != 0})
+
+def count_pixels_alone(grid):
+    """
+    Count pixels whose 4‐neighbors never carry the same color.
+    Pure‐Python version: uses len()/len(grid[0]) for dimensions.
+    """
+    try:
+        H = len(grid)
+        W = len(grid[0]) if H else 0
+        dirs = [(1,0),(-1,0),(0,1),(0,-1)]
+        alone = 0
+
+        for r in range(H):
+            for c in range(W):
+                col = grid[r][c]
+                # Check all in‐bounds neighbors; if none match, it's alone
+                if all(
+                    not (0 <= r+dr < H and 0 <= c+dc < W and grid[r+dr][c+dc] == col)
+                    for dr,dc in dirs
+                ):
+                    alone += 1
+        return alone
+
+    except Exception as e:
+        print("[ERROR in count_pixels_alone]")
+        print(f" Grid size: {len(grid)}×{(len(grid[0]) if grid else 0)}")
+        traceback.print_exc()
+        raise
+
+def get_block_sizes(grid):
+    """
+    Return a list of sizes (number of pixels) for each block in the grid.
+    Each block is a frozenset of (color,(r,c)) pairs.
+    """
+    sizes = []
+    for blk in blocks(grid):
+        # each element is (color, coord)
+        sizes.append(len(blk))
+    return sizes
+
+def compute_feats(grid_in, grid_out):
+    h_in = len(grid_in)
+    w_in = len(grid_in[0]) if h_in else 0
+    h_out = len(grid_out)
+    w_out = len(grid_out[0]) if h_out else 0
+    area_in  = w_in * h_in
+    area_out = w_out * h_out
+
+    # block/zone/color counts
+    blocks_in = count_blocks(grid_in)
+    blocks_out = count_blocks(grid_out)
+    zones_in  = count_zones(grid_in)
+    zones_out = count_zones(grid_out)
+    colors_in = count_colors(grid_in)
+    colors_out = count_colors(grid_out)
+    sum_colors_in  = sum(Counter(px for row in grid_in for px in row).values())
+    sum_colors_out = sum(Counter(px for row in grid_out for px in row).values())
+
+    # color‐frequency
+    freq_out = Counter(px for row in grid_out for px in row)
+    most = freq_out.most_common()
+    first_most_color_out, count_first_most_color_out = most[0]
+    second_most_color_out, count_second_most_color_out = most[1] if len(most)>1 else (None,0)
+    least = sorted(freq_out.items(), key=lambda kv: kv[1])
+    first_least_color_out, count_first_least_color_out = least[0]
+    second_least_color_out, count_second_least_color_out = least[1] if len(least)>1 else (None,0)
+
+    # one‐pixel blocks
+    one_pixel_blocks_in  = sum(1 for size in get_block_sizes(grid_in)  if size==1)
+    one_pixel_blocks_out = sum(1 for size in get_block_sizes(grid_out) if size==1)
+
+    # geometric shape counts
+    unique_block_shapes_in  = count_unique_block_shapes(grid_in)
+    unique_block_shapes_out = count_unique_block_shapes(grid_out)
+    unique_zone_shapes_in   = count_unique_zone_shapes(grid_in)
+    unique_zone_shapes_out  = count_unique_zone_shapes(grid_out)
+    rects_in  = count_rectangles(grid_in)
+    rects_out = count_rectangles(grid_out)
+    sq_in     = count_squares(grid_in)
+    sq_out    = count_squares(grid_out)
+    lines_in  = count_straight_lines(grid_in)
+    lines_out = count_straight_lines(grid_out)
+    block_touch_in  = count_block_touching_border(grid_in)
+    block_touch_out = count_block_touching_border(grid_out)
+
+    # other metrics
+    colors_without_bg_out = count_colors_without_bg(grid_out)
+    pixels_alone_out     = count_pixels_alone(grid_out)
+    # TODO: countSameBlocks, countRecoloredBlocks, countSameZones, countRecoloredZones
+
+    return {
+        "ratioWidthInputOutput":  w_in / w_out   if w_out else None,
+        "diffWidthInputOutput":   w_in - w_out,
+        "ratioHeightInputOutput": h_in / h_out   if h_out else None,
+        "diffHeightInputOutput":  h_in - h_out,
+        "diffWidthHeightInput":   w_in - h_in,
+        "diffWidthHeightOutput":  w_out - h_out,
+        "ratioWidthHeightInput":  w_in / h_in    if h_in else None,
+        "ratioWidthHeightOutput": w_out / h_out  if h_out else None,
+        "ratioAreaInputOutput":   area_in / area_out if area_out else None,
+        "diffAreaInputOutput":    area_in - area_out,
+        "ratioBlocksInputOutput": blocks_in / blocks_out   if blocks_out else None,
+        "diffBlocksInputOutput":  blocks_in - blocks_out,
+        "ratioZonesInputOutput":  zones_in  / zones_out    if zones_out else None,
+        "diffZonesInputOutput":   zones_in  - zones_out,
+        "ratioBlocksAreaOutput":  blocks_out / area_out    if area_out else None,
+        "diffRatioBlocksAreaInputOutput":
+            (blocks_in/area_in if area_in else None)
+          - (blocks_out/area_out if area_out else None),
+        "ratioZonesAreaOutput":   zones_out  / area_out    if area_out else None,
+        "diffRatioZonesAreaInputOutput":
+            (zones_in/area_in if area_in else None)
+          - (zones_out/area_out if area_out else None),
+        "diffColorsInputOutput":  colors_in  - colors_out,
+        "diffSumColorsInputOutput": sum_colors_in - sum_colors_out,
+        "ratioColorsBlocksOutput":
+            colors_out / blocks_out if blocks_out else None,
+        "ratioColorsZonesOutput":
+            colors_out / zones_out  if zones_out else None,
+        "diffRatioColorsBlocksInputOutput":
+            (colors_in/blocks_in if blocks_in else None)
+          - (colors_out/blocks_out if blocks_out else None),
+        "diffRatioColorsZonesInputOutput":
+            (colors_in/zones_in if zones_in else None)
+          - (colors_out/zones_out if zones_out else None),
+        "firstMostColorOutput":      first_most_color_out,
+        "countFirstMostColorOutput": count_first_most_color_out,
+        "secondMostColorOutput":     second_most_color_out,
+        "countSecondMostColorOutput":count_second_most_color_out,
+        "diffFirstSecondMostColorOutput":
+            count_first_most_color_out - count_second_most_color_out,
+        "firstLeastColorOutput":      first_least_color_out,
+        "countFirstLeastColorOutput": count_first_least_color_out,
+        "secondLeastColorOutput":     second_least_color_out,
+        "countSecondLeastColorOutput":count_second_least_color_out,
+        "diffFirstSecondLeastColorOutput":
+            count_first_least_color_out - count_second_least_color_out,
+        "diffFirstMostColorInputOutput":
+            # TODO: compute using input’s first‐most count
+            None,
+        "diffSecondMostColorInputOutput":
+            # TODO: compute
+            None,
+        "diffFirstLeastColorInputOutput":
+            # TODO
+            None,
+        "diffSecondLeastColorInputOutput":
+            # TODO
+            None,
+        "diffOnePixelBlocksInputOutput":
+            one_pixel_blocks_in - one_pixel_blocks_out,
+        "countColorsWithoutBgOutput": colors_without_bg_out,
+        "countPixelsAloneOutput":     pixels_alone_out,
+        "countUniqueBlockShapesOutput": unique_block_shapes_out,
+        "diffUniqueBlockShapesInputOutput":
+            unique_block_shapes_in - unique_block_shapes_out,
+        "countUniqueZoneShapesOutput":  unique_zone_shapes_out,
+        "diffUniqueZoneShapesInputOutput":
+            unique_zone_shapes_in - unique_zone_shapes_out,
+        "countRectanglesOutput":           rects_out,
+        "diffRectanglesInputOutput":       rects_in  - rects_out,
+        "countSquaresOutput":              sq_out,
+        "diffSquaresInputOutput":          sq_in    - sq_out,
+        "countStraightLineOutput":         lines_out,
+        "diffStraightLineInputOutput":     lines_in  - lines_out,
+        "countSameBlocksInputOutput":      None,  # TODO
+        "countRecoloredBlocksInputOutput": None,  # TODO
+        "countSameZonesInputOutput":       None,  # TODO
+        "countRecoloredZonesInputOutput":  None,  # TODO
+        "countBlockTouchingBorderOutput":  block_touch_out
+    }
+
+def pick_the_2_most_similar_by_ratio_diff(
+    unique_grids: list[tuple[tuple[int, ...], ...]],
+    db_path: str
+) -> list[tuple[tuple[int, ...], ...]]:
+    """
+    Given several candidate output‐grids, return the two whose
+    ratio/diff features best match the train outputs stored in SQLite.
+    Skips any feature where either train or candidate value is None,
+    and logs which keys are skipped.
+    """
+    print("=== pick_the_2_most_similar_by_ratio_diff START ===")
+    # 1) Load first_sight_analysis from DB
+    try:
+        tables   = load_all_tables_from_sqlite(db_path)
+        fsa_rows = tables["first_sight_analysis"].values()
+    except Exception:
+        print("[DB LOAD ERROR]")
+        traceback.print_exc()
+        raise
+
+    # 2) Build train_features: trainId -> {feature_key: value}
+    train_features: dict[int, dict[str, float]] = {}
+    for row in fsa_rows:
+        if row.get("testId") != -1:
+            continue
+        tid = row.get("trainId")
+        if tid is None:
+            print(f"⚠️ Skipping row with missing trainId: {row}")
+            continue
+        feats = {}
+        for k in FEATURE_KEYS:
+            feats[k] = row.get(k)  # may be None
+        train_features[tid] = feats
+    print(f"Collected features for trainIds: {list(train_features.keys())}")
+
+    # 3) Score each candidate
+    scored: list[tuple[float, tuple[tuple[int, ...], ...]]] = []
+    for idx, cand in enumerate(unique_grids):
+        Hc = len(cand)
+        Wc = len(cand[0]) if Hc else 0
+        print(f"--- Candidate #{idx}: size {Hc}×{Wc} ---")
+
+        total_dist = 0.0
+        counted_keys = 0
+
+        for tid, inp in TRAIN_INPUT_GRIDS.items():
+            if tid not in train_features:
+                print(f"[WARN] no train_features for trainId={tid}, skipping")
+                continue
+            feats_true = train_features[tid]
+
+            # compute candidate features
+            try:
+                feats_cand = compute_feats(inp, cand)
+            except Exception:
+                print(f"[COMPUTE_FEATS ERROR] candidate#{idx} vs trainId={tid}")
+                traceback.print_exc()
+                raise
+
+            # filter out any keys that are None on either side
+            valid_keys = [
+                k for k in FEATURE_KEYS
+                if feats_true.get(k) is not None and feats_cand.get(k) is not None
+            ]
+            skipped = set(FEATURE_KEYS) - set(valid_keys)
+            if skipped:
+                print(f"  [SKIP {len(skipped)} keys for trainId={tid}]: {sorted(skipped)}")
+
+            # accumulate distance over valid keys
+            for k in valid_keys:
+                a = feats_true[k]
+                b = feats_cand[k]
+                total_dist += abs(a - b)
+                counted_keys += 1
+
+        # determine score
+        if counted_keys == 0:
+            score = float("inf")
+            print(f"  ⚠️ candidate#{idx} had no valid features → infinite cost")
+        else:
+            score = total_dist / counted_keys
+            print(f"  → candidate#{idx} avg L1 distance = {score:.3f} over {counted_keys} features")
+
+        scored.append((score, cand))
+
+    # 4) Pick top two
+    if not scored:
+        raise ValueError("No candidates to score (unique_grids was empty)")
+    scored.sort(key=lambda x: x[0])
+    top_two = [grid for _, grid in scored[:2]]
+    print(f"Selected top 2 candidates with scores {[s for s,_ in scored[:2]]}")
+    print("=== pick_the_2_most_similar_by_ratio_diff END ===")
+    return top_two
 
 
 def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_data: dict, output_path: str, test_results: Optional[List[dict]] = None) -> None:

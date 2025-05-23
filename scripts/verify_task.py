@@ -258,7 +258,7 @@ def test_file(
         print("🎯 Running successful procedure(s) on test set...")
         results_by_scenario = evaluate_generic_procedures_on_scenarios("test", data, valid_scenario)
         print_test_results_by_scenario(results_by_scenario, results_path, data)
-        generate_submission_file_from_scenarios(task_id, valid_scenario, data, submission_path, results_by_scenario)
+        generate_submission_file_from_scenarios(task_id, valid_scenario, data, submission_path, db_path, results_by_scenario)
         # our updated compare now returns True if any attempt succeeded
         compare_result =  compare_submission_to_arc_outputs(task_id, data, submission_path, comparison_path)
         # if any test entry has an "output", return the compare_result,
@@ -354,13 +354,16 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     rest_action_instances = split_action_instances_in_scenarios(action_instances, current_scenario)
     procedures = generate_draft_procedure(rest_action_instances, data, scenarioId, current_rule)
     # debug: list initial steps
-    print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
-    for proc_id, proc in procedures.items():
-        print(f"  🔸 {proc_id} has {len(proc.steps)} steps")
-        for step in proc.steps.values():
-            print(f"    • {step.id} ({step.action.id})")
+
     # normalize + squeeze + deep copy
     normalized_procs = normalize_procedures_with_levels(list(procedures.values()), scenarioId, ruleId)
+
+    print("\n📦 [Post generate_draft_procedure] Listing initial steps:")
+    for proc in normalized_procs:
+        print(f"  🔸 {proc.id} has {len(proc.steps)} steps")
+        for step in proc.steps.values():
+            print(f"    • {step.id} ({step.action.id})")
+
     generic_with_unresolved = squeeze_with_unresolved(normalized_procs, scenarioId, ruleId)
     generic_procs = split_contender_procs(generic_with_unresolved)
 
@@ -576,18 +579,19 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "8be77c9e"
     #DEFAULT_TASK_ID = "c9e6f938"
     #DEFAULT_TASK_ID = "2dee498d" # 1/2 try to improve crop
+    #DEFAULT_TASK_ID = "2dee498d_mini" # 1/2 try to improve crop
 
     # Training 3
     #DEFAULT_TASK_ID = "1cf80156"
-    #DEFAULT_TASK_ID = "32597951"
+    #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + move
     #DEFAULT_TASK_ID = "25ff71a9"
     #DEFAULT_TASK_ID = "0b148d64"
     #DEFAULT_TASK_ID = "1f85a75f" # 1/2 try to improve crop
     #DEFAULT_TASK_ID = "23b5c85d"
     #DEFAULT_TASK_ID = "9ecd008a" # find missing sprite in symmetry
-    DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
-    #DEFAULT_TASK_ID = "be94b721" # select greater sprite (sizeOrder 2 ?)
-    #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
+    #DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
+    #DEFAULT_TASK_ID = "be94b721" # select greater object (sizeOrder 2 ?)
+    DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
     #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
     #DEFAULT_TASK_ID = "c1d99e64" # lightCycle !
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
@@ -624,35 +628,35 @@ if __name__ == "__main__":
 
 
     # Training 4
-    #DEFAULT_TASK_ID = "2dc579da"
-    #DEFAULT_TASK_ID = "28bf18c6"
-    #DEFAULT_TASK_ID = "3af2c5a8"
-    #DEFAULT_TASK_ID = "44f52bb0"
-    #DEFAULT_TASK_ID = "62c24649"
-    #DEFAULT_TASK_ID = "67e8384a"
-    #DEFAULT_TASK_ID = "7468f01a"
-    #DEFAULT_TASK_ID = "662c240a"
-    #DEFAULT_TASK_ID = "42a50994"
-    #DEFAULT_TASK_ID = "56ff96f3"
-    #DEFAULT_TASK_ID = "50cb2852"
-    #DEFAULT_TASK_ID = "4347f46a"
-    #DEFAULT_TASK_ID = "46f33fce"
-    #DEFAULT_TASK_ID = "a740d043"
-    #DEFAULT_TASK_ID = "a79310a0"
-    #DEFAULT_TASK_ID = "aabf363d"
-    #DEFAULT_TASK_ID = "ae4f1146"
-    #DEFAULT_TASK_ID = "b27ca6d3"
-    #DEFAULT_TASK_ID = "ce22a75a"
-    #DEFAULT_TASK_ID = "dc1df850"
-    #DEFAULT_TASK_ID = "f25fbde4"
-    #DEFAULT_TASK_ID = "44d8ac46"
-    #DEFAULT_TASK_ID = "1e0a9b12"
-    #DEFAULT_TASK_ID = "0d3d703e"
-    #DEFAULT_TASK_ID = "3618c87e"
-    #DEFAULT_TASK_ID = "1c786137"
+    #DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
+    #DEFAULT_TASK_ID = "28bf18c6" # repeated object x2 horizontal
+    #DEFAULT_TASK_ID = "3af2c5a8" # repeated object x4 with flip horizontal + vertical
+    #DEFAULT_TASK_ID = "44f52bb0" # pixel blue if symmetry else pixel orange !
+    #DEFAULT_TASK_ID = "62c24649" # repeated sprite x4 with flip horizontal + vertical
+    #DEFAULT_TASK_ID = "67e8384a" # repeated sprite x4 with flip horizontal + vertical
+    #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
+    #DEFAULT_TASK_ID = "662c240a" # select sprite not in cumulated disqualified sprite's shapes !!!
+    #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
+    #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
+    #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
+    #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
+    #DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
+    #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
+    #DEFAULT_TASK_ID = "a79310a0" # move + recolor
+    #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!
+    #DEFAULT_TASK_ID = "ae4f1146" # select sprite with most blue ! Color#Order: 1#1 ? Or 9 cols: BlueOrder...
+    #DEFAULT_TASK_ID = "b27ca6d3" # cellular automation
+    #DEFAULT_TASK_ID = "ce22a75a" # cellular automation
+    #DEFAULT_TASK_ID = "dc1df850" # cellular automation
+    #DEFAULT_TASK_ID = "f25fbde4" # crop + zoom OR zoom + shrink-canvas
+    #DEFAULT_TASK_ID = "44d8ac46" # fill square with red !
+    #DEFAULT_TASK_ID = "1e0a9b12" # gravity down !
+    #DEFAULT_TASK_ID = "0d3d703e" # apply cumulated recolor !
+    #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
+    #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
 
     # Training 5
-    #DEFAULT_TASK_ID = "8efcae92"
+    #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
     #DEFAULT_TASK_ID = "445eab21"
     #DEFAULT_TASK_ID = "6f8cd79b"
     #DEFAULT_TASK_ID = "2013d3e2"

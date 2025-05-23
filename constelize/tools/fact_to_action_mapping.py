@@ -50,6 +50,30 @@ def load_json_inputs_from_json(json_path: str):
     for testId, item in enumerate(data.get("test", [])):
         TEST_INPUT_GRIDS[testId] = item["input"]
 
+def checkInputSmaller() -> bool:
+    """
+    Return True as soon as any training‐example’s input grid is strictly smaller
+    (in width or height) than its corresponding output grid.
+    Otherwise return False.
+    """
+    for trainId, inp in TRAIN_INPUT_GRIDS.items():
+        out = TRAIN_OUTPUT_GRIDS.get(trainId)
+        if out is None:
+            # no output to compare, skip
+            continue
+
+        # assume both inp and out are List[List[…]]
+        h_in = len(inp)
+        w_in = len(inp[0]) if h_in else 0
+        h_out = len(out)
+        w_out = len(out[0]) if h_out else 0
+
+        # if output is bigger in either dimension, we have an “input smaller” case
+        if w_in < w_out or h_in < h_out:
+            return True
+
+    return False
+
 # =============================================================================
 # Base FactToActionMapping class.
 # =============================================================================
@@ -544,6 +568,8 @@ class CanvasByObjectSizeFactToAction(FactToActionMapping):
         self.build_function = self._build_function
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        if checkInputSmaller():
+            return []
         query = """
         SELECT DISTINCT
             inp.trainId,
@@ -570,6 +596,8 @@ class CanvasByObjectSizeFactToAction(FactToActionMapping):
           AND outp.isGrid      = 1
           -- grid sizes must differ
           AND (outp.width != inp.width OR outp.height != inp.height)
+          -- exclude cases where output is ≥ input in both dimensions
+          AND NOT (outp.width >= inp.width AND outp.height >= inp.height)
           -- and there must be an object whose size exactly equals the output
           AND obj.width  = outp.width
           AND obj.height = outp.height
@@ -595,23 +623,31 @@ class CanvasByObjectSizeFactToAction(FactToActionMapping):
         return rows
 
     def _build_function(self, row: dict) -> ActionInstance:
-        # 1) Extract the object’s target size
         obj_w = int(row["object_width"])
         obj_h = int(row["object_height"])
-
-        # 2) Look up the right input grid
         trainId, testId = row["trainId"], row["testId"]
-
-        # 3) Build the new canvas sized to fit that object
         output_grid = canvas_by_object_size_fn(obj_w, obj_h)
 
-        # 4) Produce the ActionInstance
         return ActionInstance(
             id=f"canvas_by_object_size#{getUniqueId()}",
             action=self.action,
             bindings={
-                "object_width":   ArgumentBinding("object_width",    "Integer", binding=BindingStatus.UNRESOLVED, value=obj_w),
-                "object_height":  ArgumentBinding("object_height",   "Integer", binding=BindingStatus.UNRESOLVED, value=obj_h),
+                "object_width": ArgumentBinding(
+                    "object_width", "Integer",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=obj_w,
+                    suggested_action="selectObjectAndAttributeAction",
+                    suggested_object_id=row["object_id"],
+                    suggested_attribute="width"
+                ),
+                "object_height": ArgumentBinding(
+                    "object_height", "Integer",
+                    binding=BindingStatus.UNRESOLVED,
+                    value=obj_h,
+                    suggested_action="selectObjectAndAttributeAction",
+                    suggested_object_id=row["object_id"],
+                    suggested_attribute="height"
+                ),
             },
             output_var="canvas_grid",
             output_value=output_grid,
@@ -927,7 +963,7 @@ def build_set_output_bg_color_fact_to_action(
         id=inst_id,
         action=action,
         bindings={
-            "bg_color":      ArgumentBinding("bg_color",      "Integer", binding=BindingStatus.UNRESOLVED, value=bg_color),
+            "bg_color":      ArgumentBinding("bg_color",      "Color", binding=BindingStatus.UNRESOLVED, value=bg_color),
             "grid":          ArgumentBinding(
                                 name="grid",
                                 type="Grid",
@@ -1008,6 +1044,8 @@ class CropSpriteFactToAction(FactToActionMapping):
         super().__init__("crop_sprite", "crop_sprite")
 
     def _test_function(self, conn):
+        if checkInputSmaller():
+            return []
         query = """
         SELECT distinct
 		  su.sprite_id AS sprite_id,
@@ -1870,7 +1908,7 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     ZoomFactToAction(),
     RepeatedSpriteFactToAction(),
     CanvasByRatioFactToAction(),
-    CanvasByObjectSizeFactToAction(),
+    CanvasByObjectSizeFactToAction(), #
     RecolorSpriteFactToAction(),
     SpriteComputationFactToAction(),
     DenoiseFactToAction(),
@@ -1881,3 +1919,4 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     FixSymmetryFactToAction(),
 ]
 
+#

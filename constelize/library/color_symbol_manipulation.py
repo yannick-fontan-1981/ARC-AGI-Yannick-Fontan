@@ -48,7 +48,7 @@ ACTIONS = [
         function=recolor,
         input_arguments=[
             ArgumentBinding(name="value", type="Integer"),
-            ArgumentBinding(name="patch", type="Patch")
+            ArgumentBinding(name="patch", type="Grid")
         ],
         output_type="Object",
         description="Recolor all cells in a patch to the specified color."

@@ -22,6 +22,32 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
     # Color frequency metrics for input
     flat_in = [cell for r in grid_in for cell in r]
     cnt_in = Counter(flat_in)
+
+    # Determine input background: top color, or -1 if tie
+    most_common_in = cnt_in.most_common()
+    if most_common_in:
+        top_count = most_common_in[0][1]
+        # tie if second has same count
+        bg_in = -1 if len(most_common_in) > 1 and most_common_in[1][1] == top_count else most_common_in[0][0]
+    else:
+        bg_in = -1
+    # count distinct colors excluding background
+    countColorsWithoutBgInput = len(set(cnt_in.keys()) - {bg_in})
+    # count “alone” pixels (non-bg pixels with no same‐color neighbor)
+    countPixelsAloneInput = 0
+    for i in range(h_in):
+        for j in range(w_in):
+            col = grid_in[i][j]
+            if col == bg_in:
+                continue
+            # check 8 neighbors
+            has_nb = any(
+                0 <= i+di < h_in and 0 <= j+dj < w_in and grid_in[i+di][j+dj] == col
+                for di in (-1, 0, 1) for dj in (-1, 0, 1) if not (di == dj == 0)
+            )
+            if not has_nb:
+                countPixelsAloneInput += 1
+
     most_common_in = cnt_in.most_common()
     if most_common_in:
         firstMostColorInput, countFirstMostColorInput = most_common_in[0]
@@ -64,6 +90,8 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
         "secondLeastColorInput": secondLeastColorInput,
         "countSecondLeastColorInput": countSecondLeastColorInput,
         "diffFirstSecondLeastColorInput": diffFirstSecondLeastColorInput,
+        "countColorsWithoutBgInput": countColorsWithoutBgInput,
+        "countPixelsAloneInput": countPixelsAloneInput,
     })
 
     if grid_out is not None:
@@ -79,6 +107,28 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
         # Color frequency metrics for output
         flat_out = [cell for r in grid_out for cell in r]
         cnt_out = Counter(flat_out)
+
+        # ── Color frequency metrics for output ──────────────────────────────────────
+        most_common_out = cnt_out.most_common()
+        if most_common_out:
+            top_count_o = most_common_out[0][1]
+            bg_out = -1 if len(most_common_out) > 1 and most_common_out[1][1] == top_count_o else most_common_out[0][0]
+        else:
+            bg_out = -1
+        countColorsWithoutBgOutput = len(set(cnt_out.keys()) - {bg_out})
+        countPixelsAloneOutput = 0
+        for i in range(h_out):
+            for j in range(w_out):
+                col = grid_out[i][j]
+                if col == bg_out:
+                    continue
+                has_nb = any(
+                    0 <= i+di < h_out and 0 <= j+dj < w_out and grid_out[i+di][j+dj] == col
+                    for di in (-1, 0, 1) for dj in (-1, 0, 1) if not (di == dj == 0)
+                )
+                if not has_nb:
+                    countPixelsAloneOutput += 1
+
         most_common_out = cnt_out.most_common()
         if most_common_out:
             firstMostColorOutput, countFirstMostColorOutput = most_common_out[0]
@@ -141,6 +191,8 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
             "diffSecondMostColorInputOutput": diffSecondMostColorInputOutput,
             "diffFirstLeastColorInputOutput": diffFirstLeastColorInputOutput,
             "diffSecondLeastColorInputOutput": diffSecondLeastColorInputOutput,
+            "countColorsWithoutBgOutput": countColorsWithoutBgOutput,
+            "countPixelsAloneOutput": countPixelsAloneOutput,
         })
     else:
         # Set output-related columns to None
@@ -158,7 +210,8 @@ def compute_first_sight_row(filename: str, trainId: int, testId: int, grid_in, g
             "countFirstLeastColorOutput", "secondLeastColorOutput",
             "countSecondLeastColorOutput", "diffFirstSecondLeastColorOutput",
             "diffFirstMostColorInputOutput", "diffSecondMostColorInputOutput",
-            "diffFirstLeastColorInputOutput", "diffSecondLeastColorInputOutput"
+            "diffFirstLeastColorInputOutput", "diffSecondLeastColorInputOutput",
+            "countColorsWithoutBgOutput", "countPixelsAloneOutput",
         ]
         row.update({col: None for col in output_cols})
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import uuid
 from collections import defaultdict
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Set
 
 from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
 from constelize.core.procedure import ActionInstance, Procedure
@@ -59,24 +59,31 @@ def _is_input_grid_only(inst: ActionInstance) -> bool:
             return False
     return True
 
-
 def topological_levels(instances: Dict[str, ActionInstance]) -> List[List[str]]:
-    """Return lists of step‑ids grouped by parallelisable level."""
-    # 1. Build dependency graph.
-    graph = defaultdict(set)
-    in_deg = defaultdict(int, {sid: 0 for sid in instances})
+    """Return lists of step-ids grouped by parallelisable level."""
+    # 1. Build dependency graph, in-degree counts, and a seen_sources map to avoid duplicate edges.
+    graph: Dict[str, Set[str]] = defaultdict(set)
+    in_deg: Dict[str, int] = {sid: 0 for sid in instances}
+    seen_sources: Dict[str, Set[str]] = defaultdict(set)
+
     for inst in instances.values():
+        tgt = inst.id
         for bind in inst.bindings.values():
-            if bind.binding in (BindingStatus.VARIABLE, BindingStatus.BUFFER) and bind.source_procedure_id:
-                graph[bind.source_procedure_id].add(inst.id)
-                in_deg[inst.id] += 1
+            src = bind.source_procedure_id
+            if bind.binding in (BindingStatus.VARIABLE, BindingStatus.BUFFER) and src:
+                # only add one edge per (src→tgt) pair
+                if src not in seen_sources[tgt]:
+                    graph[src].add(tgt)
+                    in_deg[tgt] += 1
+                    seen_sources[tgt].add(src)
 
     # 2. Perform Kahn’s algorithm.
-    levels, cur = [], [n for n, d in in_deg.items() if d == 0]
-    seen = set()
+    levels: List[List[str]] = []
+    cur: List[str] = [n for n, d in in_deg.items() if d == 0]
+    seen: Set[str] = set()
     while cur:
         levels.append(cur)
-        nxt = []
+        nxt: List[str] = []
         for n in cur:
             seen.add(n)
             for m in graph[n]:
@@ -84,13 +91,16 @@ def topological_levels(instances: Dict[str, ActionInstance]) -> List[List[str]]:
                 if in_deg[m] == 0:
                     nxt.append(m)
         cur = nxt
+
+    # if there's a cycle (not all nodes seen), fall back to singleton levels
     if len(seen) != len(instances):
         levels = [[sid] for sid in instances]
 
-    # 3. Special re‑arrangement: collect INPUT_GRID‑only steps and END steps.
-    input_grid_steps, end_steps = [], []
+    # 3. Special re-arrangement: collect INPUT_GRID-only steps and END steps.
+    input_grid_steps: List[str] = []
+    end_steps: List[str] = []
     for lvl in levels:
-        for sid in list(lvl):  # iterate over a copy
+        for sid in list(lvl):
             inst = instances[sid]
             if inst.END:
                 end_steps.append(sid)
@@ -98,19 +108,52 @@ def topological_levels(instances: Dict[str, ActionInstance]) -> List[List[str]]:
             elif _is_input_grid_only(inst):
                 input_grid_steps.append(sid)
                 lvl.remove(sid)
+
+    # remove any now-empty levels
     levels = [lvl for lvl in levels if lvl]
+
+    # prepend INPUT_GRID-only and append END steps
     if input_grid_steps:
         levels.insert(0, sorted(input_grid_steps))
     if end_steps:
         levels.append(sorted(end_steps))
+
     return levels
 
-
 def _order_steps(step_dict: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
-    """Return step_dict sorted in topological order (levels then id)."""
+    """
+    Return step_dict sorted in topological order (levels then id),
+    with verbose debug output.
+    """
+    print("\n=== _order_steps START ===")
+    print(f"Input step_dict keys: {list(step_dict.keys())}\n")
+
+    # 1) Compute topological levels
+    print("1) Computing topological levels...")
     lvls = topological_levels(step_dict)
-    ordered_ids = [sid for lvl in lvls for sid in sorted(lvl)]
-    return {f"step_{i + 1}": step_dict[sid] for i, sid in enumerate(ordered_ids)}
+    print(f"   → Levels returned: {lvls}\n")
+
+    # 2) Flatten levels into a single ordered list
+    print("2) Flattening levels into ordered list of IDs...")
+    ordered_ids = []
+    for lvl_idx, lvl in enumerate(lvls, start=1):
+        sorted_lvl = sorted(lvl)
+        print(f"   Level {lvl_idx}: {sorted_lvl}")
+        ordered_ids.extend(sorted_lvl)
+    print(f"   → Flattened order: {ordered_ids}\n")
+
+    # 3) Re-key the dictionary as step_1, step_2, …
+    print("3) Rebuilding dict with new keys...")
+    ordered_dict: Dict[str, ActionInstance] = {}
+    for i, sid in enumerate(ordered_ids):
+        new_key = f"step_{i+1}"
+        ordered_dict[new_key] = step_dict[sid]
+        print(f"   Mapping original '{sid}' → new key '{new_key}'")
+    print()
+
+    print("Final ordered_dict keys:", list(ordered_dict.keys()))
+    print("=== _order_steps END ===\n")
+    return ordered_dict
 
 
 ###############################################################################
@@ -215,6 +258,9 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
             current_consumer_id: str,
             branch: dict
     ):
+        print("replace_nested_source_ids")
+        if current_consumer_id== "select_object_grid#1":
+            print("current_consumer_id " + current_consumer_id)
         # Si c'est un ArgumentBinding
         if isinstance(binding, ArgumentBinding):
 
@@ -222,12 +268,12 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
             if binding.binding == BindingStatus.MULTIPLE and binding.candidates:
                 print("🛠️ [ replace_nested_source_ids MULTIPLE ]")
                 # On ne conserve que les candidats présents dans tous les trains
-                #print("binding.candidates")
-                #print(binding.candidates)
-                #print("btm.bindingTrainMap")
-                #print(btm.bindingTrainMap)
-                #print("btm.ALL_TRAIN_IDS")
-                #print(btm.ALL_TRAIN_IDS)
+                print("binding.candidates")
+                print(binding.candidates)
+                print("btm.bindingTrainMap")
+                print(btm.bindingTrainMap)
+                print("btm.ALL_TRAIN_IDS")
+                print(btm.ALL_TRAIN_IDS)
                 valid_cands = [
                     cand for cand in binding.candidates
                     if btm.bindingTrainMap.get(cand.binding_hash, set()) == btm.ALL_TRAIN_IDS
@@ -441,13 +487,45 @@ def print_bindings_recursive(proc):
             print_binding(f"{sid}.{arg}", b)
 
 
-def normalize_procedures_with_levels(procs: List[Procedure], scenarioId: str, ruleId: str) -> List[Procedure]:
-    """Return copies of *procs* whose steps are sorted topologically."""
-    norm = []
-    for p in procs:
-        ordered = _order_steps({s.id: s for s in p.steps.values()})
-        norm.append(Procedure(id=p.id, steps=ordered, scenarioId=scenarioId, ruleId=ruleId))
-    return norm
+def normalize_procedures_with_levels(
+    procs: List[Procedure],
+    scenarioId: str,
+    ruleId: str
+) -> List[Procedure]:
+    """
+    Return copies of *procs* whose steps are sorted topologically,
+    with detailed debug output.
+    """
+    print("\n=== normalize_procedures_with_levels START ===")
+    print(f"Total procedures to normalize: {len(procs)}\n")
+
+    normalized: List[Procedure] = []
+    for proc_idx, p in enumerate(procs, start=1):
+        print(f"--- Processing Procedure {proc_idx}/{len(procs)}: id={p.id} ---")
+        original_ids = [step.id for step in p.steps.values()]
+        print(f"Original step IDs (unsorted): {original_ids}")
+
+        # Build a mapping id→ActionInstance and call our verbose _order_steps
+        step_map = {s.id: s for s in p.steps.values()}
+        print("Calling _order_steps to sort topologically...")
+        ordered_map = _order_steps(step_map)  # assumes verbose _order_steps
+
+        new_ids = list(ordered_map.keys())
+        print(f"Ordered step keys: {new_ids}")
+        print(f"Corresponding original IDs in order: {[step_map_id for step_map_id in ordered_map.values()]}\n")
+
+        # Re-wrap into a new Procedure
+        new_proc = Procedure(
+            id=p.id,
+            steps=ordered_map,
+            scenarioId=scenarioId,
+            ruleId=ruleId
+        )
+        normalized.append(new_proc)
+        print(f"Procedure {p.id} normalized → contains {len(ordered_map)} steps.\n")
+
+    print("=== normalize_procedures_with_levels END ===\n")
+    return normalized
 
 def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:
     """

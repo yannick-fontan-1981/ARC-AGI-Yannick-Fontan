@@ -266,7 +266,7 @@ ACTIONS = [
         description="Check whether the patch forms a vertical line.",
         category=ActionCategory.PATTERN_DETECTION,
         input_arguments=[
-            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED)
+            ArgumentBinding(name="patch", type="Grid", binding=BindingStatus.UNRESOLVED)
         ],
         output_type="Boolean",
         function=vline
@@ -277,7 +277,7 @@ ACTIONS = [
         description="Check whether the patch forms a horizontal line.",
         category=ActionCategory.PATTERN_DETECTION,
         input_arguments=[
-            ArgumentBinding(name="patch", type="Patch", binding=BindingStatus.UNRESOLVED)
+            ArgumentBinding(name="patch", type="Grid", binding=BindingStatus.UNRESOLVED)
         ],
         output_type="Boolean",
         function=hline

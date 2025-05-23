@@ -911,6 +911,72 @@ def compute_split_sprites_by_ratio(input_grid, output_grid, filename, trainId, t
         sprites.append(sprite)
     return sprites
 
+def compute_split_sprites_by_input_ratio(
+    input_grid: list[list[int]],
+    w_ratio: float,
+    h_ratio: float,
+    filename: str,
+    trainId: int,
+    testId: int,
+    isInput: bool
+) -> list[dict]:
+    """
+    Split the input grid into tiles according to the given width/height ratios,
+    if—and only if—the computed tile sizes divide the grid exactly.
+    """
+    H = len(input_grid)
+    W = len(input_grid[0]) if H else 0
+
+    # compute target tile dimensions
+    tile_w = int(round(W * w_ratio))
+    tile_h = int(round(H * h_ratio))
+
+    # sanity: must be positive and divide exactly
+    if tile_w <= 0 or tile_h <= 0:
+        return []
+    if W % tile_w != 0 or H % tile_h != 0:
+        return []
+
+    horiz_splits = W // tile_w
+    vert_splits  = H // tile_h
+
+    sprites = []
+    for i in range(vert_splits):
+        for j in range(horiz_splits):
+            minX = j * tile_w
+            maxX = minX + tile_w
+            minY = i * tile_h
+            maxY = minY + tile_h
+
+            subgrid = [row[minX:maxX] for row in input_grid[minY:maxY]]
+            flags = {
+                "isInsideInput":   isInput,
+                "isInsideOutput":  not isInput,
+                "isInsideTrain":   (trainId != -1),
+                "isInsideTest":    (testId  != -1),
+                "isInsideBuffer":  False,
+                "isGrid":          False,
+                "isFromSplit":     True,
+                "isFromHole":      False,
+                "isFromCut":       False,
+                "isFromColorZone": False,
+                "isFromPrevious":  False,
+            }
+
+            sprite = fill_sprite_attributes(
+                input_grid, filename,
+                trainId, testId,
+                flags, subgrid,
+                (minX, minY, maxX, maxY)
+            )
+            # override bounding box
+            sprite["minX"], sprite["minY"], sprite["maxX"], sprite["maxY"] = (
+                minX, minY, maxX, maxY
+            )
+            sprites.append(sprite)
+
+    return sprites
+
 def find_holes_in_objects(grid):
     """
     Dummy hole detection: returns an empty list.
@@ -1496,14 +1562,32 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
         split_sprites = []
         if "output" in item:
             if isTrain:
-                # always compute on train, *and* record its ratios
-                split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
-                for spl in split_sprites:
-                    _train_split_ratios.add((spl["width"], spl["height"]))
+                # 1) compute the true width/height ratio of output→input
+                in_h = len(item["input"])
+                in_w = len(item["input"][0]) if in_h else 0
+                out_h = len(item["output"])
+                out_w = len(item["output"][0]) if out_h else 0
+
+                ratio_w = out_w * 1.0 / in_w
+                ratio_h = out_h * 1.0 / in_h
+                _train_split_ratios.add((ratio_w, ratio_h))
+
+                # 2) if you still want to slice up the train into sub‐sprites, do it
+                split_sprites = compute_split_sprites_by_ratio(
+                    item["input"], item["output"],
+                    filename, trainId, testId, is_input
+                )
             else:
+                print(f"_train_split_ratios {_train_split_ratios} ")
                 # only split test if all train splits agreed on one ratio
                 if len(_train_split_ratios) == 1:
-                    split_sprites = compute_split_sprites_by_ratio(item["input"], item["output"], filename, trainId, testId, is_input)
+                    w_ratio, h_ratio = next(iter(_train_split_ratios))
+                    print(f"split test by w_ratio {w_ratio} h_ratio {h_ratio} ")
+                    split_sprites = compute_split_sprites_by_input_ratio(
+                        item["input"],
+                        w_ratio, h_ratio,
+                        filename, trainId, testId, is_input
+                    )
                 else:
                     # no‐ops: leave split_sprites = []
                     print(f"⏭ skipping test‐split because train ratios = {_train_split_ratios}")

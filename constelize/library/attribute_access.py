@@ -109,11 +109,8 @@ def select_object_and_attribute_fn(
     testId:     int | None = None
 ) -> Optional[int]:
     """
-    Return the attribute value of the object whose row best matches your criteria:
-    for each row in object_analysis, count how many (attr, val) pairs it satisfies,
-    pick the one with the highest count, and return its `attribute_name`.
-    If none match at least one criterion, or no rows pass the trainId/testId filter,
-    return None.
+    Return the attribute value of the object whose row best matches your criteria,
+    giving a big bonus to matching sizeOrder.
     """
     object_tbl = GLOBAL.load_object_analysis_table(scenarioId, ruleId)
 
@@ -130,8 +127,13 @@ def select_object_and_attribute_fn(
         if testId  is not None and row.get("testId")  != testId:
             continue
 
-        # 3) Score it by how many criteria it matches
-        score = sum(1 for attr, val in criteria if row.get(attr) == val)
+        # 3) Score it by how many criteria it matches,
+        #    but give +10 points for sizeOrder matches
+        score = 0
+        for attr, val in criteria:
+            if row.get(attr) == val:
+                score += 10 if attr == "sizeOrder" else 1
+
         if score > best_score:
             best_score = score
             best_row   = row
@@ -143,7 +145,7 @@ def select_object_and_attribute_fn(
 
     # 5) Otherwise return the desired attribute
     result = best_row.get(attribute_name)
-    print(f"[BEST MATCH] matched {best_score}/{len(criteria)} criteria → "
+    print(f"[BEST MATCH] score={best_score} (of max {10 if any(a=='sizeOrder' for a,_ in criteria) else len(criteria)}) → "
           f"{attribute_name} = {result}")
     return result
 
@@ -190,37 +192,49 @@ def select_object_grid_fn(
 ) -> Optional[Grid]:
     """
     Return the minimal object patch grid for the object_analysis entry that
-    best matches the given criteria (highest count of attr==val), filtered by
-    trainId/testId. If no row matches at least one criterion, return None.
+    best matches the given criteria (highest weighted count of attr==val),
+    filtered by trainId/testId. If no row matches at least one criterion,
+    return None.
     """
     obj_tbl = GLOBAL.load_object_analysis_table(scenarioId, ruleId)
 
     best_oid = None
     best_score = -1
-    # pick the object with highest match count
+
+    # pick the object with highest weighted match count
     for oid, row in obj_tbl.items():
         if trainId is not None and row.get("trainId") != trainId:
             continue
         if testId is not None and row.get("testId") != testId:
             continue
-        # count satisfied criteria
-        score = sum(1 for attr, val in criteria if row.get(attr) == val)
+
+        # weighted count: sizeOrder matches count for 10, everything else counts for 1
+        score = 0
+        for attr, val in criteria:
+            if row.get(attr) == val:
+                if attr == "sizeOrder":
+                    score += 10
+                else:
+                    score += 1
+
         if score > best_score:
             best_score = score
             best_oid = oid
-    # require at least one match
+
+    # require at least one (weighted) match
     if best_oid is None or best_score <= 0:
         return None
 
-    # parse chosen row and build patch as before
+    # build the patch grid from the chosen row
     row = obj_tbl[best_oid]
     coords_abs = json.loads(row.get("data", "[]"))
     if not coords_abs:
         return None
-    rows_coord = [r for r, _ in coords_abs]
-    cols_coord = [c for _, c in coords_abs]
-    min_r, max_r = min(rows_coord), max(rows_coord)
-    min_c, max_c = min(cols_coord), max(cols_coord)
+
+    rows = [r for r, _ in coords_abs]
+    cols = [c for _, c in coords_abs]
+    min_r, max_r = min(rows), max(rows)
+    min_c, max_c = min(cols), max(cols)
     height = max_r - min_r + 1
     width  = max_c - min_c + 1
     color = int(row.get("color", 0))
@@ -230,7 +244,7 @@ def select_object_grid_fn(
         lr, lc = r - min_r, c - min_c
         patch[lr][lc] = color
 
-    return tuple(tuple(r) for r in patch)
+    return tuple(tuple(row) for row in patch)
 
 ACTIONS = [
     Action(

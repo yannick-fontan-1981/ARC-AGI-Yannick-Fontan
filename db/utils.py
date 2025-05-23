@@ -129,6 +129,11 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
     countOnePixelBlocksInput INTEGER,
     countOnePixelBlocksOutput INTEGER,
     diffOnePixelBlocksInputOutput INTEGER,
+    
+    countColorsWithoutBgInput  INTEGER,
+    countColorsWithoutBgOutput INTEGER,
+    countPixelsAloneInput      INTEGER,
+    countPixelsAloneOutput     INTEGER,
 
     countUniqueBlockShapesInput INTEGER,
     countUniqueBlockShapesOutput INTEGER,
