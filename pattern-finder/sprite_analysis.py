@@ -6,7 +6,7 @@ import json
 import math
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import List, Optional
 
 from constelize.dsl.grid_dsl import to_concrete_grid
@@ -783,6 +783,35 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
         from solver.dsl import hmirror, vmirror
         return vmirror(hmirror(spr_obj))
     attr["hasRotationalSymmetry"] = (rot180_obj(sprite_obj)==sprite_obj)
+
+    attr["colorUniqueRatio"] = None
+    if attr.get("isInsideInput"):
+        # 1) Count how many times each color appears *outside* the sprite
+        full_flat = [cell for row in grid for cell in row]
+        sprite_flat = [cell for row in sprite for cell in row]
+        full_cnt = Counter(full_flat)
+        sprite_cnt = Counter(sprite_flat)
+
+        # 2) Find colors that appear in sprite but nowhere else
+        unique_colors = [c for c in sprite_cnt
+                         if full_cnt[c] == sprite_cnt[c]]  # i.e. none left outside
+
+        if unique_colors:
+            # total pixels of those unique colors
+            unique_pixels = sum(sprite_cnt[c] for c in unique_colors)
+            # sprite total pixel count:
+            total_pixels = attr["pixelCount"]
+            # total pixels in the full grid:
+            grid_h = len(grid)
+            grid_w = len(grid[0]) if grid_h else 0
+            grid_size = grid_h * grid_w
+            # ratio as defined
+            # scale factor = 1 when sprite tiny, →0 as sprite → full‐grid
+            scale = 1 - (total_pixels / grid_size) if grid_size else 0
+            attr["colorUniqueRatio"] = (unique_pixels / (total_pixels + 1)) * scale
+
+    # 3) Temporarily store a placeholder for the order; we'll fill it in after
+    attr["colorUniqueOrder"] = None
 
     # data
     attr["data"] = json.dumps(list(sprite_obj))
@@ -1807,6 +1836,19 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
         for rank, row in enumerate(sorted_asc, start=1):
             row["sizeOrderDesc"] = rank
 
+    # ── NEW: compute colorUniqueOrder by descending colorUniqueRatio ──
+    for rows in grouped_by_id.values():
+        # only sprites with a non-null ratio
+        sprites_with_ratio = [r for r in rows if r["colorUniqueRatio"] is not None]
+        # sort highest ratio first
+        sorted_by_ratio = sorted(
+            sprites_with_ratio,
+            key=lambda r: r["colorUniqueRatio"],
+            reverse=True
+        )
+        for rank, r in enumerate(sorted_by_ratio, start=1):
+            r["colorUniqueOrder"] = rank
+
     # 3. Copy these values into the rows that will be inserted into the DB
     id_to_sprite_row = {r["id"]: r for r in all_sprite_rows if "id" in r}
     for row in all_sprite_analysis_rows:
@@ -1814,6 +1856,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
         if src:
             row["sizeOrder"] = src.get("sizeOrder", -1)
             row["sizeOrderDesc"] = src.get("sizeOrderDesc", -1)
+            row["colorUniqueOrder"] = src.get("colorUniqueOrder")
         else:
             row["sizeOrder"] = -1
             row["sizeOrderDesc"] = -1
@@ -1823,8 +1866,322 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     bulk_insert(conn, "sprite_transformation", sprite_global_data["sprite_trans_records"])
     bulk_insert(conn, "sprite_occurrence", sprite_global_data["sprite_occ_records"])
     conn.commit()
+
+    cur = conn.cursor()
+    cur.executescript("""
+    -- 1) isSpriteUnique
+    UPDATE sprite_analysis AS sa
+    SET isSpriteUnique = CASE
+      WHEN sa.testId = -1 AND sa.isInsideInput = 1 THEN
+        (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+         FROM sprite_analysis i
+         WHERE i.trainId = sa.trainId
+           AND i.testId = -1
+           AND i.isInsideInput = 1
+           AND i.data = sa.data)
+      ELSE NULL END;
+
+    -- 2) isTargetSpritePresent
+    UPDATE sprite_analysis AS sa
+    SET isTargetSpritePresent = CASE
+      WHEN sa.testId = -1 THEN
+        (SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END
+         FROM sprite_analysis o
+         WHERE o.trainId = sa.trainId
+           AND o.testId = -1
+           AND o.isInsideOutput = 1
+           AND o.data = sa.data)
+      ELSE NULL END;
+
+    -- 3) isTargetSpriteUnique
+    UPDATE sprite_analysis AS sa
+    SET isTargetSpriteUnique = CASE
+      WHEN sa.testId = -1 AND sa.isTargetSpritePresent = 1 THEN
+        (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+         FROM sprite_analysis o
+         WHERE o.trainId = sa.trainId
+           AND o.testId = -1
+           AND o.isInsideOutput = 1
+           AND o.data = sa.data)
+      ELSE NULL END;
+
+    -- 4) One-to-one / one-to-many / many-to-one / many-to-many
+    UPDATE sprite_analysis
+    SET
+      isSpriteOneToOne   = CASE WHEN isSpriteUnique=1 AND isTargetSpriteUnique=1 THEN 1 ELSE 0 END,
+      isSpriteOneToMany  = CASE WHEN isSpriteUnique=1 AND isTargetSpriteUnique=0 AND isTargetSpritePresent=1 THEN 1 ELSE 0 END,
+      isSpriteManyToOne  = CASE WHEN isSpriteUnique=0 AND isTargetSpriteUnique=1 THEN 1 ELSE 0 END,
+      isSpriteManyToMany = CASE WHEN isSpriteUnique=0 AND isTargetSpriteUnique=0 AND isTargetSpritePresent=1 THEN 1 ELSE 0 END;
+
+    -- 5) target_sprite_id (only for one-to-one input sprites)
+    UPDATE sprite_analysis AS sa
+    SET target_sprite_id = (
+      SELECT o.id
+      FROM sprite_analysis o
+      WHERE o.trainId = sa.trainId
+        AND o.testId = -1
+        AND o.isInsideOutput = 1
+        AND o.data = sa.data
+      LIMIT 1
+    )
+    WHERE sa.testId = -1
+      AND sa.isInsideInput = 1
+      AND sa.isSpriteOneToOne = 1;
+
+    -- 6) isSpriteDeleted
+    UPDATE sprite_analysis
+    SET isSpriteDeleted = CASE WHEN isTargetSpritePresent=0 THEN 1 ELSE 0 END;
+
+    -- 7) isMoved
+    UPDATE sprite_analysis AS sa
+    SET isMoved = CASE
+      WHEN sa.isSpriteOneToOne=1 AND EXISTS (
+             SELECT 1 FROM sprite_analysis t
+              WHERE t.id = sa.target_sprite_id
+                AND (t.minX != sa.minX OR t.minY != sa.minY)
+           ) THEN 1
+      ELSE 0 END;
+
+    -- 8) isRotatedOrFlipped
+    UPDATE sprite_analysis AS sa
+    SET isRotatedOrFlipped = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM sprite_occurrence so
+        JOIN sprite_transformation st
+          ON so.sprite_transformation_id = st.id
+        WHERE so.sprite_id = sa.id
+          AND (st.rotated_90=1 OR st.rotated_180=1 OR st.rotated_270=1
+               OR st.flipped_vert=1 OR st.flipped_horiz=1
+               OR st.flipped_vert_90=1 OR st.flipped_horiz_90=1)
+      ) THEN 1
+      ELSE 0 END;
+
+    -- 9) isRecolored
+    UPDATE sprite_analysis AS sa
+    SET isRecolored = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM sprite_occurrence so
+        JOIN sprite_transformation st
+          ON so.sprite_transformation_id = st.id
+        WHERE so.sprite_id = sa.id
+          AND st.recolored != '[]'
+      ) THEN 1
+      ELSE 0 END;
+
+    -- 10) isZoomed
+    UPDATE sprite_analysis AS sa
+    SET isZoomed = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM sprite_occurrence so
+        JOIN sprite_transformation st
+          ON so.sprite_transformation_id = st.id
+        WHERE so.sprite_id = sa.id
+          AND (st.zoom_x > 1 OR st.zoom_y > 1)
+      ) THEN 1
+      ELSE 0 END;
+
+    -- 11) isGlued
+    UPDATE sprite_analysis
+    SET isGlued = CASE WHEN isSpriteDeleted=1 AND isRecolored=1 THEN 1 ELSE 0 END;
+
+    -- 12) moveRelX / moveRelY / newPosX / newPosY
+    UPDATE sprite_analysis AS sa
+    SET moveRelX = (
+      SELECT t.minX - sa.minX
+      FROM sprite_analysis t
+      WHERE t.id = sa.target_sprite_id
+    )
+    WHERE sa.target_sprite_id IS NOT NULL;
+    UPDATE sprite_analysis AS sa
+    SET moveRelY = (
+      SELECT t.minY - sa.minY
+      FROM sprite_analysis t
+      WHERE t.id = sa.target_sprite_id
+    )
+    WHERE sa.target_sprite_id IS NOT NULL;
+    UPDATE sprite_analysis AS sa
+    SET newPosX = (
+      SELECT t.minX
+      FROM sprite_analysis t
+      WHERE t.id = sa.target_sprite_id
+    )
+    WHERE sa.target_sprite_id IS NOT NULL;
+    UPDATE sprite_analysis AS sa
+    SET newPosY = (
+      SELECT t.minY
+      FROM sprite_analysis t
+      WHERE t.id = sa.target_sprite_id
+    )
+    WHERE sa.target_sprite_id IS NOT NULL;
+
+    -- 13) moveBehindColor (placeholder; compute via Python helper if you want)
+    UPDATE sprite_analysis
+    SET moveBehindColor = NULL;
+
+    -- 14) rotateOrFlip (concatenate variant names)
+    UPDATE sprite_analysis AS sa
+    SET rotateOrFlip = (
+      SELECT rtrim(
+        (CASE WHEN st.rotated_90     = 1 THEN 'rot90,'     ELSE '' END)
+      || (CASE WHEN st.rotated_180    = 1 THEN 'rot180,'    ELSE '' END)
+      || (CASE WHEN st.rotated_270    = 1 THEN 'rot270,'    ELSE '' END)
+      || (CASE WHEN st.flipped_horiz  = 1 THEN 'flipH,'     ELSE '' END)
+      || (CASE WHEN st.flipped_vert   = 1 THEN 'flipV,'     ELSE '' END)
+      || (CASE WHEN st.flipped_horiz_90 = 1 THEN 'flipH90,'  ELSE '' END)
+      || (CASE WHEN st.flipped_vert_90  = 1 THEN 'flipV90,'  ELSE '' END)
+      , ','
+      )
+      FROM sprite_occurrence so
+      JOIN sprite_transformation st
+        ON so.sprite_transformation_id = st.id
+      WHERE so.sprite_id = sa.id
+      LIMIT 1
+    );
+
+    -- 15) recolored TEXT
+    UPDATE sprite_analysis AS sa
+    SET recolored = (
+      SELECT st.recolored
+      FROM sprite_occurrence so
+      JOIN sprite_transformation st
+        ON so.sprite_transformation_id = st.id
+      WHERE so.sprite_id = sa.id
+        AND st.recolored != '[]'
+      LIMIT 1
+    );
+
+    -- 16) zoomX / zoomY
+    UPDATE sprite_analysis AS sa
+    SET zoomX = (
+      SELECT st.zoom_x
+      FROM sprite_occurrence so
+      JOIN sprite_transformation st
+        ON so.sprite_transformation_id = st.id
+      WHERE so.sprite_id = sa.id
+        AND st.zoom_x > 1
+      LIMIT 1
+    );
+    UPDATE sprite_analysis AS sa
+    SET zoomY = (
+      SELECT st.zoom_y
+      FROM sprite_occurrence so
+      JOIN sprite_transformation st
+        ON so.sprite_transformation_id = st.id
+      WHERE so.sprite_id = sa.id
+        AND st.zoom_y > 1
+      LIMIT 1
+    );
+    """)
+    conn.commit()
+
+    # --- 1) load all train-case grids for easy lookup by trainId ---
+    # assumes data["train"] is a list of dicts with keys "input" and "output"
+    input_grids = [case["input"] for case in data["train"]]
+    output_grids = [case["output"] for case in data["train"]]
+
+    # --- 2) build a map sprite_id -> list of (row,col) in the original grid ---
+    sprite_pixels: dict[int, list[tuple[int, int]]] = {}
+    cur = conn.cursor()
+
+    # We need: id, trainId (to index input/output lists),
+    #         minX/minY (bbox offset), data (sprite subgrid), bgColor
+    for sprite_id, trainId, minX, minY, data_json, bgColor in cur.execute("""
+        SELECT id, trainId, minX, minY, data, bgColor
+        FROM sprite_analysis
+    """):
+        # parse the sprite’s 2D array
+        sprite_array = json.loads(data_json)
+        coords: list[tuple[int, int]] = []
+
+        # walk every cell in that subgrid;
+        # if it’s not the background color, it’s part of the sprite
+        for dy, row_vals in enumerate(sprite_array):
+            for dx, pixel in enumerate(row_vals):
+                if pixel != bgColor:
+                    # translate local (dy,dx) back into full-grid coordinates
+                    coords.append((minY + dy, minX + dx))
+
+        sprite_pixels[sprite_id] = coords
+
+    # 1) select only those sprites that actually moved
+    moved_rows = cur.execute("""
+           SELECT sa.id, sa.trainId, sa.bgColor
+           FROM sprite_analysis AS sa
+           WHERE testId = -1
+             AND (
+               (sa.moveRelX IS NOT NULL AND sa.moveRelX != 0)
+               OR
+               (sa.moveRelY IS NOT NULL AND sa.moveRelY != 0)
+             )
+       """).fetchall()
+
+    # 2) for each moved sprite, compute the "background" left behind
+    for sprite_id, trainId, sprite_color in moved_rows:
+        ig = input_grids[trainId]  # original input grid
+        og = output_grids[trainId]  # resulting output grid
+        pixels = sprite_pixels[sprite_id]
+        # sprites typically don’t have a neighbor‐color list, so we skip that fallback
+        behind = compute_move_behind_color(
+            ig,
+            og,
+            pixels,
+            sprite_color
+        )
+        cur.execute(
+            "UPDATE sprite_analysis SET moveBehindColor = ? WHERE id = ?",
+            (behind, sprite_id)
+        )
+
+    # 3) commit once
+    conn.commit()
+
     detect_and_store_glued_and_new(conn, data)
     detect_and_store_sprite_computation(conn)
+
+def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
+    """
+    Compute the color left behind when a sprite moves.
+
+    Returns -1 whenever the output no longer covers the original pixels
+    or whenever nothing else can be found.
+
+    Adapted from object_analysis.compute_move_behind_color :contentReference[oaicite:0]{index=0}.
+    """
+    # 0) guard: no pixels → nothing to fill
+    if not pixels:
+        print("→ No sprite pixels, returning -1")
+        return -1
+
+    # 1) bounds check against the output grid
+    H = len(output_grid)
+    W = len(output_grid[0]) if H else 0
+    for r, c in pixels:
+        if r < 0 or r >= H or c < 0 or c >= W:
+            print(f"→ Sprite pixel {(r, c)} outside output grid, returning -1")
+            return -1
+
+    # 2) collect whatever’s now in those original spots
+    behind_colors = [output_grid[r][c] for r, c in pixels]
+    print("  sprite behind_colors:", behind_colors)
+
+    # 3) drop any that are still the sprite’s own color
+    filtered = [col for col in behind_colors if col != sprite_color]
+    if not filtered:
+        print("→ All sprite spots still sprite_color, returning -1")
+        return -1
+
+    # 4) if they’re all the same, that’s your background
+    first = filtered[0]
+    if all(col == first for col in filtered):
+        print(f"→ Uniform sprite behind-color = {first}")
+        return first
+
+    # 5) non-uniform → give up
+    print("→ Non-uniform and no neighbor_colors for sprite, returning None")
+    return None
 
 # --- GLUED DETECTION PATCH for sprite_analysis.py ---
 # Offsets for eight neighbors

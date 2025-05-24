@@ -774,6 +774,7 @@ def create_suggested_action_instances(
         for bind in inst.bindings.values():
             action = getattr(bind, "suggested_action", None)
             if action not in {
+                "selectSpriteGridAction",
                 "selectSpriteAndAttributeAction",
                 "selectObjectGridAction",
                 "selectObjectAndAttributeAction"
@@ -891,6 +892,62 @@ def create_suggested_action_instances(
                     bind.binding = BindingStatus.VARIABLE
                     bind.source_procedure_id = sel.id
                     print(f"    ↳ linked object‐grid step {sel.id} {inst.id}")
+                    new_instances.append(sel)
+
+            elif action == "selectSpriteGridAction":
+                # — very much like selectObjectGridAction, but on sprite_analysis —
+                # 2a) collect the sprite‐IDs your bindings suggested
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                print(f"    ▶️ Positive sprite‐ID group: {group}")
+
+                # 2b) negative pool = all sprites seen in any input
+                all_input_sids = [
+                    sid for sid, row in tables["sprite_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                print(f"    ▶️ Negative pool (all input sprite‐IDs): {all_input_sids}")
+
+                # 2c) find minimal criteria that picks out exactly your group
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_sids,
+                    tables=tables,
+                    table_key="sprite_analysis"
+                )
+                # drop the usual metadata columns
+                exclude = {
+                    "trainId", "testId",
+                    "isInsideInput", "isInsideOutput",
+                    "isInsideTrain", "isInsideTest",
+                    "isFromSplit"
+                }
+                criteria = [(c, v) for c, v in criteria if c not in exclude]
+                print(f"    ▶️ Sprite‐grid criteria: {criteria!r}")
+                if not criteria:
+                    print("    ⚠️ No discriminating criteria for sprite‐grid → skipping")
+                    continue
+
+                # 2d) for each train, build a selectSpriteGridAction
+                for tid in train_ids:
+                    inst, bind, test_id, _sid = per_train[tid]
+                    grid_val = _aa_mod.select_sprite_grid_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_sprite_grid_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        output_grid=grid_val,
+                        criteria=criteria,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    print(f"    ↳ linked sprite‐grid step {sel.id} to {inst.id}")
                     new_instances.append(sel)
 
             elif action == "selectObjectAndAttributeAction":

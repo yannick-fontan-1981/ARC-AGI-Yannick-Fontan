@@ -559,7 +559,22 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
            AND i.isInsideInput = 1
            AND i.data = oa.data)
       ELSE NULL END;
-
+    
+    -- 4b) isColorUnique: among input‐objects in the same train, does this color occur exactly once?
+    UPDATE object_analysis AS oa
+    SET isColorUnique = CASE
+      WHEN oa.testId = -1 AND oa.isInsideInput = 1 THEN
+        (
+          SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END
+          FROM object_analysis AS i
+          WHERE i.trainId = oa.trainId
+            AND i.testId = -1
+            AND i.isInsideInput = 1
+            AND i.color = oa.color
+        )
+      ELSE NULL
+    END;
+    
     -- 5) isTargetShapePresent
     UPDATE object_analysis AS oa
     SET isTargetShapePresent = CASE

@@ -339,6 +339,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         isTeal BOOLEAN,
         isBrown BOOLEAN,
         
+        isColorUnique BOOLEAN,
+        
         isSquare BOOLEAN,
         isRectangle BOOLEAN,
         isLine BOOLEAN,
@@ -641,6 +643,44 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         hasDiagonalSymmetry BOOLEAN,
         hasCounterDiagonalSymmetry BOOLEAN,
         hasRotationalSymmetry BOOLEAN,
+                
+        -- Presence & uniqueness flags
+        isSpriteUnique       BOOLEAN,
+        isTargetSpritePresent BOOLEAN,
+        isTargetSpriteUnique  BOOLEAN,
+    
+        -- Cardinality relations
+        isSpriteOneToOne     BOOLEAN,
+        isSpriteOneToMany    BOOLEAN,
+        isSpriteManyToOne    BOOLEAN,
+        isSpriteManyToMany   BOOLEAN,
+    
+        -- Target and deletion flags
+        target_sprite_id     INTEGER,
+        isSpriteDeleted      BOOLEAN,
+    
+        -- Transformation flags
+        isMoved              BOOLEAN,
+        isRotatedOrFlipped   BOOLEAN,
+        isRecolored          BOOLEAN,
+        isZoomed             BOOLEAN,
+        isGlued              BOOLEAN,
+    
+        -- Movement deltas & new position
+        moveRelX             INTEGER,
+        moveRelY             INTEGER,
+        newPosX              INTEGER,
+        newPosY              INTEGER,
+        moveBehindColor      INTEGER,
+    
+        -- Transformation parameters
+        rotateOrFlip         TEXT,
+        recolored            TEXT,
+        zoomX                INTEGER,
+        zoomY                INTEGER,
+        
+        colorUniqueRatio REAL,
+        colorUniqueOrder INTEGER,
         
         data TEXT NOT NULL
     );

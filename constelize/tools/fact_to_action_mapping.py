@@ -1,5 +1,5 @@
 # constelize/tools/fact_to_action_mapping.py
-
+import itertools
 import json
 import sqlite3
 from typing import List, Optional, Dict, Any, Tuple
@@ -11,7 +11,7 @@ from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
-    Grid, fill_grid, shift, shift_with_background
+    Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -1894,6 +1894,195 @@ class MoveObjectFactToAction(FactToActionMapping):
             END=False
         )
 
+class MoveSpriteFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("move_sprite", "move_sprite", "isMoved")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        query = """
+        SELECT
+          sa.id               AS sprite_id,
+          sa.trainId,
+          sa.testId,
+          sa.bgColor          AS color,
+          sa.minX             AS patch_min_x,
+          sa.minY             AS patch_min_y,
+          sa.moveRelX         AS move_rel_x,
+          sa.moveRelY         AS move_rel_y,
+          sa.newPosX          AS new_pos_x,
+          sa.newPosY          AS new_pos_y,
+          sa.moveBehindColor  AS background_color,
+          sa.width,
+          sa.height,
+          sa.data
+        FROM sprite_analysis AS sa
+        WHERE sa.isMoved = 1
+          AND sa.isInsideInput = 1
+          AND sa.isRotatedOrFlipped = 0
+          AND sa.isRecolored = 0
+          AND sa.isZoomed = 0
+        """
+        cursor = conn.execute(query)
+        cols = [c[0] for c in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        # 1) If no moved sprites at all, bail out immediately
+        if not rows:
+            return []
+
+        # 2) FILTER OUT any box that is strictly contained by a larger one
+        def box_contains(outer, inner):
+            # treat coordinates as half-open: [minX, minX+width)
+            ox1, oy1 = outer["patch_min_x"], outer["patch_min_y"]
+            ow, oh = outer["width"], outer["height"]
+            ix1, iy1 = inner["patch_min_x"], inner["patch_min_y"]
+            iw, ih = inner["width"], inner["height"]
+
+            return (
+                    ix1 >= ox1 and
+                    iy1 >= oy1 and
+                    ix1 + iw <= ox1 + ow and
+                    iy1 + ih <= oy1 + oh and
+                    # strictly smaller in area so identical boxes aren’t dropped
+                    (iw * ih) < (ow * oh)
+            )
+
+        filtered = []
+        # group by trainId and testId so we only compare boxes within same scenario
+        keyfunc = lambda r: (r["trainId"], r["testId"])
+        for _, group in itertools.groupby(sorted(rows, key=keyfunc), key=keyfunc):
+            group = list(group)
+            for r in group:
+                # keep r only if no other box contains it
+                if not any(box_contains(other, r) for other in group if other is not r):
+                    filtered.append(r)
+        rows = filtered
+
+        # 3) Which trainIds still saw a move?
+        train_rows = [r for r in rows if r["testId"] == -1]
+        found_tids = {r["trainId"] for r in train_rows}
+
+        # 4) All expected trainIds from TRAIN_INPUT_GRIDS
+        expected_tids = set(TRAIN_INPUT_GRIDS.keys())
+
+        # 5) Only proceed if every trainId is covered
+        if found_tids != expected_tids:
+            return []
+
+        return rows
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        # Core parameters
+        bg_color     = int(row.get("background_color", 0))
+        move_rel_x   = int(row["move_rel_x"])
+        move_rel_y   = int(row["move_rel_y"])
+
+        patch_min_x  = int(row["patch_min_x"])
+        patch_min_y  = int(row["patch_min_y"])
+        new_pos_x    = int(row["new_pos_x"])
+        new_pos_y    = int(row["new_pos_y"])
+        patch_w      = int(row["width"])
+        patch_h      = int(row["height"])
+
+        # if bg is missing, reset shift to zero (no valid backing)
+        if bg_color == -1:
+            move_rel_x = move_rel_y = 0
+            patch_min_x = patch_min_y = 0
+
+        coords = json.loads(row["data"])  # e.g. [[4,[3,1]], [0,[4,4]], …]
+        patch_w = int(row["width"])
+        patch_h = int(row["height"])
+
+        # initialize an empty patch
+        patch_grid = [[-1 for _ in range(patch_w)] for __ in range(patch_h)]
+        for color, (dy, dx) in coords:
+            # only fill valid coords
+            if 0 <= dy < patch_h and 0 <= dx < patch_w:
+                patch_grid[dy][dx] = int(color)
+
+        # freeze into tuples
+        patch = tuple(tuple(r) for r in patch_grid)
+
+        print("MoveSpriteFactToAction")
+        print("patch")
+        print(grid_to_pretty_string(patch))
+
+        # prepare anonymized output canvas
+        base_output = TRAIN_OUTPUT_GRIDS[row["trainId"]]
+        rows_out = len(base_output)
+        cols_out = len(base_output[0]) if rows_out else 0
+        anon_grid = tuple(tuple(-8 for _ in range(cols_out)) for _ in range(rows_out))
+
+        print("anon_grid")
+        print(grid_to_pretty_string(anon_grid))
+
+        # shift with background color
+        updated_grid = shift_sprite_with_background(
+            anon_grid,
+            patch,
+            patch_min_x,
+            patch_min_y,
+            move_rel_x,
+            move_rel_y,
+            new_pos_x,
+            new_pos_y,
+            background_color=bg_color
+        )
+
+        print("updated_grid")
+        print(grid_to_pretty_string(updated_grid))
+
+        # bind all arguments as unresolved so the planner can fill them in
+        bindings = {
+            "grid": ArgumentBinding("grid", "Grid", binding=BindingStatus.UNRESOLVED, value=anon_grid),
+            "patch": ArgumentBinding(
+                "patch", "Grid", binding=BindingStatus.UNRESOLVED,
+                value=patch, use_anonymized=False,
+                suggested_action="selectSpriteGridAction",
+                suggested_sprite_id=row["sprite_id"]
+            ),
+            "new_pos_x": ArgumentBinding("new_pos_x", "Integer", binding=BindingStatus.UNRESOLVED, value=new_pos_x),
+            "new_pos_y": ArgumentBinding("new_pos_y", "Integer", binding=BindingStatus.UNRESOLVED, value=new_pos_y),
+            "background_color": ArgumentBinding("background_color", "Color", binding=BindingStatus.UNRESOLVED, value=bg_color),
+        }
+
+        if bg_color == -1:
+            # for missing bg, make shift constants
+            bindings["patch_min_x"] = ArgumentBinding("patch_min_x", "Integer", binding=BindingStatus.CONSTANT, value=patch_min_x)
+            bindings["patch_min_y"] = ArgumentBinding("patch_min_y", "Integer", binding=BindingStatus.CONSTANT, value=patch_min_y)
+            bindings["move_rel_x"]  = ArgumentBinding("move_rel_x",  "Integer", binding=BindingStatus.CONSTANT, value=move_rel_x)
+            bindings["move_rel_y"]  = ArgumentBinding("move_rel_y",  "Integer", binding=BindingStatus.CONSTANT, value=move_rel_y)
+        else:
+            bindings["patch_min_x"] = ArgumentBinding(
+                "patch_min_x", "Integer", binding=BindingStatus.UNRESOLVED, value=patch_min_x,
+                suggested_action="selectSpriteAndAttributeAction",
+                suggested_sprite_id=row["sprite_id"], suggested_attribute="minX"
+            )
+            bindings["patch_min_y"] = ArgumentBinding(
+                "patch_min_y", "Integer", binding=BindingStatus.UNRESOLVED, value=patch_min_y,
+                suggested_action="selectSpriteAndAttributeAction",
+                suggested_sprite_id=row["sprite_id"], suggested_attribute="minY"
+            )
+            bindings["move_rel_x"]  = ArgumentBinding("move_rel_x", "Integer", binding=BindingStatus.UNRESOLVED, value=move_rel_x)
+            bindings["move_rel_y"]  = ArgumentBinding("move_rel_y", "Integer", binding=BindingStatus.UNRESOLVED, value=move_rel_y)
+
+        action = registry.get_by_id(self.action_id)
+        return ActionInstance(
+            id=f"move_sprite_{row['sprite_id']}#{getUniqueId()}",
+            action=action,
+            bindings=bindings,
+            output_var="updated_grid",
+            output_value=updated_grid,
+            output_type=action.output_type,
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=(row["trainId"] != -1),
+            isToOutput=True,
+            END=False
+        )
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -1915,6 +2104,7 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     ZoomOutFactToAction(),
     CreateObjectFactToAction(),
     MoveObjectFactToAction(),
+    MoveSpriteFactToAction(),
     CropSpriteFactToAction(),
     FixSymmetryFactToAction(),
 ]

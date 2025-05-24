@@ -133,6 +133,67 @@ def shift_with_background(
     # 3) Return new grid frozen
     return tuple(tuple(row) for row in new_grid)
 
+def shift_sprite_with_background(
+    grid: Grid,
+    patch: Grid,
+    patch_min_x: int,
+    patch_min_y: int,
+    move_rel_x: int,
+    move_rel_y: int,
+    new_pos_x: int,
+    new_pos_y: int,
+    background_color: int
+) -> Grid:
+    """
+    Move a sprite patch within `grid`:
+
+    1) If background_color >= 0: erase original patch pixels (at patch_min_x/patch_min_y)
+       by filling them with background_color.
+    2) Draw each non-(-8) pixel from patch:
+       - If background_color < 0 → place absolutely at (new_pos_x + j, new_pos_y + i)
+       - Else → place relatively at ((patch_min_x + j) + move_rel_x, (patch_min_y + i) + move_rel_y)
+    """
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+    buf: List[List[int]] = [list(r) for r in grid]
+    h = len(patch)
+    w = len(patch[0]) if h else 0
+
+    # 1) Erase old footprint if we have a real background
+    if background_color >= 0:
+        for i in range(h):
+            for j in range(w):
+                if patch[i][j] != -8:
+                    y = patch_min_y + i
+                    x = patch_min_x + j
+                    if 0 <= y < rows and 0 <= x < cols:
+                        buf[y][x] = background_color
+
+    # 2) Draw moved patch
+    if background_color < 0:
+        # absolute placement
+        for i in range(h):
+            for j in range(w):
+                val = patch[i][j]
+                if val != -8:
+                    y = new_pos_y + i
+                    x = new_pos_x + j
+                    if 0 <= y < rows and 0 <= x < cols:
+                        buf[y][x] = val
+    else:
+        # relative placement
+        for i in range(h):
+            for j in range(w):
+                val = patch[i][j]
+                if val != -8:
+                    y0 = patch_min_y + i
+                    x0 = patch_min_x + j
+                    y = y0 + move_rel_y
+                    x = x0 + move_rel_x
+                    if 0 <= y < rows and 0 <= x < cols:
+                        buf[y][x] = val
+
+    return tuple(tuple(row) for row in buf)
 
 def normalize(grid: Grid) -> Grid:
     rows, cols = len(grid), len(grid[0])

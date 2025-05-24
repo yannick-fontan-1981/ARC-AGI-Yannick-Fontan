@@ -125,34 +125,34 @@ def _order_steps(step_dict: Dict[str, ActionInstance]) -> Dict[str, ActionInstan
     Return step_dict sorted in topological order (levels then id),
     with verbose debug output.
     """
-    print("\n=== _order_steps START ===")
-    print(f"Input step_dict keys: {list(step_dict.keys())}\n")
+    #print("\n=== _order_steps START ===")
+    #print(f"Input step_dict keys: {list(step_dict.keys())}\n")
 
     # 1) Compute topological levels
-    print("1) Computing topological levels...")
+    #print("1) Computing topological levels...")
     lvls = topological_levels(step_dict)
-    print(f"   → Levels returned: {lvls}\n")
+    #print(f"   → Levels returned: {lvls}\n")
 
     # 2) Flatten levels into a single ordered list
-    print("2) Flattening levels into ordered list of IDs...")
+    #print("2) Flattening levels into ordered list of IDs...")
     ordered_ids = []
     for lvl_idx, lvl in enumerate(lvls, start=1):
         sorted_lvl = sorted(lvl)
-        print(f"   Level {lvl_idx}: {sorted_lvl}")
+        #print(f"   Level {lvl_idx}: {sorted_lvl}")
         ordered_ids.extend(sorted_lvl)
-    print(f"   → Flattened order: {ordered_ids}\n")
+    #print(f"   → Flattened order: {ordered_ids}\n")
 
     # 3) Re-key the dictionary as step_1, step_2, …
-    print("3) Rebuilding dict with new keys...")
+    #print("3) Rebuilding dict with new keys...")
     ordered_dict: Dict[str, ActionInstance] = {}
     for i, sid in enumerate(ordered_ids):
         new_key = f"step_{i+1}"
         ordered_dict[new_key] = step_dict[sid]
-        print(f"   Mapping original '{sid}' → new key '{new_key}'")
-    print()
+        #print(f"   Mapping original '{sid}' → new key '{new_key}'")
+    #print()
 
-    print("Final ordered_dict keys:", list(ordered_dict.keys()))
-    print("=== _order_steps END ===\n")
+    #print("Final ordered_dict keys:", list(ordered_dict.keys()))
+    #print("=== _order_steps END ===\n")
     return ordered_dict
 
 
@@ -496,23 +496,23 @@ def normalize_procedures_with_levels(
     Return copies of *procs* whose steps are sorted topologically,
     with detailed debug output.
     """
-    print("\n=== normalize_procedures_with_levels START ===")
-    print(f"Total procedures to normalize: {len(procs)}\n")
+    #print("\n=== normalize_procedures_with_levels START ===")
+    #print(f"Total procedures to normalize: {len(procs)}\n")
 
     normalized: List[Procedure] = []
     for proc_idx, p in enumerate(procs, start=1):
-        print(f"--- Processing Procedure {proc_idx}/{len(procs)}: id={p.id} ---")
+        #print(f"--- Processing Procedure {proc_idx}/{len(procs)}: id={p.id} ---")
         original_ids = [step.id for step in p.steps.values()]
-        print(f"Original step IDs (unsorted): {original_ids}")
+        #print(f"Original step IDs (unsorted): {original_ids}")
 
         # Build a mapping id→ActionInstance and call our verbose _order_steps
         step_map = {s.id: s for s in p.steps.values()}
-        print("Calling _order_steps to sort topologically...")
+        #print("Calling _order_steps to sort topologically...")
         ordered_map = _order_steps(step_map)  # assumes verbose _order_steps
 
         new_ids = list(ordered_map.keys())
-        print(f"Ordered step keys: {new_ids}")
-        print(f"Corresponding original IDs in order: {[step_map_id for step_map_id in ordered_map.values()]}\n")
+        #print(f"Ordered step keys: {new_ids}")
+        #print(f"Corresponding original IDs in order: {[step_map_id for step_map_id in ordered_map.values()]}\n")
 
         # Re-wrap into a new Procedure
         new_proc = Procedure(
@@ -522,9 +522,9 @@ def normalize_procedures_with_levels(
             ruleId=ruleId
         )
         normalized.append(new_proc)
-        print(f"Procedure {p.id} normalized → contains {len(ordered_map)} steps.\n")
+        #print(f"Procedure {p.id} normalized → contains {len(ordered_map)} steps.\n")
 
-    print("=== normalize_procedures_with_levels END ===\n")
+    #print("=== normalize_procedures_with_levels END ===\n")
     return normalized
 
 def remove_unresolved_actions_from_generic(branch: Dict[str, ActionInstance]) -> Dict[str, ActionInstance]:

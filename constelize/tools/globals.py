@@ -163,6 +163,9 @@ def build_sprite_data_id_map(
     sprite_data_id_map: Dict[Tuple[Tuple[int, ...], ...], int] = {}
 
     for sa_id, row in sprite_tbl.items():
+        if not row.get("isInsideInput", False):
+            continue
+
         data_json = row.get("data")
         if data_json is None:
             continue

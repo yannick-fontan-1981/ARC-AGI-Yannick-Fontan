@@ -591,8 +591,8 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "9ecd008a" # find missing sprite in symmetry
     #DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
     #DEFAULT_TASK_ID = "be94b721" # select greater object (sizeOrder 2 ?)
-    DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
-    #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
+    #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
+    DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
     #DEFAULT_TASK_ID = "c1d99e64" # lightCycle !
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !

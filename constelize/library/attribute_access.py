@@ -132,7 +132,10 @@ def select_object_and_attribute_fn(
         score = 0
         for attr, val in criteria:
             if row.get(attr) == val:
-                score += 10 if attr == "sizeOrder" else 1
+                if attr == "sizeOrder" or attr == "isColorUnique":
+                    score += 5
+                else:
+                    score += 1
 
         if score > best_score:
             best_score = score
@@ -159,27 +162,39 @@ def select_sprite_grid_fn(
     testId:     int | None = None
 ) -> Grid | None:
     """
-    Find the first sprite_unique_id matching all (attr==val) in criteria,
+    Find the sprite whose row maximizes the number of (attr==val) hits in `criteria`,
     then load its raw pixel-list and convert it to a concrete Grid.
     """
     sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
 
-    # 1) pick a sprite id
-    chosen = None
+    best_sid   = None
+    best_score = -1
+    full_score = len(criteria)
+
     for sid, row in sprite_tbl.items():
+        # filter to the right example
         if trainId is not None and row.get("trainId") != trainId:
             continue
         if testId  is not None and row.get("testId")  != testId:
             continue
-        if all(row.get(attr) == val for attr, val in criteria):
-            chosen = sid
-            break
 
-    if chosen is None:
+        # count how many criteria this row satisfies
+        score = 0
+        for attr, val in criteria:
+            if row.get(attr) == val:
+                score += 1
+
+        # keep the highest‐scoring sprite
+        if score > best_score:
+            best_score, best_sid = score, sid
+            # if we hit a perfect match, we can stop early
+            if score == full_score:
+                break
+
+    if best_sid is None or best_score <= 0:
         return None
 
-    # 2) grab its JSON-encoded data and convert
-    raw = json.loads(sprite_tbl[chosen]["data"])
+    raw = json.loads(sprite_tbl[best_sid]["data"])
     return to_concrete_grid(raw)
 
 
@@ -212,8 +227,8 @@ def select_object_grid_fn(
         score = 0
         for attr, val in criteria:
             if row.get(attr) == val:
-                if attr == "sizeOrder":
-                    score += 10
+                if attr == "sizeOrder" or attr == "isColorUnique":
+                    score += 5
                 else:
                     score += 1
 
