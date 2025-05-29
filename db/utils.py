@@ -562,6 +562,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         isFromCut BOOLEAN,
         isFromColorZone BOOLEAN,
         isFromPrevious BOOLEAN,
+        isFromGlued BOOLEAN,
 
         minX INTEGER,
         minY INTEGER,
@@ -605,6 +606,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         isLine BOOLEAN,
         isHorizontal BOOLEAN,
         isVertical BOOLEAN,
+        hasBorder BOOLEAN,
+        
         diagonalLength REAL,
         
         distanceFromTopBorder INTEGER,
@@ -775,6 +778,10 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             sub_min_y INTEGER NOT NULL,
             sub_width INTEGER NOT NULL,
             sub_height INTEGER NOT NULL,
+            sprite_occurrence_id INTEGER,
+            sprite_transformation_id INTEGER,
+            sprite_unique_id INTEGER,
+            sprite_origin_id INTEGER,
             FOREIGN KEY (sprite_id) REFERENCES sprite_analysis(id),
             FOREIGN KEY (sub_sprite_id) REFERENCES sprite_analysis(id)
         );

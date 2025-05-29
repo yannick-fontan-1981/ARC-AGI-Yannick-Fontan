@@ -11,7 +11,8 @@ from constelize.core.procedure import ActionInstance, Procedure
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
-    Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background
+    Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
+    shrinkCanvas, zoom
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -49,6 +50,27 @@ def load_json_inputs_from_json(json_path: str):
         TRAIN_OUTPUT_GRIDS[trainId] = item["output"]
     for testId, item in enumerate(data.get("test", [])):
         TEST_INPUT_GRIDS[testId] = item["input"]
+
+def checkAnyInputEqualOrSmallerThanOutput() -> bool:
+    """
+    Return True if any training‐example’s input grid is equal‐or‐smaller
+    (in width or height) than its corresponding output grid.
+    """
+    for trainId, inp in TRAIN_INPUT_GRIDS.items():
+        out = TRAIN_OUTPUT_GRIDS.get(trainId)
+        if out is None:
+            continue
+
+        h_in = len(inp)
+        w_in = len(inp[0]) if h_in else 0
+        h_out = len(out)
+        w_out = len(out[0]) if h_out else 0
+
+        # if input is equal‐or‐smaller in either dimension, bail out
+        if w_in < w_out or h_in < h_out or (w_in == w_out and h_in == h_out):
+            return True
+
+    return False
 
 def checkInputSmaller() -> bool:
     """
@@ -122,7 +144,6 @@ class FactToActionMapping:
         AND COALESCE(st.zoom_y, 1) = 1
         AND (st.recolored IS NULL OR st.recolored = '[]')
         AND so.sprite_id IS NOT NULL
-        AND st.sprite_unique_id != st.sprite_produce_id
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
@@ -190,31 +211,44 @@ class ZoomFactToAction(FactToActionMapping):
                so.isInsideOutput,
                su.data,
                st.zoom_x,
-               st.zoom_y, so.minX, so.minY
+               st.zoom_y,
+               so.minX,
+               so.minY
         FROM sprite_transformation st
-        JOIN sprite_occurrence so ON  so.sprite_transformation_id = st.id
+        JOIN sprite_occurrence so ON so.sprite_transformation_id = st.id
         JOIN sprite_unique su ON su.id = st.sprite_produce_id
         WHERE (zoom_x > 1 OR zoom_y > 1)
-        AND COALESCE(st.rotated_90, 0) = 0
-        AND COALESCE(st.rotated_180, 0) = 0
-        AND COALESCE(st.rotated_270, 0) = 0
-        AND COALESCE(st.flipped_vert, 0) = 0
-        AND COALESCE(st.flipped_horiz, 0) = 0
-        AND COALESCE(st.flipped_vert_90, 0) = 0
-        AND COALESCE(st.flipped_horiz_90, 0) = 0
-        AND (st.recolored IS NULL OR st.recolored = '[]')
-        AND so.sprite_id IS NOT NULL
+          AND COALESCE(st.rotated_90, 0) = 0
+          AND COALESCE(st.rotated_180, 0) = 0
+          AND COALESCE(st.rotated_270, 0) = 0
+          AND COALESCE(st.flipped_vert, 0) = 0
+          AND COALESCE(st.flipped_horiz, 0) = 0
+          AND COALESCE(st.flipped_vert_90, 0) = 0
+          AND COALESCE(st.flipped_horiz_90, 0) = 0
+          AND (st.recolored IS NULL OR st.recolored = '[]')
+          AND so.sprite_id IS NOT NULL
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        # Collect which trainIds have zoom
+        train_ids_with_zoom = {r["trainId"] for r in rows if r["trainId"] != -1}
+        all_train_ids = set(TRAIN_INPUT_GRIDS.keys())
+
+        if not all_train_ids.issubset(train_ids_with_zoom):
+            print(
+                f"❌ Zoom not detected in all training examples. Found: {train_ids_with_zoom}, Expected: {all_train_ids}")
+            return []
+
         seen = set()
         unique_rows = []
         for r in rows:
-            key = (r["trainId"], r["zoom_x"], r["zoom_y"])  # anything that defines the zoom
+            key = (r["trainId"], r["zoom_x"], r["zoom_y"])
             if key not in seen:
                 seen.add(key)
                 unique_rows.append(r)
+
         return unique_rows
 
     def _build_function(self, row: dict) -> ActionInstance:
@@ -817,34 +851,74 @@ def build_select_object_and_attribute_instance(
     )
 
 def build_select_sprite_grid_instance(
-    trainId:    int,
-    testId:     int,
-    criteria:   List[Tuple[str, Any]],
-    output_grid: Any,
+    trainId: int,
+    testId: int,
+    output_grid: Grid,
+    criteria: List[Tuple[str, Any]],
     scenarioId: str,
-    ruleId:     str
+    ruleId: str,
+    transform: Optional[Dict[str,Any]] = None
 ) -> ActionInstance:
-    action   = registry.get_by_id("select_sprite_grid")
-    inst_id  = f"select_sprite_grid_{scenarioId}_{ruleId}_train{trainId}_test{testId}"
+    action = registry.get_by_id("select_sprite_grid")
+
+    # ── 1) core bindings ─────────────────────────────────────────────────────────
+    bindings = {
+        "scenarioId": ArgumentBinding(
+            name="scenarioId",
+            type="String",
+            binding=BindingStatus.INSTANCE,
+            value=scenarioId
+        ),
+        "ruleId": ArgumentBinding(
+            name="ruleId",
+            type="String",
+            binding=BindingStatus.INSTANCE,
+            value=ruleId
+        ),
+        "trainId": ArgumentBinding(
+            name="trainId",
+            type="Integer",
+            binding=BindingStatus.CONTEXT,
+            value=trainId
+        ),
+        "testId": ArgumentBinding(
+            name="testId",
+            type="Integer",
+            binding=BindingStatus.CONTEXT,
+            value=testId
+        ),
+        "criteria": ArgumentBinding(
+            name="criteria",
+            type="List[Tuple[String,Any]]",
+            binding=BindingStatus.CONSTANT,
+            value=criteria
+        ),
+    }
+
+    # ── 2) optional transform binding ────────────────────────────────────────────
+    if transform is not None:
+        bindings["transform"] = ArgumentBinding(
+            name="transform",
+            type="TransformSpec",
+            binding=BindingStatus.CONSTANT,
+            value=transform
+        )
+
+    # ── 3) build and return the ActionInstance ─────────────────────────────────
     return ActionInstance(
-      id=inst_id,
-      action=action,
-      bindings={
-        "scenarioId": ArgumentBinding("scenarioId", "String",                      binding=BindingStatus.INSTANCE,  value=scenarioId),
-        "ruleId":     ArgumentBinding("ruleId",     "String",                      binding=BindingStatus.INSTANCE,  value=ruleId),
-        "trainId":    ArgumentBinding("trainId",    "Integer",                     binding=BindingStatus.CONTEXT,   value=trainId),
-        "testId":     ArgumentBinding("testId",     "Integer",                     binding=BindingStatus.CONTEXT,   value=testId),
-        "criteria":   ArgumentBinding("criteria",   "List[Tuple[String,Integer]]",  binding=BindingStatus.CONSTANT,  value=criteria),
-      },
-      output_var="selected_sprite_grid",
-      output_value=output_grid,
-      output_type="Grid",
-      scenarioId=scenarioId,
-      ruleId=ruleId,
-      trainId=trainId,
-      testId=testId,
-      isTrain=(testId == -1),
-      isToOutput=False
+        id=f"select_sprite_grid_{trainId}_{getUniqueId()}",
+        action=action,
+        bindings=bindings,
+        # carry the actual selected grid as the action’s output
+        output_var="selected_sprite_grid",
+        output_value=output_grid,
+        output_type="Grid",
+        scenarioId=scenarioId,
+        ruleId=ruleId,
+        trainId=trainId,
+        testId=testId,
+        isTrain=(testId == -1),
+        isToOutput=False
     )
 
 def build_select_object_grid_instance(
@@ -899,28 +973,67 @@ def build_repaint_instance(
     buffer_inst: ActionInstance
 ) -> ActionInstance:
     action = registry.get_by_id("repaint")
-
     instance_id = f"repaint_{instance.scenarioId}_{instance.ruleId}_{instance.id}_train{instance.trainId}_test{instance.testId}"
 
-    print(f"build_repaint_instance repaintMinX {instance.repaintMinX} repaintMinY {instance.repaintMinY} ")
-    #print(f"buffer_inst.output_value {grid_to_pretty_string(buffer_inst.output_value)} ")
-    print(f"buffer_inst.output_value {buffer_inst.output_value} ")
-    #print(f"instance.output_value {grid_to_pretty_string(instance.output_value)} ")
-    print(f"instance.output_value {instance.output_value} ")
-    output_value = repaint(buffer_inst.output_value, instance.output_value, instance.repaintMinX, instance.repaintMinY)
+    print(f"build_repaint_instance repaintMinX {instance.repaintMinX} repaintMinY {instance.repaintMinY}")
+    print(f"buffer_inst.output_value {buffer_inst.output_value}")
+    print(f"instance.output_value {instance.output_value}")
+
+    output_value = repaint(
+        buffer_inst.output_value,
+        instance.output_value,
+        instance.repaintMinX,
+        instance.repaintMinY
+    )
+
+    suggested_id = getattr(instance, "repaintSuggestedSpriteId", None)
+
+    # Conditional binding fields for minX/minY
+    minX_binding_kwargs = {
+        "name": "minX",
+        "type": "Integer",
+        "binding": BindingStatus.UNRESOLVED,
+        "value": instance.repaintMinX
+    }
+    minY_binding_kwargs = {
+        "name": "minY",
+        "type": "Integer",
+        "binding": BindingStatus.UNRESOLVED,
+        "value": instance.repaintMinY
+    }
+
+    if suggested_id:
+        minX_binding_kwargs.update({
+            "suggested_action": "selectSpriteAndAttributeAction",
+            "suggested_sprite_id": suggested_id,
+            "suggested_attribute": "minX"
+        })
+        minY_binding_kwargs.update({
+            "suggested_action": "selectSpriteAndAttributeAction",
+            "suggested_sprite_id": suggested_id,
+            "suggested_attribute": "minY"
+        })
 
     return ActionInstance(
         id=instance_id,
         action=action,
         bindings={
-            # "scenarioId":     ArgumentBinding("scenarioId",     "String",                      binding=BindingStatus.INSTANCE,   value=instance.scenarioId),
-            # "ruleId":         ArgumentBinding("ruleId",         "String",                      binding=BindingStatus.INSTANCE,   value=instance.ruleId),
-            # "trainId":        ArgumentBinding("trainId",        "Integer",                     binding=BindingStatus.CONTEXT,    value=instance.trainId),
-            # "testId":         ArgumentBinding("testId",         "Integer",                     binding=BindingStatus.CONTEXT,    value=instance.testId),
-            "base":           ArgumentBinding("base",           "Grid",                        binding=BindingStatus.BUFFER,     value=buffer_inst.output_value, source_procedure_id=buffer_inst.id),
-            "patch":          ArgumentBinding("patch",         "Grid",                        binding=BindingStatus.VARIABLE,   value=instance.output_value, source_procedure_id=instance_id),
-            "minX":           ArgumentBinding("minX",           "Integer",                     binding=BindingStatus.UNRESOLVED, value=instance.repaintMinX),
-            "minY":           ArgumentBinding("minY",           "Integer",                     binding=BindingStatus.UNRESOLVED, value=instance.repaintMinY),
+            "base": ArgumentBinding(
+                name="base",
+                type="Grid",
+                binding=BindingStatus.BUFFER,
+                value=buffer_inst.output_value,
+                source_procedure_id=buffer_inst.id
+            ),
+            "patch": ArgumentBinding(
+                name="patch",
+                type="Grid",
+                binding=BindingStatus.VARIABLE,
+                value=instance.output_value,
+                source_procedure_id=instance.id
+            ),
+            "minX": ArgumentBinding(**minX_binding_kwargs),
+            "minY": ArgumentBinding(**minY_binding_kwargs),
         },
         output_var=f"repaint_{instance.id}",
         output_type="Grid",
@@ -988,28 +1101,56 @@ class RecolorSpriteFactToAction(FactToActionMapping):
     def __init__(self):
         super().__init__("recolor_sprite", "recolor_sprite")
 
-    def _test_function(self, conn):
+    def _test_function(self, conn) -> list[dict]:
         query = """
-        SELECT distinct st.sprite_unique_id, so.trainId, so.testId, so.isInsideOutput,
-               su.data, st.recolored, so.minX, so.minY
-        FROM sprite_transformation st
-        JOIN sprite_occurrence so ON so.sprite_transformation_id = st.id
-        JOIN sprite_unique su ON su.id = st.sprite_unique_id        
-        WHERE st.recolored IS NOT NULL AND st.recolored != '[]'
-        AND COALESCE(st.zoom_x, 1) = 1
-        AND COALESCE(st.zoom_y, 1) = 1
-        AND COALESCE(st.rotated_90, 0) = 0
-        AND COALESCE(st.rotated_180, 0) = 0
-        AND COALESCE(st.rotated_270, 0) = 0
-        AND COALESCE(st.flipped_vert, 0) = 0
-        AND COALESCE(st.flipped_horiz, 0) = 0
-        AND COALESCE(st.flipped_vert_90, 0) = 0
-        AND COALESCE(st.flipped_horiz_90, 0) = 0
-        AND so.sprite_id IS NOT NULL
+        SELECT DISTINCT
+            su.sprite_id as origin_sprite_id,
+            sp.sprite_id as produce_sprite_id,
+            st.sprite_unique_id,
+            so.trainId,
+            so.testId,
+            so.isInsideOutput,
+            su.data,
+            st.recolored,
+            so.minX as produce_minX,
+            so.minY as produce_minY,
+            sa.minX as origin_minX,
+            sa.minY as origin_minY
+        FROM sprite_transformation AS st
+        JOIN sprite_occurrence AS so
+          ON so.sprite_transformation_id = st.id
+        JOIN sprite_unique AS su
+          ON su.id = st.sprite_unique_id	
+        JOIN sprite_unique AS sp
+          ON sp.id = st.sprite_produce_id	
+        JOIN sprite_analysis AS sa
+          ON sa.id = su.sprite_id		  	  
+        WHERE
+          st.recolored        IS NOT NULL
+          AND st.recolored   != '[]'
+          AND COALESCE(st.zoom_x,         1) = 1
+          AND COALESCE(st.zoom_y,         1) = 1
+          AND COALESCE(st.rotated_90,     0) = 0
+          AND COALESCE(st.rotated_180,    0) = 0
+          AND COALESCE(st.rotated_270,    0) = 0
+          AND COALESCE(st.flipped_vert,   0) = 0
+          AND COALESCE(st.flipped_horiz,  0) = 0
+          AND COALESCE(st.flipped_vert_90,0) = 0
+          AND COALESCE(st.flipped_horiz_90,0) = 0
+          AND so.sprite_id IS NOT NULL
         """
         cursor = conn.execute(query)
         cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        # make sure every trainId in our training set has at least one recolor hit
+        train_ids_with_recolor = {r["trainId"] for r in rows if r["trainId"] != -1}
+        all_train_ids        = set(TRAIN_INPUT_GRIDS.keys())
+        if all_train_ids - train_ids_with_recolor:
+            # some train example never saw a recolor → abort
+            return []
+
+        return rows
 
     def _build_function(self, row):
         base_data = json.loads(row["data"])
@@ -1017,6 +1158,16 @@ class RecolorSpriteFactToAction(FactToActionMapping):
         recolor_pairs = json.loads(row["recolored"])
         output_grid = recolor_sprite(input_grid, recolor_pairs)
         trainId = row["trainId"]
+
+
+        use_origin = (
+                row.get("produce_minX") == row.get("origin_minX") and
+                row.get("produce_minY") == row.get("origin_minY")
+        )
+        suggested_id = int(row["origin_sprite_id"]) if use_origin else None
+        repaint_minX = int(row["origin_minX"]) if use_origin else None
+        repaint_minY = int(row["origin_minY"]) if use_origin else None
+
         return ActionInstance(
             id=f"recolor_{row['sprite_unique_id']}#{getUniqueId()}",
             action=registry.get_by_id(self.action_id),
@@ -1034,8 +1185,9 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             isTrain=(trainId != -1),
             isToOutput=row["isInsideOutput"],
             toRepaint=True,
-            repaintMinX=row["minX"],
-            repaintMinY=row["minY"],
+            repaintMinX=repaint_minX,
+            repaintMinY=repaint_minY,
+            repaintSuggestedSpriteId=suggested_id,
             END=grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
 
@@ -1044,25 +1196,43 @@ class CropSpriteFactToAction(FactToActionMapping):
         super().__init__("crop_sprite", "crop_sprite")
 
     def _test_function(self, conn):
-        if checkInputSmaller():
+        if checkAnyInputEqualOrSmallerThanOutput():
+            print("CropSpriteFactToAction: checkAnyInputEqualOrSmallerThanOutput")
             return []
         query = """
-        SELECT distinct
-		  su.sprite_id AS sprite_id,
-          so.trainId   AS trainId,
-          so.testId    AS testId,
-          so.minX      AS minX,
-          so.minY      AS minY,
-          su.width     AS width,
-          su.height    AS height,
-          su.data      AS data
+        SELECT DISTINCT
+            su.sprite_id                   AS sprite_id,
+            so.trainId                     AS trainId,
+            so.testId                      AS testId,
+            so.minX                        AS minX,
+            so.minY                        AS minY,
+            su.width                       AS width,
+            su.height                      AS height,
+            su.data                        AS data,
+            st.recolored                   AS recolor
         FROM sprite_occurrence so
-        JOIN sprite_transformation st ON so.sprite_transformation_id = st.id
-        JOIN sprite_unique su ON so.sprite_unique_id = su.id
-        WHERE so.sprite_id IS NULL
-          AND st.rotated_90=0 AND st.rotated_180=0 AND st.rotated_270=0
-          AND st.flipped_vert=0 AND st.flipped_horiz=0
-          AND st.flipped_vert_90=0 AND st.flipped_horiz_90=0
+          -- only keep occurrences coming from an output‐side sprite
+          JOIN sprite_analysis sa
+            ON so.sprite_id = sa.id
+           AND sa.isInsideOutput = 1
+           AND sa.pixelCount > 3
+          JOIN sprite_transformation st
+            ON so.sprite_transformation_id = st.id
+          JOIN sprite_unique su
+            ON so.sprite_unique_id = su.id
+        WHERE
+            -- no geometric transforms
+            st.rotated_90   = 0
+          AND st.rotated_180  = 0
+          AND st.rotated_270  = 0
+          AND st.flipped_vert = 0
+          AND st.flipped_horiz= 0
+          AND st.flipped_vert_90  = 0
+          AND st.flipped_horiz_90 = 0
+          -- only pure crops (no recolor)
+          AND st.recolored  = '[]'
+          AND st.zoom_x = 1
+          AND st.zoom_y = 1
         """
         cursor = conn.execute(query)
         cols = [d[0] for d in cursor.description]
@@ -1077,16 +1247,20 @@ class CropSpriteFactToAction(FactToActionMapping):
             return None
         input_grid = TRAIN_INPUT_GRIDS[row["trainId"]] if row["trainId"] != -1 else TEST_INPUT_GRIDS[row["testId"]]
         grid = to_concrete_grid(input_grid)
-        cropped = crop(
-            grid,
-            int(row["minX"]),
-            int(row["minY"]),
-            int(row["width"]),
-            int(row["height"])
-        )
+        #cropped = crop(
+        #    grid,
+        #    int(row["minX"]),
+        #    int(row["minY"]),
+        #    int(row["width"]),
+        #    int(row["height"])
+        #)
 
-        print("grid_to_pretty_string(cropped)")
-        print(grid_to_pretty_string(cropped))
+        #print("grid_to_pretty_string(cropped)")
+        #print(grid_to_pretty_string(cropped))
+
+        raw_data = to_concrete_grid(json.loads(row["data"]))
+        print("grid_to_pretty_string(raw_data)")
+        print(grid_to_pretty_string(raw_data))
 
         return ActionInstance(
             id=f"crop_sprite_{row['trainId']}_{row['minX']}_{row['minY']}#{getUniqueId()}",
@@ -1099,7 +1273,7 @@ class CropSpriteFactToAction(FactToActionMapping):
                 "height": ArgumentBinding("height", "Integer", binding=BindingStatus.UNRESOLVED, value=row["height"], suggested_action="selectSpriteAndAttributeAction", suggested_sprite_id=row["sprite_id"], suggested_attribute="height"),
             },
             output_var="cropped_sprite",
-            output_value=cropped,
+            output_value=raw_data,
             output_type="Grid",
             scenarioId=row["scenarioId"],
             ruleId=row["ruleId"],
@@ -1140,16 +1314,20 @@ class CropObjectFactToAction(FactToActionMapping):
         raw = TRAIN_INPUT_GRIDS if row["trainId"] != -1 else TEST_INPUT_GRIDS
         grid = to_concrete_grid(raw[row["trainId"] if row["trainId"] != -1 else row["testId"]])
 
-        # perform the actual crop
-        cropped = crop(
-            grid,
-            int(row["minX"]),
-            int(row["minY"]),
-            int(row["width"]),
-            int(row["height"])
-        )
-        print("[DEBUG crop_object] cropped →")
-        print(grid_to_pretty_string(cropped))
+        ## perform the actual crop
+        #cropped = crop(
+        #    grid,
+        #    int(row["minX"]),
+        #    int(row["minY"]),
+        #    int(row["width"]),
+        #    int(row["height"])
+        #)
+        #print("[DEBUG crop_object] cropped →")
+        #print(grid_to_pretty_string(cropped))
+
+        raw_data = to_concrete_grid(json.loads(row["data"]))
+        print("grid_to_pretty_string(raw_data)")
+        print(grid_to_pretty_string(raw_data))
 
         # build the instance, but leave every dimension UNRESOLVED
         # and tag them so we can suggest a selectObjectAndAttributeAction later
@@ -1176,7 +1354,7 @@ class CropObjectFactToAction(FactToActionMapping):
                                           suggested_attribute="height"),
             },
             output_var="cropped_object",
-            output_value=cropped,
+            output_value=raw_data,
             output_type="Grid",
             scenarioId=row.get("scenarioId"),
             ruleId=row.get("ruleId"),
@@ -1197,19 +1375,69 @@ class SpriteComputationFactToAction:
     def _test_function(self, conn):
         query = """
         SELECT
-            sc.trainId,
-            sc.sprite_id,
-            sc.computation_id,
-            main.width  AS width,
-            main.height AS height,
-            main.data   AS canvas_data,
-            sub.data    AS sprite_data,
-            sc.sub_rel_min_x AS x,
-            sc.sub_rel_min_y AS y
-        FROM sprite_computation sc
-        JOIN sprite_analysis main ON main.id = sc.sprite_id
-        JOIN sprite_analysis sub ON sub.id = sc.sub_sprite_id
-        ORDER BY sc.trainId, sc.sprite_id, sc.computation_id
+          sc.trainId,
+          sc.sprite_id,                    -- make sure we select this!
+          sc.computation_id,
+
+          -- main (canvas) info
+          main.width   AS width,
+          main.height  AS height,
+          main.data    AS canvas_data,
+
+          -- sub‐sprite info
+          sub.data     AS sprite_data,
+
+          -- placement offsets
+          sc.sub_rel_min_x AS x,
+          sc.sub_rel_min_y AS y,
+
+          -- linkage back to unique & original
+          su.id            AS sprite_unique_id,
+          su.sprite_id     AS sprite_origin_id,
+          sa_orig.bgColor  AS sprite_origin_bg,
+
+          -- transformation details
+          st.id            AS sprite_transformation_id,
+          st.zoom_x,
+          st.zoom_y,
+          st.recolored,
+          st.rotated_90,
+          st.rotated_180,
+          st.rotated_270,
+          st.flipped_vert,
+          st.flipped_horiz,
+          st.flipped_vert_90,
+          st.flipped_horiz_90
+
+        FROM sprite_computation AS sc
+
+        JOIN sprite_analysis AS main 
+          ON main.id            = sc.sprite_id
+        JOIN sprite_analysis AS sub  
+          ON sub.id             = sc.sub_sprite_id
+
+        JOIN sprite_unique     AS su  
+          ON su.id              = st.sprite_unique_id
+
+         -- the unique‐sprite table
+        JOIN sprite_unique AS su_st  
+          ON su_st.id = st.sprite_unique_id
+        
+        -- ensure that the unique’s original sprite was inside the input
+        JOIN sprite_analysis AS sa_orig
+          ON sa_orig.id = su_st.sprite_id
+         AND sa_orig.isInsideInput = 1
+ 
+        LEFT JOIN sprite_transformation AS st 
+          ON st.id              = sc.sprite_transformation_id
+		
+
+        ORDER BY
+          sc.trainId,
+          sc.sprite_id,
+          sc.computation_id,
+          sc.sub_rel_min_x,
+          sc.sub_rel_min_y
         """
         cursor = conn.execute(query)
         cols = [desc[0] for desc in cursor.description]
@@ -1235,79 +1463,120 @@ class SpriteComputationFactToAction:
             group["sub_sprites"].append({
                 "sprite_data": row["sprite_data"],
                 "x": row["x"],
-                "y": row["y"]
+                "y": row["y"],
+                "sprite_origin_id": row["sprite_origin_id"],
+                "sprite_origin_bg": row["sprite_origin_bg"],
+                "sprite_transformation_id": row["sprite_transformation_id"],
+                "zoom_x":                   row["zoom_x"],
+                "zoom_y":                   row["zoom_y"],
+                "recolored":                json.loads(row["recolored"]),    # if stored as JSON string
+                "rotated_90":               bool(row["rotated_90"]),
+                "rotated_180":              bool(row["rotated_180"]),
+                "rotated_270":              bool(row["rotated_270"]),
+                "flipped_vert":             bool(row["flipped_vert"]),
+                "flipped_horiz":            bool(row["flipped_horiz"]),
+                "flipped_vert_90":          bool(row["flipped_vert_90"]),
+                "flipped_horiz_90":         bool(row["flipped_horiz_90"])
             })
 
         return list(grouped.values())
 
     def _build_function(self, row):
-        from constelize.dsl.grid_dsl import to_concrete_grid, paint, grids_equal
-
         trainId = row["trainId"]
         sub_sprites_info = row["sub_sprites"]
-        canvas_data = json.loads(row["canvas_data"])
-        h, w = int(row["height"]), int(row["width"])
 
-        # 🧱 Create anonymized mask: -8 for each pixel in the canvas
-        coords = [coord for val, coord in canvas_data]
-        mask = [[-1 for _ in range(w)] for _ in range(h)]
-        for i, j in coords:
-            if 0 <= i < h and 0 <= j < w:
-                mask[i][j] = -8
-        mask_sprite = tuple(tuple(row) for row in mask)
+        # 1) Start with a large shrinkable canvas (30×30 of -1)
+        mask_sprite = makeShrinkableCanvas()
 
-        sprite_grids = []
+        # 2) Paint each sub‐sprite onto the mask
         painted = mask_sprite
-        position_bindings = []
-
-        for idx, sub in enumerate(sub_sprites_info):
-            sprite = to_concrete_grid(json.loads(sub["sprite_data"]))
-            sprite = tuple(tuple(cell for cell in row) for row in sprite)  # ensure copy
+        sprite_grids = []
+        for sub in sub_sprites_info:
+            grid = to_concrete_grid(json.loads(sub["sprite_data"]))
+            grid = tuple(tuple(cell for cell in row) for row in grid)
             x, y = sub["x"], sub["y"]
-            painted = paint(painted, sprite, (y, x))
-            sprite_grids.append(sprite)
+            painted = paint(painted, grid, (y, x))
+            sprite_grids.append(grid)
 
+        painted = shrinkCanvas(painted)
+        print(f"[ painted: {painted} ]")
+
+        # 3) Build ArgumentBindings for sub_sprites, including suggested_transform
+        sub_bindings = []
+        for idx, sub in enumerate(sub_sprites_info):
+            # pack the transform spec
+            transform_spec = {
+                "zoom_x":          sub.get("zoom_x", sub.get("zoomX", 1)),
+                "zoom_y":          sub.get("zoom_y", sub.get("zoomY", 1)),
+                "recolored":       sub.get("recolored", []),
+                "rotated_90":      bool(sub.get("rotated_90", 0)),
+                "rotated_180":     bool(sub.get("rotated_180", 0)),
+                "rotated_270":     bool(sub.get("rotated_270", 0)),
+                "flipped_vert":    bool(sub.get("flipped_vert", 0)),
+                "flipped_horiz":   bool(sub.get("flipped_horiz", 0)),
+                "flipped_vert_90": bool(sub.get("flipped_vert_90", 0)),
+                "flipped_horiz_90":bool(sub.get("flipped_horiz_90", 0)),
+            }
+
+            origin_id = sub.get("sprite_origin_id")
+            binding_kwargs = {
+                "name":               f"sprite_{idx}",
+                "type":               "Grid",
+                "binding":            BindingStatus.UNRESOLVED,
+                "value":              sprite_grids[idx],
+                "suggested_action":   "selectSpriteGridAction" if origin_id is not None else None,
+                "suggested_sprite_id": origin_id,
+                "suggested_transform": transform_spec
+            }
+            sub_bindings.append(ArgumentBinding(**binding_kwargs))
+
+        # 4) Build position bindings as before
+        position_bindings = []
+        for idx, sub in enumerate(sub_sprites_info):
+            x, y = sub["x"], sub["y"]
             coord_binding = ArgumentBinding(
                 name=f"coord_{idx}",
                 type="Coord",
                 binding=BindingStatus.COMPOUND,
                 sub_bindings={
-                    "x": ArgumentBinding(name="x", type="Integer", binding=BindingStatus.UNRESOLVED, value=x),
-                    "y": ArgumentBinding(name="y", type="Integer", binding=BindingStatus.UNRESOLVED, value=y),
+                    "x": ArgumentBinding(name="x", type="Integer",
+                                         binding=BindingStatus.UNRESOLVED, value=x),
+                    "y": ArgumentBinding(name="y", type="Integer",
+                                         binding=BindingStatus.UNRESOLVED, value=y),
                 },
                 sub_bindings_length_status=BindingStatus.CONSTANT,
                 sub_bindings_length_value=2
             )
             position_bindings.append(coord_binding)
 
-        #sprite_computation_paint(mask_sprite, )
-        print(f"[ painted: {painted} ]")
+        bg_color_bindings = []
+        for idx, sub in enumerate(sub_sprites_info):
+            color = sub.get("sprite_origin_bg", -1)
+            origin_id = sub.get("sprite_origin_id")
 
+            bg_color_bindings.append(ArgumentBinding(
+                name=f"bg_color_{idx}",
+                type="Integer",
+                binding=BindingStatus.UNRESOLVED,
+                value=color,
+                suggested_action="selectSpriteAndAttributeAction" if origin_id is not None else None,
+                suggested_sprite_id=origin_id,
+                suggested_attribute="bgColor",
+                suggested_default=0
+            ))
+
+        # 5) Return the composition ActionInstance
         return ActionInstance(
             id=f"sprite_composition_{trainId}_{row['sprite_id']}#{getUniqueId()}",
             action=self.action,
             bindings={
-                "canvas": ArgumentBinding(
-                    name="canvas",
-                    type="Grid",
-                    binding=BindingStatus.UNRESOLVED,
-                    value=mask_sprite
-                ),
                 "sub_sprites": ArgumentBinding(
                     name="sub_sprites",
                     type="Array<Grid>",
                     binding=BindingStatus.COMPOUND,
-                    sub_bindings=[
-                        ArgumentBinding(
-                            name=f"sprite_{i}",
-                            type="Grid",
-                            binding=BindingStatus.UNRESOLVED,
-                            value=tuple(tuple(cell for cell in row) for row in sprite_grids[i])  # deepcopy défensif ici
-                        )
-                        for i in range(len(sprite_grids))
-                    ],
+                    sub_bindings=sub_bindings,
                     sub_bindings_length_status=BindingStatus.CONSTANT,
-                    sub_bindings_length_value=len(sprite_grids)
+                    sub_bindings_length_value=len(sub_bindings)
                 ),
                 "positions": ArgumentBinding(
                     name="positions",
@@ -1316,6 +1585,14 @@ class SpriteComputationFactToAction:
                     sub_bindings=position_bindings,
                     sub_bindings_length_status=BindingStatus.CONSTANT,
                     sub_bindings_length_value=len(position_bindings)
+                ),
+                "bg_colors": ArgumentBinding(
+                    name="bg_colors",
+                    type="Array<Integer>",
+                    binding=BindingStatus.COMPOUND,
+                    sub_bindings=bg_color_bindings,
+                    sub_bindings_length_status=BindingStatus.CONSTANT,
+                    sub_bindings_length_value=len(bg_color_bindings)
                 )
             },
             output_var="sprite_composed_grid",
@@ -1329,6 +1606,7 @@ class SpriteComputationFactToAction:
             isToOutput=True,
             END=grids_equal(painted, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
+
 
 # =============================================================================
 # DenoiseFactToAction: mapping to denoise a noised grid
@@ -1551,6 +1829,9 @@ class ZoomOutFactToAction(FactToActionMapping):
           /* integer shrink factors */
           AND inp.width  % outp.width  = 0
           AND inp.height % outp.height = 0
+          AND outp.pixelCount > 3
+          AND zoom_x < 6
+          AND zoom_y < 6
           /* skip trivial 1×1 */
           AND (inp.width  != outp.width
             OR  inp.height != outp.height)
@@ -1567,7 +1848,7 @@ class ZoomOutFactToAction(FactToActionMapping):
             zx = int(r["zoom_x"])
             zy = int(r["zoom_y"])
             # only keep if unzoom really matches
-            if unzoom(inp_grid, zx, zy) == out_grid:
+            if zoom(out_grid, zx, zy) == inp_grid:
                 valid.append(r)
 
         return valid
@@ -2020,7 +2301,6 @@ class MoveSpriteFactToAction(FactToActionMapping):
 
         # shift with background color
         updated_grid = shift_sprite_with_background(
-            anon_grid,
             patch,
             patch_min_x,
             patch_min_y,
@@ -2028,25 +2308,29 @@ class MoveSpriteFactToAction(FactToActionMapping):
             move_rel_y,
             new_pos_x,
             new_pos_y,
-            background_color=bg_color
+            background_color=bg_color,
+            grid=anon_grid
         )
 
         print("updated_grid")
         print(grid_to_pretty_string(updated_grid))
 
-        # bind all arguments as unresolved so the planner can fill them in
-        bindings = {
-            "grid": ArgumentBinding("grid", "Grid", binding=BindingStatus.UNRESOLVED, value=anon_grid),
-            "patch": ArgumentBinding(
-                "patch", "Grid", binding=BindingStatus.UNRESOLVED,
-                value=patch, use_anonymized=False,
-                suggested_action="selectSpriteGridAction",
-                suggested_sprite_id=row["sprite_id"]
-            ),
-            "new_pos_x": ArgumentBinding("new_pos_x", "Integer", binding=BindingStatus.UNRESOLVED, value=new_pos_x),
-            "new_pos_y": ArgumentBinding("new_pos_y", "Integer", binding=BindingStatus.UNRESOLVED, value=new_pos_y),
-            "background_color": ArgumentBinding("background_color", "Color", binding=BindingStatus.UNRESOLVED, value=bg_color),
-        }
+        # Create bindings
+        bindings = {}
+
+        # Only add `grid` binding if grid size != patch size
+        if (rows_out, cols_out) != (patch_h, patch_w):
+            bindings["grid"] = ArgumentBinding("grid", "Grid", binding=BindingStatus.UNRESOLVED, value=anon_grid)
+
+        bindings["patch"] = ArgumentBinding(
+            "patch", "Grid", binding=BindingStatus.UNRESOLVED,
+            value=patch, use_anonymized=False,
+            suggested_action="selectSpriteGridAction",
+            suggested_sprite_id=row["sprite_id"]
+        )
+        bindings["new_pos_x"] = ArgumentBinding("new_pos_x", "Integer", binding=BindingStatus.UNRESOLVED, value=new_pos_x)
+        bindings["new_pos_y"] = ArgumentBinding("new_pos_y", "Integer", binding=BindingStatus.UNRESOLVED, value=new_pos_y)
+        bindings["background_color"] = ArgumentBinding("background_color", "Color", binding=BindingStatus.UNRESOLVED, value=bg_color)
 
         if bg_color == -1:
             # for missing bg, make shift constants
@@ -2097,7 +2381,7 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     ZoomFactToAction(),
     RepeatedSpriteFactToAction(),
     CanvasByRatioFactToAction(),
-    CanvasByObjectSizeFactToAction(), #
+    CanvasByObjectSizeFactToAction(),
     RecolorSpriteFactToAction(),
     SpriteComputationFactToAction(),
     DenoiseFactToAction(),
@@ -2108,5 +2392,3 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     CropSpriteFactToAction(),
     FixSymmetryFactToAction(),
 ]
-
-#

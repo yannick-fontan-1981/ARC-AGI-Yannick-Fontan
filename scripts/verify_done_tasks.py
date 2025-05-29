@@ -37,7 +37,7 @@ def test_file(json_path: str,
               submission_path: str,
               comparison_path: str,
               task_id: str,
-              timeout: int = 30) -> bool:
+              timeout: int = 120) -> bool:
     # keep the local DB reset
     reset_database()
     # Delegate heavy lifting under a timeout

@@ -281,29 +281,6 @@ def print_total_time(results_path):
     print(f"\n⏱️ Total verification time: {total_time:.2f} seconds")
     print("✅ Evaluation completed. Results saved to", results_path)
 
-
-def procedure_uses_suggestions(proc: Procedure) -> bool:
-    for step in proc.steps.values():
-        for b in step.bindings.values():
-            if getattr(b, "suggested_action", None) is not None:
-                return True
-    return False
-
-def strip_suggestions_from_proc(proc: Procedure) -> Procedure:
-    newp = copy.deepcopy(proc)
-    for step in newp.steps.values():
-        for b in step.bindings.values():
-            # zap all the suggestion metadata
-            for attr in ("suggested_action",
-                         "suggested_sprite_id",
-                         "suggested_object_id",
-                         "suggested_attribute"):
-                setattr(b, attr, None)
-            # if we’d left it as UNRESOLVED, turn it into CONSTANT
-            if b.binding == BindingStatus.UNRESOLVED:
-                b.binding = BindingStatus.CONSTANT
-    return newp
-
 def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, json_path, raw_json, results_path):
     scenarioId = current_scenario.id
     ruleId = current_rule.id
@@ -365,6 +342,9 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
             print(f"    • {step.id} ({step.action.id})")
 
     generic_with_unresolved = squeeze_with_unresolved(normalized_procs, scenarioId, ruleId)
+
+
+
     generic_procs = split_contender_procs(generic_with_unresolved)
 
     # If exactly one END‐marked instance exists among all candidate procs,
@@ -569,7 +549,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "ed36ccf7"
 
     # Training 2
-    #DEFAULT_TASK_ID = "4c4377d9"
+    #DEFAULT_TASK_ID = "4c4377d9" # sprite computation with flip_vert + identity
     #DEFAULT_TASK_ID = "6d0aefbc"
     #DEFAULT_TASK_ID = "6fa7a44f"
     #DEFAULT_TASK_ID = "5614dbcf_zoom_out"
@@ -578,12 +558,12 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "5582e5ca"
     #DEFAULT_TASK_ID = "8be77c9e"
     #DEFAULT_TASK_ID = "c9e6f938"
-    #DEFAULT_TASK_ID = "2dee498d" # 1/2 try to improve crop
-    #DEFAULT_TASK_ID = "2dee498d_mini" # 1/2 try to improve crop
+    #DEFAULT_TASK_ID = "2dee498d" # crop
+    #DEFAULT_TASK_ID = "2dee498d_mini" # crop
 
     # Training 3
     #DEFAULT_TASK_ID = "1cf80156"
-    #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + move
+    #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
     #DEFAULT_TASK_ID = "25ff71a9"
     #DEFAULT_TASK_ID = "0b148d64"
     #DEFAULT_TASK_ID = "1f85a75f" # 1/2 try to improve crop
@@ -592,8 +572,8 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
     #DEFAULT_TASK_ID = "be94b721" # select greater object (sizeOrder 2 ?)
     #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
-    DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
-    #DEFAULT_TASK_ID = "c1d99e64" # lightCycle !
+    #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
+    DEFAULT_TASK_ID = "c1d99e64" # lightCycle !
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Repeated sprite ?

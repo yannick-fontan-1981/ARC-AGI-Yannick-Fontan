@@ -5,8 +5,9 @@ from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
-    zoom, paint, Grid, crop, unzoom, shift_with_background, shift_sprite_with_background
-from typing import Tuple, Any, List, Dict
+    zoom, paint, Grid, crop, unzoom, shift_with_background, shift_sprite_with_background, makeShrinkableCanvas, \
+    shrinkCanvas
+from typing import Tuple, Any, List, Dict, Optional
 
 
 def shift(patch: Any, directions: Tuple[int, int]) -> Any:
@@ -66,16 +67,34 @@ def canvas_by_object_size_fn(object_width: int, object_height: int) -> Grid:
         for __ in range(h)
     )
 
-def sprite_computation_paint(canvas: Grid, sub_sprites: List[Grid], positions: List[Dict[str, int]]) -> Grid:
-    from constelize.dsl.grid_dsl import paint
-    result = canvas
-    for sprite, pos in zip(sub_sprites, positions):
+def sprite_computation_paint(
+    sub_sprites: List[Grid],
+    positions: List[Dict[str, int]],
+    bg_colors: Optional[List[int]] = None
+) -> Grid:
+    """
+    Create a large blank canvas, paint each sub-sprite at its (x, y),
+    using an optional background color per sprite to ignore.
+    Then shrink away unused rows/columns.
+    """
+    print("sprite_computation_paint function")
+    print("sub_sprites")
+    print(sub_sprites)
+    print("positions")
+    print(positions)
+    print("bg_colors")
+    print(bg_colors)
+
+    canvas = makeShrinkableCanvas()
+
+    for idx, (sprite, pos) in enumerate(zip(sub_sprites, positions)):
         if sprite is None:
-            print(f"⚠️ Skipping paint: sprite is None at position {pos}")
             continue
         x, y = pos["x"], pos["y"]
-        result = paint(result, sprite, (y, x))
-    return result
+        bg = bg_colors[idx] if bg_colors and idx < len(bg_colors) else -1
+        canvas = paint(canvas, sprite, (y, x), bg_color=bg)
+
+    return shrinkCanvas(canvas)
 
 def repaint(base: Grid, patch: Grid, minX: int, minY: int):
     return paint(base, patch, (minY, minX))
@@ -264,9 +283,9 @@ ACTIONS = [
         description="Paint a sprite multiple times at specified (x, y) locations inside a canvas.",
         category=ActionCategory.SPATIAL_TRANSFORMATION,
         input_arguments=[
-            ArgumentBinding(name="canvas", type="Grid"),
             ArgumentBinding(name="sub_sprites", type="Array<Grid>"),
-            ArgumentBinding(name="positions", type="Array<Coord>")  # List of {x, y}
+            ArgumentBinding(name="positions", type="Array<Coord>"),  # List of {x, y}
+            ArgumentBinding(name="bg_colors", type="Array<Integer>")  # List of {x, y}
         ],
         output_type="Grid",
         function=sprite_computation_paint

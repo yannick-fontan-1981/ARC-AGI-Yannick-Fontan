@@ -44,4 +44,7 @@ class ArgumentBinding:
     suggested_attribute: Optional[str] = None
     suggested_sprite_id: Optional[str] = None
     suggested_object_id: Optional[str] = None
+    suggested_transform: Optional[Dict[str, Any]] = None
+    suggested_default: Optional[Any] = None
+
     use_anonymized: Optional[bool] = True

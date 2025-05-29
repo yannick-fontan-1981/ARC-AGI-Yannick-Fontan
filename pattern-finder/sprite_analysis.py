@@ -7,9 +7,9 @@ import math
 import sys
 import time
 from collections import defaultdict, Counter
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Any
 
-from constelize.dsl.grid_dsl import to_concrete_grid
+from constelize.dsl.grid_dsl import to_concrete_grid, zoom, grid_to_pretty_string
 from solver.dsl import (
     safe_divide,
     compute_pixel_perimeter,
@@ -311,9 +311,9 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
         }
         global_data["sprite_unique_records"].append(rec)
 
-        if attr_dict["isFromPrevious"]:
-            print("isFromPrevious record")
-            print(rec)
+        #if attr_dict["isFromPrevious"]:
+            #print("isFromPrevious record")
+            #print(rec)
 
     current_tid = attr_dict["trainId"]
     best_identity = None
@@ -684,6 +684,7 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
     attr["isFromCut"] = flags.get("isFromCut", False)
     attr["isFromColorZone"] = flags.get("isFromColorZone", False)
     attr["isFromPrevious"] = flags.get("isFromPrevious", False)
+    attr["isFromGlued"] = flags.get("isFromGlued", False)
 
     minX, minY, maxX, maxY = bbox
     attr["minX"] = minX
@@ -715,7 +716,12 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
     attr["width"] = w
     attr["ratioWidthHeight"] = safe_divide(w,h)
     attr["area"] = h*w
-    attr["pixelCount"] = w*h
+    attr["pixelCount"] = sum(
+        1
+        for row in sprite
+        for pix in row
+        if pix != attr["bgColor"]
+    )
     attr["hasOddPixelCount"] = ((w*h) % 2 != 0)
     attr["hasEvenPixelCount"] = ((w*h) % 2 == 0)
     attr["areaPerimeter"] = 2*(h+w)
@@ -729,6 +735,7 @@ def fill_sprite_attributes(grid, filename, trainId, testId, flags, sprite, bbox)
     attr["isLine"] = is_straight_line(sprite_obj)
     attr["isHorizontal"] = (w>h)
     attr["isVertical"] = (h>w)
+    attr["hasBorder"] = has_constant_border(sprite)
     attr["diagonalLength"] = (h*h + w*w)**0.5
 
     # Distances from borders
@@ -934,6 +941,7 @@ def compute_split_sprites_by_ratio(input_grid, output_grid, filename, trainId, t
             "isFromCut": False,
             "isFromColorZone": False,
             "isFromPrevious": False,
+            "isFromGlued": False,
         }
         sprite = fill_sprite_attributes(grid, filename, trainId, testId, flags, subgrid, bbox)
         sprite["minX"], sprite["minY"], sprite["maxX"], sprite["maxY"] = bbox
@@ -990,6 +998,7 @@ def compute_split_sprites_by_input_ratio(
                 "isFromCut":       False,
                 "isFromColorZone": False,
                 "isFromPrevious":  False,
+                "isFromGlued":  False,
             }
 
             sprite = fill_sprite_attributes(
@@ -1060,6 +1069,7 @@ def compute_splitter_sprite(grid, filename, trainId, testId, isInsideInput):
         "isFromCut": True,
         "isFromColorZone": False,
         "isFromPrevious": False,
+        "isFromGlued": False,
     }
 
     # --- Try vertical splitter detection ---
@@ -1316,6 +1326,55 @@ def remove_border_colored_blocks_subgrid(
                 for (r,c) in to_overwrite:
                     subgrid[r][c] = obj_bg
 
+def detect_sprite_in_holes_by_bg(grid, diagonal=True):
+    """
+    ─ Find every connected region of != “background” (where background is simply
+      the color that appears most often in the whole grid).
+    ─ Return a list of dicts: each dict has keys
+      { "grid": cropped_grid, "bbox": (minX, minY, maxX, maxY), "bgColor": bg }.
+    ─ Automatically drops any duplicate regions (by bbox).
+    """
+    # 1) pick the background as the most frequent color in grid
+    flat = [c for row in grid for c in row]
+    bg, _ = Counter(flat).most_common(1)[0]
+
+    # 2) extract every region ≠ bg
+    regions = objects_with_explicit_bg(
+        grid,
+        univalued=False,
+        diagonal=diagonal,
+        skip_color=bg
+    )
+
+    seen = set()
+    sprites = []
+    for region in regions:
+        coords = [pos for (_, pos) in region]
+        min_r = min(r for r, _ in coords)
+        max_r = max(r for r, _ in coords) + 1
+        min_c = min(c for _, c in coords)
+        max_c = max(c for _, c in coords) + 1
+        bbox = (min_c, min_r, max_c, max_r)
+        if bbox in seen:
+            continue
+        seen.add(bbox)
+
+        # 3) build the little cropped grid
+        h = max_r - min_r
+        w = max_c - min_c
+        sub = crop(grid, (min_r, min_c), (h, w))
+        # fill background with bg color if needed
+        for i in range(h):
+            for j in range(w):
+                if sub[i][j] == bg:
+                    sub[i][j] = bg
+
+        sprites.append({
+            "grid": sub,
+            "bbox": bbox,
+            "bgColor": bg
+        })
+    return sprites
 
 def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
     """
@@ -1324,119 +1383,185 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
       only if that edge is not also the grid boundary.
     - Then unify holes (non-bg) via objects_with_explicit_bg.
     """
-    import json
-    from solver.dsl import color_of, toindices, crop, asobject
 
+    print(f"[compute_hole_sprites] START filename={filename} trainId={trainId} testId={testId} isInsideInput={isInsideInput}")
     sprites = []
+    seen_bboxes = set()
+
+    # ── 1) bg-based detection first ──
+    bg_hits = detect_sprite_in_holes_by_bg(grid)
+    for hit in bg_hits:
+        bbox = hit["bbox"]
+        if bbox in seen_bboxes:
+            continue
+        seen_bboxes.add(bbox)
+
+        flags = {
+            "isInsideInput":    isInsideInput,
+            "isInsideOutput":  not isInsideInput,
+            "isInsideTrain":   (trainId != -1),
+            "isInsideTest":    (testId  != -1),
+            "isInsideBuffer":  False,
+            "isGrid":          False,
+            "isFromSplit":     False,
+            "isFromHole":      True,
+            "isFromCut":       False,
+            "isFromColorZone": False,
+            "isFromPrevious":  False,
+            "isFromGlued":  False,
+        }
+        spr = fill_sprite_attributes(
+            grid, filename, trainId, testId,
+            flags, hit["grid"], hit["bbox"]
+        )
+        spr["bgColor"] = hit["bgColor"]
+
+        # re-compute data & nbColors exactly as below
+        hole_obj = asobject(hit["grid"])
+        final = frozenset((c,pos) for (c,pos) in hole_obj if c != hit["bgColor"])
+        spr["data"]     = json.dumps(list(final))
+        spr["nbColors"] = len({c for c,_ in final})
+
+        sprites.append(spr)
+    # ── end bg-based
+
+    # grid dimensions
     grid_h = len(grid)
-    grid_w = len(grid[0]) if grid_h>0 else 0
+    grid_w = len(grid[0]) if grid_h > 0 else 0
+    print(f"[compute_hole_sprites] grid size: height={grid_h}, width={grid_w}")
 
-    all_objects = zones(grid)  # or your DSL
-    for obj in all_objects:
+    all_objects = zones(grid)
+    print(f"[compute_hole_sprites] found {len(all_objects)} object(s) in grid")
+
+    for obj_idx, obj in enumerate(all_objects, start=1):
+        print(f"\n[compute_hole_sprites] processing object #{obj_idx}")
         indices = list(toindices(obj))
+        print(f"  - total pixels in object: {len(indices)}")
         if not indices:
+            #print("  -> skip: no indices")
+            continue
+        if len(indices) < 8:
+            #print("  -> skip: object too small (<8 pixels)")
             continue
 
-        # skip if <8 pixels
-        if len(indices)<8:
-            continue
-
-        # bounding box
-        min_row = min(r for r,c in indices)
-        max_row = max(r for r,c in indices)+1
-        min_col = min(c for r,c in indices)
-        max_col = max(c for r,c in indices)+1
+        # bounding box in grid coordinates
+        min_row = min(r for r, c in indices)
+        max_row = max(r for r, c in indices) + 1
+        min_col = min(c for r, c in indices)
+        max_col = max(c for r, c in indices) + 1
         obj_h = max_row - min_row
         obj_w = max_col - min_col
+        print(f"  - bounding box rows {min_row}:{max_row}, cols {min_col}:{max_col} => size {obj_h}×{obj_w}")
 
         subgrid_obj = crop(grid, (min_row, min_col), (obj_h, obj_w))
         obj_bg = color_of(obj)
+        print(f"  - object background color: {obj_bg}")
 
-        # Decide for each side if it's internal to the grid
-        # top_internal => True if min_row>0
-        top_internal = (min_row>0)
-        bottom_internal = (max_row<grid_h)
-        left_internal = (min_col>0)
-        right_internal= (max_col<grid_w)
+        # decide which edges are internal to the grid
+        top_internal = min_row > 0
+        bottom_internal = max_row < grid_h
+        left_internal = min_col > 0
+        right_internal = max_col < grid_w
+        print(f"  - edges internal? top={top_internal}, bottom={bottom_internal}, left={left_internal}, right={right_internal}")
 
-        # remove non-bg blocks from these edges if the side is internal
+        # remove non-bg blocks from internal edges
         remove_border_colored_blocks_subgrid(
-            subgrid_obj,
-            obj_bg,
+            subgrid_obj, obj_bg,
             top_internal=top_internal,
             bottom_internal=bottom_internal,
             left_internal=left_internal,
             right_internal=right_internal,
             diagonal=False
         )
+        #print("  - removed non-bg border blocks on internal edges")
 
-        # Now unify all subgrid pixels != obj_bg => hole detection
+        # detect holes in the cleaned subgrid
         holes = objects_with_explicit_bg(
             subgrid_obj,
             univalued=False,
             diagonal=True,
             skip_color=obj_bg
         )
+        print(f"  - detected {len(holes)} hole region(s)")
 
-        for region in holes:
-            coords = [pos for (clr,pos) in region]
-            sub_min_i = min(r for r,c in coords)
-            sub_max_i = max(r for r,c in coords)+1
-            sub_min_j = min(c for r,c in coords)
-            sub_max_j = max(c for r,c in coords)+1
-
-            # Build hole grid
-            region_set = {pos for (clr,pos) in region}
+        for hole_idx, region in enumerate(holes, start=1):
+            print(f"    [hole #{hole_idx}] region pixel entries: {len(region)}")
+            coords = [pos for (_, pos) in region]
+            sub_min_i = min(r for r, c in coords)
+            sub_max_i = max(r for r, c in coords) + 1
+            sub_min_j = min(c for r, c in coords)
+            sub_max_j = max(c for r, c in coords) + 1
             hole_h = sub_max_i - sub_min_i
             hole_w = sub_max_j - sub_min_j
+            print(f"      - subgrid hole bbox rows {sub_min_i}:{sub_max_i}, cols {sub_min_j}:{sub_max_j} => size {hole_h}×{hole_w}")
+
+            # build the hole's own grid
+            region_set = {pos for (_, pos) in region}
             hole_grid = []
             for i in range(sub_min_i, sub_max_i):
-                row_data=[]
+                row_data = []
                 for j in range(sub_min_j, sub_max_j):
-                    if (i,j) in region_set:
+                    if (i, j) in region_set:
                         row_data.append(subgrid_obj[i][j])
                     else:
                         row_data.append(obj_bg)
                 hole_grid.append(row_data)
 
-            # bounding box in global coords
-            global_minX = min_col+sub_min_j
-            global_maxX = min_col+sub_max_j
-            global_minY = min_row+sub_min_i
-            global_maxY = min_row+sub_max_i
+            # compute global bounding box
+            global_minX = min_col + sub_min_j
+            global_maxX = min_col + sub_max_j
+            global_minY = min_row + sub_min_i
+            global_maxY = min_row + sub_max_i
             bbox = (global_minX, global_minY, global_maxX, global_maxY)
+            print(f"      - global bbox: {bbox}")
 
+            # prepare sprite flags
             flags = {
                 "isInsideInput": isInsideInput,
                 "isInsideOutput": not isInsideInput,
-                "isInsideTrain": (trainId!=-1),
-                "isInsideTest": (testId!=-1),
-                "isInsideBuffer":False,
-                "isGrid":False,
-                "isFromSplit":False,
-                "isFromHole":True,
-                "isFromCut":False,
+                "isInsideTrain": (trainId != -1),
+                "isInsideTest": (testId != -1),
+                "isInsideBuffer": False,
+                "isGrid": False,
+                "isFromSplit": False,
+                "isFromHole": True,
+                "isFromCut": False,
                 "isFromColorZone": False,
                 "isFromPrevious": False,
+                "isFromGlued": False,
             }
             spr = fill_sprite_attributes(grid, filename, trainId, testId, flags, hole_grid, bbox)
             hole_obj = asobject(hole_grid)
-            final_obj = frozenset((c,pos) for (c,pos) in hole_obj if c!=obj_bg)
-            # If at least 2 distinct colors remain:
-            if len({c for c,_ in final_obj})>=2:
-                spr["data"]=json.dumps(list(final_obj))
-                spr["nbColors"] = len({c for c,_ in final_obj})
+            final_obj = frozenset((c, pos) for (c, pos) in hole_obj if c != obj_bg)
+            num_colors = len({c for c, _ in final_obj})
+            print(f"      - final object has {num_colors} distinct color(s)")
+
+            # only keep sprites with at least 2 distinct colors
+            if num_colors >= 2:
+                # dedupe against bg-based hits and prior holes
+                if bbox in seen_bboxes:
+                    print(f"      -> duplicate bbox {bbox}, skipping")
+                    continue
+                seen_bboxes.add(bbox)
+
+                spr["data"] = json.dumps(list(final_obj))
+                spr["nbColors"] = num_colors
                 spr["bgColor"] = obj_bg
                 sprites.append(spr)
+                #print("      -> sprite accepted and added")
+            #else:
+                #print("      -> sprite rejected (fewer than 2 colors)")
 
+    #print(f"[compute_hole_sprites] END, total sprites found: {len(sprites)}")
     return sprites
+
 
 def compute_sprites_color_zone(grid, filename, trainId, testId, isInsideInput):
     """
     Extract sprites from interior regions where a single color occupies at least
     40% of its bounding box, and that bounding box does NOT touch the grid edge.
     """
-    print("[ compute_sprites_color_zone ]")
+    #print("[ compute_sprites_color_zone ]")
     sprites = []
 
     height = len(grid)
@@ -1491,6 +1616,7 @@ def compute_sprites_color_zone(grid, filename, trainId, testId, isInsideInput):
             "isFromCut":        False,
             "isFromColorZone":  True,
             "isFromPrevious":   False,
+            "isFromGlued":   False,
         }
 
         # build the sprite record
@@ -1551,6 +1677,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     next_sprite_analysis_id = 1
 
     _train_split_ratios = set()
+    _train_output_dims = set()
 
     def process_item(item, is_input, index, isTrain):
         nonlocal next_sprite_analysis_id
@@ -1576,6 +1703,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
             "isFromCut": False,
             "isFromColorZone": False,
             "isFromPrevious": False,
+            "isFromGlued": False,
         }
 
         bbox = compute_bounding_box(grid)
@@ -1590,36 +1718,43 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
         # 2. Possibly do dimension-based splits (compute_split_sprites_by_ratio)
         split_sprites = []
         if "output" in item:
+            in_h = len(item["input"])
+            in_w = len(item["input"][0]) if in_h else 0
+            out_h = len(item["output"])
+            out_w = len(item["output"][0]) if out_h else 0
+
             if isTrain:
-                # 1) compute the true width/height ratio of output→input
-                in_h = len(item["input"])
-                in_w = len(item["input"][0]) if in_h else 0
-                out_h = len(item["output"])
-                out_w = len(item["output"][0]) if out_h else 0
-
-                ratio_w = out_w * 1.0 / in_w
-                ratio_h = out_h * 1.0 / in_h
+                # record the constant output‐dims across TRAIN cases
+                _train_output_dims.add((out_w, out_h))
+                ratio_w = out_w / in_w if in_w else 0
+                ratio_h = out_h / in_h if in_h else 0
                 _train_split_ratios.add((ratio_w, ratio_h))
-
-                # 2) if you still want to slice up the train into sub‐sprites, do it
+                # split the TRAIN as before
                 split_sprites = compute_split_sprites_by_ratio(
                     item["input"], item["output"],
                     filename, trainId, testId, is_input
                 )
+
             else:
-                print(f"_train_split_ratios {_train_split_ratios} ")
-                # only split test if all train splits agreed on one ratio
+                # TEST: first try the original ratio‐based split
                 if len(_train_split_ratios) == 1:
                     w_ratio, h_ratio = next(iter(_train_split_ratios))
-                    print(f"split test by w_ratio {w_ratio} h_ratio {h_ratio} ")
                     split_sprites = compute_split_sprites_by_input_ratio(
                         item["input"],
                         w_ratio, h_ratio,
                         filename, trainId, testId, is_input
                     )
+                # if no single ratio but output dims WERE constant, use a dummy ref‐grid
+                elif len(_train_output_dims) == 1:
+                    const_w, const_h = next(iter(_train_output_dims))
+                    # make any grid of the same size (values don't matter for slicing)
+                    fake_ref = [[0]*const_w for _ in range(const_h)]
+                    split_sprites = compute_split_sprites_by_ratio(
+                        item["input"], fake_ref,
+                        filename, trainId, testId, is_input
+                    )
                 else:
-                    # no‐ops: leave split_sprites = []
-                    print(f"⏭ skipping test‐split because train ratios = {_train_split_ratios}")
+                    print(f"⏭ skipping test‐split; ratios={_train_split_ratios}, dims={_train_output_dims}")
         all_sprite_rows.extend(split_sprites)
 
         # Now also fill the new tables.
@@ -1789,6 +1924,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
                 "isFromCut": False,
                 "isFromColorZone": False,
                 "isFromPrevious": True,
+                "isFromGlued": False,
             }
 
             # **this** single call does all the work of fill_sprite_attributes for you:
@@ -2138,7 +2274,7 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
     # 3) commit once
     conn.commit()
 
-    detect_and_store_glued_and_new(conn, data)
+    detect_and_store_glued_and_new(conn, data, filename)
     detect_and_store_sprite_computation(conn)
 
 def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
@@ -2152,7 +2288,7 @@ def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
     """
     # 0) guard: no pixels → nothing to fill
     if not pixels:
-        print("→ No sprite pixels, returning -1")
+        #print("→ No sprite pixels, returning -1")
         return -1
 
     # 1) bounds check against the output grid
@@ -2165,12 +2301,12 @@ def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
 
     # 2) collect whatever’s now in those original spots
     behind_colors = [output_grid[r][c] for r, c in pixels]
-    print("  sprite behind_colors:", behind_colors)
+    #print("  sprite behind_colors:", behind_colors)
 
     # 3) drop any that are still the sprite’s own color
     filtered = [col for col in behind_colors if col != sprite_color]
     if not filtered:
-        print("→ All sprite spots still sprite_color, returning -1")
+        #print("→ All sprite spots still sprite_color, returning -1")
         return -1
 
     # 4) if they’re all the same, that’s your background
@@ -2180,7 +2316,7 @@ def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
         return first
 
     # 5) non-uniform → give up
-    print("→ Non-uniform and no neighbor_colors for sprite, returning None")
+    #print("→ Non-uniform and no neighbor_colors for sprite, returning None")
     return None
 
 # --- GLUED DETECTION PATCH for sprite_analysis.py ---
@@ -2249,113 +2385,349 @@ def is_glued(canvas, mask, y0, x0):
                     return True
     return False
 
-
-def detect_and_store_glued_and_new(conn, data):
+def detect_and_store_glued_and_new(conn, data, filename):
     """
-    For each sprite recorded in sprite_analysis with isInsideOutput=1 and isInsideTrain=1,
-    scan train inputs for glue occurrences and insert new sprite_occurrence rows.
-
-    SPECIAL CASE: if the sprite is the same size as the input grid, we skip scanning.
+    Scan both directions of glued sprites:
+      – OUTPUT-side sprites in sprite_analysis → search in TRAIN inputs
+      – INPUT-side  sprites in sprite_analysis → search in TRAIN outputs
+    For each rotated/ﬂipped/zoomed/recolored match:
+      • ensure a sprite_analysis row exists (insert or UPDATE isGlued=1)
+      • upsert a sprite_transformation
+      • insert a sprite_occurrence
     """
-    start = time.time()
-    cur = conn.cursor()
 
-    # load train inputs
-    train_inputs = {i: item['input'] for i, item in enumerate(data.get('train', []))}
-    print(f"[GLUED] Starting glued detection on {len(train_inputs)} train inputs.")
+    # ── build train canvases ──────────────────────────────────────────────────
+    train_items   = data.get("train", [])
+    train_inputs  = {i: itm["input"]  for i, itm in enumerate(train_items)}
+    train_outputs = {i: itm["output"] for i, itm in enumerate(train_items) if "output" in itm}
+    print(f"[GLUED] TRAIN count={len(train_items)}; inputs={len(train_inputs)}, outputs={len(train_outputs)}")
 
-    # fetch sprites by joining sprite_analysis -> sprite_occurrence to get sprite_unique_id
-    cur.execute(
+    # ── helpers ────────────────────────────────────────────────────────────────
+    def sprite_to_grid(sprite_obj: frozenset, bg: int):
+        coords = [pos for _, pos in sprite_obj]
+        min_r = min(r for r,_ in coords); min_c = min(c for _,c in coords)
+        max_r = max(r for r,_ in coords); max_c = max(c for _,c in coords)
+        H, W = max_r-min_r+1, max_c-min_c+1
+        grid = [[bg]*W for _ in range(H)]
+        for color,(r,c) in sprite_obj:
+            grid[r-min_r][c-min_c] = color
+        return grid
+
+    def generate_geo_variants(g, bg):
+        variants = [(g, {})]
+        r90  = rot90(tuple(tuple(r) for r in g))
+        r270 = rot270(tuple(tuple(r) for r in g))
+        variants.append(([list(r) for r in r90],   {"rotated_90": True}))
+        variants.append(([list(r) for r in r270],  {"rotated_270": True}))
+        spr = asobject(g)
+        for fn, flag in [(rot180Sprite, "rotated_180"),
+                         (vmirrorSprite, "flipped_vert"),
+                         (hmirrorSprite, "flipped_horiz"),
+                         (lambda s: rot90Sprite(vmirrorSprite(s)), "flipped_vert_90"),
+                         (lambda s: rot90Sprite(hmirrorSprite(s)), "flipped_horiz_90")]:
+            so = fn(spr)
+            variants.append((sprite_to_grid(so, bg), {flag: True}))
+        return variants
+
+    def zoom_variants(g, canvas, skip: bool = False):
         """
-        SELECT so.sprite_unique_id, sa.data
-          FROM sprite_analysis sa
-          JOIN sprite_occurrence so ON so.sprite_id = sa.id
-         WHERE sa.isInsideOutput=1 AND sa.isInsideTrain=1
-           AND so.isInsideInput=0 AND so.isInsideTrain=1
+        Yield (zoomed_grid, zx, zy) for every zx,zy in 1..5 that fits inside canvas.
+        If skip=True, only yields the identity variant (g,1,1).
         """
-    )
-    sprites = cur.fetchall()
-    print(f"[GLUED] Loaded {len(sprites)} sprites from sprite_analysis join.")
+        H = len(canvas)
+        W = len(canvas[0]) if H > 0 else 0
 
-    for uid, data_json in sprites:
-        print(f"[GLUED] Processing sprite_unique id={uid}")
-        try:
-            grid = to_concrete_grid(json.loads(data_json))
-        except Exception as e:
-            print(f"[ERROR] Invalid data JSON for sprite {uid}: {e}")
-            continue
+        if skip:
+            # only the geo‐variant, no zoom
+            yield g, 1, 1
+            return
 
-        h_s, w_s = len(grid), len(grid[0]) if grid else 0
-        if h_s < 2 or w_s < 2:
-            print(f"[GLUED] Skipping sprite {uid}: dimension < 2")
-            continue
+        # try zooms from 1×1 up to 5×5
+        for zx in range(1, 6):
+            for zy in range(1, 6):
+                z = zoom(g, zx, zy)
+                if not z:
+                    continue
+                h = len(z)
+                w = len(z[0]) if h > 0 else 0
+                # only if it still fits in the canvas
+                if h <= H and w <= W:
+                    yield z, zx, zy
 
-        # identity transform
-        cur.execute(
-            """
-            SELECT id FROM sprite_transformation
-             WHERE sprite_unique_id=?
-               AND zoom_x=1 AND zoom_y=1 AND recolored='[]'
-               AND inverted=0 AND rotated_90=0 AND rotated_180=0 AND rotated_270=0
-               AND flipped_vert=0 AND flipped_horiz=0
-               AND flipped_vert_90=0 AND flipped_horiz_90=0
-            """,
-            (uid,)
-        )
-        row = cur.fetchone()
-        if row:
-            tid = row[0]
-        else:
-            cur.execute(
-                "INSERT INTO sprite_transformation"
-                " (sprite_unique_id, inverted, rotated_90, rotated_180, rotated_270,"
-                "  flipped_vert, flipped_horiz, flipped_vert_90, flipped_horiz_90,"
-                "  zoom_x, zoom_y, recolored, sprite_produce_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (uid, 0,0,0,0, 0,0,0,0, 1,1, '[]', uid)
-            )
-            tid = cur.lastrowid
+    def find_matches_with_recolor(cv, pat, skip_recolor=False):
+        H, W = len(cv), len(cv[0])
+        h, w = len(pat), len(pat[0])
+        out = []
+        for y0 in range(H - h + 1):
+            for x0 in range(W - w + 1):
+                cmap = {}
+                ok = True
+                for dy in range(h):
+                    for dx in range(w):
+                        pc, gc = pat[dy][dx], cv[y0 + dy][x0 + dx]
+                        if skip_recolor:
+                            # exact‐match mode:
+                            if pc != gc:
+                                ok = False
+                                break
+                        else:
+                            # original recolor‐allowed mode:
+                            if pc not in cmap:
+                                cmap[pc] = gc
+                            elif cmap[pc] != gc:
+                                ok = False
+                                break
+                    if not ok:
+                        break
+                if ok:
+                    out.append(((x0, y0, x0 + w, y0 + h), cmap))
+        return out
 
-        # build mask of “solid” pixels
-        mask = {(y, x) for y, row in enumerate(grid) for x, v in enumerate(row) if v != -1}
-        colors = {grid[y][x] for y, x in mask}
-        is_solid = (len(colors) == 1 and len(mask) == h_s * w_s)
+    # ── scan modes ─────────────────────────────────────────────────────────────
+    modes = [
+        {
+          "flag":          "isInsideOutput",
+          "filter":        "isInsideOutput=1 AND isInsideTrain=1",
+          "pick_canvas":   lambda tr: train_inputs[tr]
+        },
+        {
+          "flag":          "isInsideInput",
+          "filter":        "isInsideInput=1 AND isInsideTrain=1",
+          "pick_canvas":   lambda tr: train_outputs.get(tr)
+        },
+    ]
 
-        # scan each train input
-        for idx, canvas in train_inputs.items():
-            H, W = len(canvas), len(canvas[0])
+    seen = set()
 
-            # === SPECIAL CASE ===
-            # if the sprite is the same size as this input grid, skip scanning
-            if H == h_s and W == w_s:
-                print(f"[GLUED] Skipping sprite {uid} on input {idx}: sprite and canvas are same size ({H}×{W})")
+    for mode in modes:
+        sql = f"""
+          SELECT id, trainId, testId,
+                 data, bgColor, minX, minY, maxX, maxY, isFromGlued
+            FROM sprite_analysis
+           WHERE pixelCount > 3 AND {mode['filter']}
+        """
+        for (uid, trainId, testId, data_str, bg,
+             minX, minY, maxX, maxY, glued_flag) in conn.execute(sql):
+
+            # pick the canvas first
+            canvas = mode["pick_canvas"](trainId)
+            if canvas is None:
+                continue
+            canvas_H = len(canvas)
+            canvas_W = len(canvas[0])
+
+            # compute sub‐sprite dims
+            H = maxY - minY
+            W = maxX - minX
+
+            # skip any sub‐sprite that's bigger than its canvas
+            if H > canvas_H or W > canvas_W:
+                print(f"⏭ Skipping UID#{uid} – sub‐sprite {H}×{W} exceeds canvas {canvas_H}×{canvas_W}")
                 continue
 
-            if H < h_s or W < w_s:
-                # too small to contain the sprite
-                continue
+            pxs = json.loads(data_str)  # list of [color, [r, c]]
+            base = [[bg] * W for _ in range(H)]
+            for color, (r, c) in pxs:
+                if 0 <= r < H and 0 <= c < W:
+                    base[r][c] = color
+                #else:
+                    #print(f"⚠️ pixel ({r},{c}) outside local bbox size {H}×{W}")
+            #print(f"base ({H}×{W}):")
+            #for row in base:
+                #print(" ", row)
 
-            for y0 in range(H - h_s + 1):
-                for x0 in range(W - w_s + 1):
-                    # quick pixel match
-                    if not all(canvas[y0+y][x0+x] == grid[y][x] for y, x in mask):
+            for gv, gv_flags in generate_geo_variants(base, bg):
+                # gv is the variant grid, gv_flags tells you which geo‐transform it is
+                #print(f"[GEO VARIANT] flags = {gv_flags}")
+                #print("Variant grid:")
+                #for row in gv:
+                    #print("  " + "".join(f"{c:2}" for c in row))
+
+                for zv, zx, zy in zoom_variants(gv, canvas, True):
+                    # zv is the zoomed grid, zx/zy are the zoom factors
+                    #print(f"  [ZOOM] zx={zx}, zy={zy}")
+                    #print("  Zoomed grid:")
+                    #for row in zv:
+                        #print("    " + "".join(f"{c:2}" for c in row))
+
+                    # build the sprite‐object for exact matching
+                    so = asobject(zv)
+                    h, w = len(zv), len(zv[0])
+                    #print(f"    sprite size: {h}×{w}")
+
+                    # look for every match in the full canvas
+                    occs = list(occurrences(canvas, so))
+                    if not occs:
+                        #print("    → no occurrences found on this canvas")
                         continue
-                    glued = False if is_solid else is_glued(canvas, mask, y0, x0)
 
-                    # always insert a fresh occurrence row
-                    cur.execute(
-                        "INSERT INTO sprite_occurrence"
-                        " (sprite_unique_id, sprite_transformation_id,"
-                        "  isInsideInput, isInsideOutput, isInsideTrain, isInsideTest,"
-                        "  trainId, testId, minY, minX, glued)"
-                        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (uid, tid, 1, 0, 1, 0, idx, -1, y0, x0, int(glued))
-                    )
-                    new_oid = cur.lastrowid
-                    print(f"[GLUED] Inserted occurrence id={new_oid} for sprite {uid}, input {idx}, glued={glued}")
+                    for y0, x0 in occs:
+                        bbox = (x0, y0, x0 + w, y0 + h)
+                        #print(f"    [OCCURRENCE] at canvas coords y0={y0}, x0={x0} → bbox={bbox}")
+
+                        cmap = {}  # exact‐match, so no recolor
+                        key = (
+                            uid,
+                            tuple(sorted(gv_flags.items())),
+                            zx, zy,
+                            tuple(sorted(cmap.items())),
+                            bbox
+                        )
+                        if key in seen:
+                            #print("      → already seen, skipping")
+                            continue
+
+                        #print("      → new occurrence, processing...")
+                        seen.add(key)
+
+                        x0, y0, x1, y1 = bbox
+
+                        # ── A) upsert sprite_analysis with isFromGlued=1 ────────────
+                        lookup = conn.execute("""
+                          SELECT id, isFromGlued
+                            FROM sprite_analysis
+                           WHERE trainId=? AND testId=?
+                             AND minX=? AND minY=? AND maxX=? AND maxY=?
+                             AND isInsideInput=? AND isInsideOutput=?
+                        """, [
+                          trainId, testId,
+                          x0, y0, x1, y1,
+                          int(mode["flag"]=="isInsideOutput"),
+                          int(mode["flag"]=="isInsideInput")
+                        ]).fetchone()
+                        #print(f"lookup : trainId: {trainId}")
+                        #print(f"lookup : testId: {testId}")
+                        #print(f"lookup : x0: {x0}")
+                        #print(f"lookup : y0: {y0}")
+                        #print(f"lookup : x1: {x1}")
+                        #print(f"lookup : y1: {y1}")
+                        #print(f"lookup : isInsideInput: {mode['flag']=='isInsideOutput'}")
+                        #print(f"lookup : isInsideOutput: {mode['flag']=='isInsideInput'}")
+                        #print(f"SELECT id, isFromGlued FROM sprite_analysis WHERE trainId={trainId} AND testId={testId} AND minX={x0} AND minY={y0} AND maxX={x1} AND maxY={y1} AND isInsideInput={mode['flag']=='isInsideOutput'} AND isInsideOutput={mode['flag']=='isInsideInput'}")
+                        if lookup:
+                            #print("lookup found !")
+                            sprite_row_id, existing_glued = lookup
+                            if not existing_glued:
+                                conn.execute(
+                                    "UPDATE sprite_analysis SET isFromGlued=1 WHERE id=?",
+                                    [sprite_row_id]
+                                )
+                        else:
+                            flags = {
+                              "isInsideInput":   int(mode["flag"]=="isInsideOutput"),
+                              "isInsideOutput":  int(mode["flag"]=="isInsideInput"),
+                              "isInsideTrain":   1,
+                              "isInsideTest":    0,
+                              "isInsideBuffer":  0,
+                              "isGrid":          0,
+                              "isFromSplit":     0,
+                              "isFromHole":      0,
+                              "isFromCut":       0,
+                              "isFromColorZone": 0,
+                              "isFromPrevious":  0,
+                              "isFromGlued":     1,
+                            }
+                            spr_def = fill_sprite_attributes(
+                                canvas, filename,
+                                trainId, testId,
+                                flags, zv, bbox
+                            )
+                            cols = ",".join(spr_def.keys())
+                            vals = list(spr_def.values())
+                            ph   = ",".join("?" for _ in vals)
+                            cur  = conn.execute(
+                                f"INSERT INTO sprite_analysis ({cols}) VALUES ({ph})",
+                                vals
+                            )
+                            sprite_row_id = cur.lastrowid
+
+                        # lookup the sprite_unique.id for this sprite_analysis row
+                        su_row = conn.execute("""
+                                              SELECT id
+                                                FROM sprite_unique
+                                               WHERE sprite_id=? AND trainId=? AND testId=?
+                                            """, [
+                            uid, trainId, testId
+                        ]).fetchone()
+                        if not su_row:
+                            # no matching unique → skip this occurrence
+                            print(f"[glued] skip occurrence, no sprite_unique for sprite_analysis.id={sprite_row_id}")
+                            continue
+                        sprite_unique_id = su_row[0]
+
+                        # ── B) upsert sprite_transformation ──────────────────────
+                        recolors     = sorted((p,c) for p,c in cmap.items() if p!=c)
+                        recolor_json = json.dumps(recolors)
+                        trow = conn.execute("""
+                          SELECT id
+                            FROM sprite_transformation
+                           WHERE sprite_unique_id=? AND zoom_x=? AND zoom_y=? 
+                             AND recolored=? AND rotated_90=? AND rotated_180=? 
+                             AND rotated_270=? AND flipped_vert=? AND flipped_horiz=? 
+                             AND flipped_vert_90=? AND flipped_horiz_90=?
+                        """, [
+                          uid, zx, zy, recolor_json,
+                          gv_flags.get("rotated_90",False),
+                          gv_flags.get("rotated_180",False),
+                          gv_flags.get("rotated_270",False),
+                          gv_flags.get("flipped_vert",False),
+                          gv_flags.get("flipped_horiz",False),
+                          gv_flags.get("flipped_vert_90",False),
+                          gv_flags.get("flipped_horiz_90",False),
+                        ]).fetchone()
+                        if trow:
+                            trans_id = trow[0]
+                        else:
+                            res = conn.execute("""
+                              INSERT INTO sprite_transformation
+                                (sprite_unique_id,sprite_produce_id,
+                                 zoom_x,zoom_y,recolored,
+                                 rotated_90,rotated_180,rotated_270,
+                                 flipped_vert,flipped_horiz,
+                                 flipped_vert_90,flipped_horiz_90)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                            """, [
+                              sprite_unique_id, sprite_unique_id,
+                              zx, zy, recolor_json,
+                              gv_flags.get("rotated_90",False),
+                              gv_flags.get("rotated_180",False),
+                              gv_flags.get("rotated_270",False),
+                              gv_flags.get("flipped_vert",False),
+                              gv_flags.get("flipped_horiz",False),
+                              gv_flags.get("flipped_vert_90",False),
+                              gv_flags.get("flipped_horiz_90",False),
+                            ])
+                            trans_id = res.lastrowid
+
+                        # ── C) insert sprite_occurrence ─────────────────────────
+                        conn.execute("""
+                          INSERT INTO sprite_occurrence
+                            (sprite_unique_id,
+                             sprite_transformation_id,
+                             isInsideInput,
+                             isInsideOutput,
+                             isInsideTrain,
+                             isInsideTest,
+                             trainId,
+                             testId,
+                             sprite_id,
+                             minX,
+                             minY)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                        """, [
+                            sprite_unique_id,
+                            trans_id,
+                            int(mode["flag"]=="isInsideOutput"),
+                            int(mode["flag"]=="isInsideInput"),
+                            1, 0,
+                            trainId,
+                            testId,
+                            sprite_row_id,
+                            x0,
+                            y0
+                        ])
 
     conn.commit()
-    print(f"[GLUED] Completed in {time.time() - start:.3f}s")
 
 
 # At end of process_sprites_from_json():
@@ -2393,11 +2765,11 @@ def clear_sprite_computation_table(conn):
     """
     Delete all rows from the sprite_computation table.
     """
-    print("[clear_sprite_computation_table] Deleting all existing rows...")
+    #print("[clear_sprite_computation_table] Deleting all existing rows...")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM sprite_computation")
     conn.commit()
-    print("✅ Table cleared.")
+    #print("✅ Table cleared.")
 
 def insert_sprite_computation_records(conn, computation_results: list[dict]):
     """
@@ -2418,10 +2790,10 @@ def insert_sprite_computation_records(conn, computation_results: list[dict]):
         if len({entry["sub_sprite_id"] for entry in group}) > 1
         for r in group
     ]
-    print(f"✅ Retained {len(filtered_rows)} rows after filtering on unique sub_sprite_id.")
+    #print(f"✅ Retained {len(filtered_rows)} rows after filtering on unique sub_sprite_id.")
 
     if not filtered_rows:
-        print("⚠️ No rows to insert.")
+        #print("⚠️ No rows to insert.")
         return
 
     insert_sql = """
@@ -2435,8 +2807,12 @@ def insert_sprite_computation_records(conn, computation_results: list[dict]):
         sub_min_x,
         sub_min_y,
         sub_width,
-        sub_height
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sub_height,
+        sprite_occurrence_id,
+        sprite_transformation_id,
+        sprite_unique_id,
+        sprite_origin_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     values = [
@@ -2450,14 +2826,18 @@ def insert_sprite_computation_records(conn, computation_results: list[dict]):
             r["sub_min_x"],
             r["sub_min_y"],
             r["sub_width"],
-            r["sub_height"]
+            r["sub_height"],
+            r["sprite_occurrence_id"],
+            r["sprite_transformation_id"],
+            r["sprite_unique_id"],
+            r["sprite_origin_id"]
         )
         for r in filtered_rows
     ]
 
     cursor.executemany(insert_sql, values)
     conn.commit()
-    print("✅ Insert completed.")
+    #print("✅ Insert completed.")
 
 def get_all_sprites_grouped_by_train(conn) -> dict[int, list[dict]]:
     """
@@ -2544,8 +2924,8 @@ def place_subsprite(mask, sub, offset_x, offset_y):
         mask[mask_i][mask_j] = val
 
 def is_fully_filled(mask):
-    """Return True if there is no -8 left."""
-    return all(cell != -8 for row in mask for cell in row)
+    """Return True if there is no -8 or -1 left."""
+    return all((cell != -8 and cell != -1) for row in mask for cell in row)
 
 def build_empty_mask_from_data(main_sprite):
     """Create a mask grid from the sprite data, with -8 where pixels are expected, and -1 elsewhere."""
@@ -2556,63 +2936,353 @@ def build_empty_mask_from_data(main_sprite):
             mask[i][j] = -8
     return mask
 
+import json
+
+import json
+
+import json
+
 def detect_and_store_sprite_computation(conn, data=None):
-    print("[detect_and_store_sprite_computation]")
+    """
+    For each train, find “main” output sprites and see which smaller output sprites
+    fit inside them. Then pick a single, consistent transformation (by flags)
+    for each (main, sub) pair—namely the one whose flag-tuple appears in every train
+    and which maps back to an input-side sprite. Finally record the computation results.
+    """
+    #print("[detect_and_store_sprite_computation] Starting")
     clear_sprite_computation_table(conn)
+
+    # 1) Load all OUTPUT-side sprites, grouped by trainId
     sprites_by_train = get_all_sprites_grouped_by_train(conn)
+
+    # 2) FIRST PASS: collect, for each (main_id, sub_id), the set of flag-tuples seen
+    transform_candidates: dict[tuple[int,int], set[tuple]] = {}
+
+    for trainId, sprite_list in sprites_by_train.items():
+        mains = [s for s in sprite_list if s["isInsideOutput"]]
+        print(f"\n[PASS1] TRAIN {trainId}: found {len(mains)} mains")
+        for main in mains:
+            mid = main["id"]
+            mbbox = (main["minX"], main["minY"], main["maxX"], main["maxY"])
+            main_mask = build_empty_mask_from_data(main)
+
+            for sub in mains:
+                sid = sub["id"]
+                if sid == mid or not is_fully_inside(sub, mbbox, main_mask):
+                    continue
+
+                # fetch all matching transformations for this sub-sprite,
+                # but only those that map back to an input-side sprite
+                rows = conn.execute("""
+                    SELECT 
+                      st.id                            AS trans_id,
+                      st.inverted, st.rotated_90, st.rotated_180, st.rotated_270,
+                      st.flipped_vert, st.flipped_horiz,
+                      st.flipped_vert_90, st.flipped_horiz_90,
+                      st.zoom_x, st.zoom_y,
+                      st.recolored
+                    FROM sprite_occurrence AS occ
+                    JOIN sprite_transformation AS st
+                      ON occ.sprite_transformation_id = st.id
+                    JOIN sprite_unique      AS su
+                      ON st.sprite_unique_id = su.id
+                    JOIN sprite_analysis    AS sa
+                      ON su.sprite_id = sa.id
+                      AND sa.isInsideInput = 1
+                    WHERE occ.sprite_id      = ?
+                      AND occ.isInsideOutput = 1
+                      AND occ.trainId        = ?
+                """, (sid, trainId)).fetchall()
+
+                flag_list = []
+                for (_trans_id,
+                     inv, r90, r180, r270,
+                     fv, fh, fv90, fh90,
+                     zx, zy, recolored_json) in rows:
+                    raw = json.loads(recolored_json)
+                    # convert inner lists to tuples so the whole thing is hashable
+                    pairs = tuple(tuple(p) for p in raw)
+                    fl = (inv, r90, r180, r270, fv, fh, fv90, fh90, zx, zy, pairs)
+                    flag_list.append(fl)
+
+                print(f"  MAIN#{mid} SUB#{sid} TRAIN#{trainId} flags found:")
+                for fl in flag_list:
+                    print(f"    {fl}")
+
+                key = (mid, sid)
+                if key not in transform_candidates:
+                    transform_candidates[key] = set(flag_list)
+                else:
+                    transform_candidates[key] &= set(flag_list)
+
+                print(f"  → candidates now for MAIN#{mid} SUB#{sid}:")
+                for fl in sorted(transform_candidates[key]):
+                    print(f"     {fl}")
+
+    # 3) Pick one flag-tuple per (main, sub): lexicographically smallest
+    chosen_flags: dict[tuple[int,int], tuple|None] = {}
+    for key, flags in transform_candidates.items():
+        if not flags:
+            print(f"[CHOICE] MAIN#{key[0]} SUB#{key[1]} → NO common transform")
+            chosen_flags[key] = None
+        else:
+            choice = sorted(flags)[0]
+            print(f"[CHOICE] MAIN#{key[0]} SUB#{key[1]} → chosen {choice}")
+            chosen_flags[key] = choice
+
+    # 4) SECOND PASS: record computations using chosen_flags
     computation_results = []
 
     for trainId, sprite_list in sprites_by_train.items():
-        if not sprite_list:
-            continue
+        mains = [s for s in sprite_list if s["isInsideOutput"]]
+        print(f"\n[PASS2] TRAIN {trainId}: recording computations")
+        for main in mains:
+            mid = main["id"]
+            mbbox = (main["minX"], main["minY"], main["maxX"], main["maxY"])
+            main_mask = build_empty_mask_from_data(main)
 
-        for main_sprite in sprite_list:
-            main_w, main_h = main_sprite["width"], main_sprite["height"]
-            main_bbox = (main_sprite["minX"], main_sprite["minY"], main_sprite["maxX"], main_sprite["maxY"])
-            main_mask = build_empty_mask_from_data(main_sprite)
+            masks: list[list[list[int]]] = []
+            mask_maps: list[list[dict]] = []
 
-            masks = []
-            mask_maps = []
-
-            for sub in sprite_list:
-                if sub["id"] == main_sprite["id"]:
+            # assemble “fills”
+            for sub in mains:
+                sid = sub["id"]
+                if sid == mid or not is_fully_inside(sub, mbbox, main_mask):
                     continue
-                if is_fully_inside(sub, main_bbox, main_mask):
-                    placed = False
-                    for mask, mask_map in zip(masks, mask_maps):
-                        if can_place_subsprite(mask, sub, main_sprite["minX"], main_sprite["minY"], main_sprite):
-                            place_subsprite(mask, sub, main_sprite["minX"], main_sprite["minY"])
-                            mask_map.append(sub)
-                            placed = True
-                            break
-                    if not placed:
-                        new_mask = build_empty_mask_from_data(main_sprite)
-                        if can_place_subsprite(new_mask, sub, main_sprite["minX"], main_sprite["minY"], main_sprite):
-                            place_subsprite(new_mask, sub, main_sprite["minX"], main_sprite["minY"])
-                            masks.append(new_mask)
-                            mask_maps.append([sub])
 
-            # For each mask, store results if fully filled
-            computation_id = 1
+                placed = False
+                for mask, subs in zip(masks, mask_maps):
+                    if can_place_subsprite(mask, sub, mbbox[0], mbbox[1], main):
+                        place_subsprite(mask, sub, mbbox[0], mbbox[1])
+                        subs.append(sub)
+                        placed = True
+                        break
+
+                if not placed:
+                    new_mask = build_empty_mask_from_data(main)
+                    if can_place_subsprite(new_mask, sub, mbbox[0], mbbox[1], main):
+                        place_subsprite(new_mask, sub, mbbox[0], mbbox[1])
+                        masks.append(new_mask)
+                        mask_maps.append([sub])
+
+            comp_id = 1
             for mask, subs in zip(masks, mask_maps):
-                if is_fully_filled(mask):
-                    for sub in subs:
-                        computation_results.append({
-                            "trainId": main_sprite["trainId"],
-                            "sprite_id": main_sprite["id"],
-                            "computation_id": computation_id,
-                            "sub_sprite_id": sub["id"],
-                            "sub_rel_min_x": sub["minX"] - main_sprite["minX"],
-                            "sub_rel_min_y": sub["minY"] - main_sprite["minY"],
-                            "sub_min_x": sub["minX"],
-                            "sub_min_y": sub["minY"],
-                            "sub_width": sub["width"],
-                            "sub_height": sub["height"]
-                        })
-                    computation_id += 1
-    print(computation_results)
+                if not is_fully_filled(mask):
+                    print(f"  MAIN#{mid} fill#{comp_id} incomplete, skipping")
+                    comp_id += 1
+                    continue
+
+                print(f"  MAIN#{mid} fill#{comp_id} COMPLETE with {len(subs)} subs")
+                print(grid_to_pretty_string(mask))
+                for sub in subs:
+                    print(grid_to_pretty_string(to_concrete_grid(json.loads(sub["data"]))))
+                    sid = sub["id"]
+                    key = (mid, sid)
+                    flags = chosen_flags[key]
+
+                    sprite_occurrence_id = None
+                    sprite_transformation_id = None
+                    sprite_unique_id = None
+                    sprite_origin_id = None
+
+                    if flags is not None:
+                        (inv, r90, r180, r270,
+                         fv, fh, fv90, fh90,
+                         zx, zy, pairs) = flags
+                        recolored_json = json.dumps([list(p) for p in pairs])
+
+                        occ = conn.execute("""
+                            SELECT
+                              occ.id                   AS sprite_occurrence_id,
+                              occ.sprite_unique_id,
+                              occ.sprite_transformation_id,
+                              su.sprite_id             AS sprite_origin_id
+                            FROM sprite_occurrence AS occ
+                            JOIN sprite_transformation AS st
+                              ON occ.sprite_transformation_id = st.id
+                            JOIN sprite_unique      AS su
+                              ON st.sprite_unique_id = su.id
+                            JOIN sprite_analysis    AS sa
+                              ON su.sprite_id = sa.id
+                              AND sa.isInsideInput = 1
+                            WHERE occ.sprite_id = ?
+                              AND occ.trainId     = ?
+                              AND st.inverted     = ?
+                              AND st.rotated_90   = ?
+                              AND st.rotated_180  = ?
+                              AND st.rotated_270  = ?
+                              AND st.flipped_vert = ?
+                              AND st.flipped_horiz= ?
+                              AND st.flipped_vert_90 = ?
+                              AND st.flipped_horiz_90= ?
+                              AND st.zoom_x       = ?
+                              AND st.zoom_y       = ?
+                              AND st.recolored    = ?
+                        """, (
+                            sid, trainId,
+                            inv, r90, r180, r270,
+                            fv, fh, fv90, fh90,
+                            zx, zy, recolored_json
+                        )).fetchone()
+
+                        if occ:
+                            (sprite_occurrence_id,
+                             sprite_unique_id,
+                             sprite_transformation_id,
+                             sprite_origin_id) = occ
+                            print(f"    SUB#{sid} → TRANS#{sprite_transformation_id} flags={flags}")
+                        else:
+                            print(f"    WARNING: SUB#{sid} no match for chosen flags {flags}")
+                    else:
+                        print(f"    SUB#{sid} has no common transform; leaving IDs null")
+
+                    rel_x = sub["minX"] - main["minX"]
+                    rel_y = sub["minY"] - main["minY"]
+                    computation_results.append({
+                        "trainId":                   trainId,
+                        "sprite_id":                 mid,
+                        "computation_id":            comp_id,
+                        "sub_sprite_id":             sid,
+                        "sub_rel_min_x":             rel_x,
+                        "sub_rel_min_y":             rel_y,
+                        "sub_min_x":                 sub["minX"],
+                        "sub_min_y":                 sub["minY"],
+                        "sub_width":                 sub["width"],
+                        "sub_height":                sub["height"],
+                        "sprite_occurrence_id":      sprite_occurrence_id,
+                        "sprite_transformation_id":  sprite_transformation_id,
+                        "sprite_unique_id":          sprite_unique_id,
+                        "sprite_origin_id":          sprite_origin_id
+                    })
+
+                comp_id += 1
+
+    computation_results = prune_overlapping_by_train(computation_results)
+    #print("\nAll computation results:", computation_results)
     insert_sprite_computation_records(conn, computation_results)
     return computation_results
+
+def prune_overlapping_by_train(
+    computation_results: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Remove any ‘minor’ computation (group of subs with the same computation_id)
+    whose absolute bounding‐box overlaps a larger one, per trainId.
+    """
+    pruned: List[Dict[str,Any]] = []
+    # 1) group by trainId
+    by_train: Dict[int, List[Dict[str,Any]]] = defaultdict(list)
+    for entry in computation_results:
+        by_train[entry["trainId"]].append(entry)
+
+    # 2) process each train independently
+    for trainId, entries in by_train.items():
+        # cluster entries by computation_id
+        comps: Dict[int, List[Dict[str,Any]]] = defaultdict(list)
+        for e in entries:
+            comps[e["computation_id"]].append(e)
+
+        # if only one computation in this train, keep it wholesale
+        if len(comps) == 1:
+            pruned.extend(entries)
+            continue
+
+        # 3) compute each computation's absolute bbox and area
+        boxes: Dict[int, Tuple[int,int,int,int]] = {}
+        areas: Dict[int, int] = {}
+        for cid, subs in comps.items():
+            xs   = [ s["sub_min_x"] for s in subs ]
+            ys   = [ s["sub_min_y"] for s in subs ]
+            x1s  = [ s["sub_min_x"] + s["sub_width"]  for s in subs ]
+            y1s  = [ s["sub_min_y"] + s["sub_height"] for s in subs ]
+            minx, miny = min(xs), min(ys)
+            maxx, maxy = max(x1s), max(y1s)
+            boxes[cid] = (minx, miny, maxx, maxy)
+            areas[cid] = (maxx-minx) * (maxy-miny)
+
+        # 4) sort cids by descending area
+        sorted_cids = sorted(boxes.keys(), key=lambda c: areas[c], reverse=True)
+
+        # 5) pick non-overlapping ones
+        accepted = []
+        occupied: List[Tuple[int,int,int,int]] = []
+        for cid in sorted_cids:
+            bx = boxes[cid]
+            # check overlap with any previously accepted
+            overlap = any(
+                not (bx[2] <= ob[0] or bx[0] >= ob[2] or bx[3] <= ob[1] or bx[1] >= ob[3])
+                for ob in occupied
+            )
+            if not overlap:
+                accepted.append(cid)
+                occupied.append(bx)
+
+        # 6) collect all subs for accepted cids
+        for cid in accepted:
+            pruned.extend(comps[cid])
+
+    return pruned
+
+def has_constant_border(grid):
+    if not grid or not grid[0]:
+        #print("❌ Grid is empty or malformed")
+        return False
+
+    height = len(grid)
+    width = len(grid[0])
+    #print(f"✔️ Grid dimensions: height={height}, width={width}")
+    if height < 3 or width < 3:
+        #print("❌ Grid too small to have border + inner content")
+        return False
+
+    # Check that all borders are the same color and constant
+    top = grid[0]
+    bottom = grid[-1]
+    left = [row[0] for row in grid]
+    right = [row[-1] for row in grid]
+
+    #print(f"Top border: {top}")
+    #print(f"Bottom border: {bottom}")
+    #print(f"Left border: {left}")
+    #print(f"Right border: {right}")
+
+    if not (all(c == top[0] for c in top) and
+            all(c == bottom[0] for c in bottom) and
+            all(c == left[0] for c in left) and
+            all(c == right[0] for c in right)):
+        #print("❌ Not all border lines are constant")
+        return False
+
+    border_color = top[0]
+    if not (border_color == bottom[0] == left[0] == right[0]):
+        #print("❌ Border colors are not consistent")
+        return False
+
+    #print(f"✔️ Border color: {border_color}")
+
+    # Extract inner lines adjacent to the border
+    inner_top = grid[1][1:-1]
+    inner_bottom = grid[-2][1:-1]
+    inner_left = [grid[y][1] for y in range(1, height - 1)]
+    inner_right = [grid[y][-2] for y in range(1, height - 1)]
+
+    #print(f"Inner top line: {inner_top}")
+    #print(f"Inner bottom line: {inner_bottom}")
+    #print(f"Inner left line: {inner_left}")
+    #print(f"Inner right line: {inner_right}")
+
+    def is_different(line): return any(c != border_color for c in line)
+
+    if not (is_different(inner_top) and
+            is_different(inner_bottom) and
+            is_different(inner_left) and
+            is_different(inner_right)):
+        #print("❌ One or more inner lines are not different from border")
+        return False
+
+    #print("✅ Grid has a valid constant border with distinct inner lines")
+    return True
+
 
 ###############################################
 # Main function

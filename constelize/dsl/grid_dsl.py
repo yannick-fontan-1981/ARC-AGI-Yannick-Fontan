@@ -1,6 +1,6 @@
 # grid_dsl.py
-
-from typing import Union, Tuple, List, Sequence, Iterable
+from collections import Counter
+from typing import Union, Tuple, List, Sequence, Iterable, Optional
 import json
 
 from typing import Tuple, List, Union
@@ -28,16 +28,31 @@ def rot90_then_hmirror(grid: Grid) -> Grid:
 def rot90_then_vmirror(grid: Grid) -> Grid:
     return rot90(vmirror(grid))
 
-def zoom(grid: Grid, zoom_x: int, zoom_y: int) -> Grid:
+def zoom(grid: Grid, zoom_x: int|float, zoom_y: int|float) -> Grid:
+    # ensure our zoom factors are integers
+    zoom_x = int(zoom_x)
+    zoom_y = int(zoom_y)
+
     return tuple(
         tuple(pixel for pixel in row for _ in range(zoom_x))
         for row in grid
         for _ in range(zoom_y)
     )
 
-def unzoom(grid: Grid, zoom_x: int, zoom_y: int) -> Grid:
+def unzoom(grid: Grid, zoom_x: int|float, zoom_y: int|float) -> Grid:
+    # ensure our zoom factors are integers
+    zoom_x = int(zoom_x)
+    zoom_y = int(zoom_y)
+
+    # guard against zero or negative zooms
+    if zoom_x <= 0 or zoom_y <= 0:
+        # could also raise a more specific error here,
+        # but we'll just treat it as 'no unzoom'
+        return grid
+
     rows = len(grid)
-    cols = len(grid[0])
+    cols = len(grid[0]) if rows else 0
+
     orig_rows = rows // zoom_y
     orig_cols = cols // zoom_x
 
@@ -45,10 +60,10 @@ def unzoom(grid: Grid, zoom_x: int, zoom_y: int) -> Grid:
     for y in range(orig_rows):
         row = []
         for x in range(orig_cols):
-            # prendre le pixel en haut à gauche du bloc comme représentant
+            # take the top‐left pixel of each zoom‐block
             val = grid[y * zoom_y][x * zoom_x]
             row.append(val)
-        unzoomed.append(tuple(row))  # ou list(row) selon format
+        unzoomed.append(tuple(row))
     return tuple(unzoomed)
 
 def shift(grid: Grid, di: int, dj: int) -> Grid:
@@ -134,7 +149,6 @@ def shift_with_background(
     return tuple(tuple(row) for row in new_grid)
 
 def shift_sprite_with_background(
-    grid: Grid,
     patch: Grid,
     patch_min_x: int,
     patch_min_y: int,
@@ -142,10 +156,11 @@ def shift_sprite_with_background(
     move_rel_y: int,
     new_pos_x: int,
     new_pos_y: int,
-    background_color: int
+    background_color: int,
+    grid: Optional[Grid] = None
 ) -> Grid:
     """
-    Move a sprite patch within `grid`:
+    Move a sprite patch within `grid` (optional):
 
     1) If background_color >= 0: erase original patch pixels (at patch_min_x/patch_min_y)
        by filling them with background_color.
@@ -153,9 +168,18 @@ def shift_sprite_with_background(
        - If background_color < 0 → place absolutely at (new_pos_x + j, new_pos_y + i)
        - Else → place relatively at ((patch_min_x + j) + move_rel_x, (patch_min_y + i) + move_rel_y)
     """
-    rows = len(grid)
-    cols = len(grid[0]) if rows else 0
-    buf: List[List[int]] = [list(r) for r in grid]
+    if grid is None:
+        # Use shrinkable canvas and mark for shrinking at the end
+        raw_canvas = makeShrinkableCanvas()
+        buf: List[List[int]] = [list(row) for row in raw_canvas]
+        using_shrinkable = True
+    else:
+        # Convert provided grid (usually tuple of tuples) into mutable list of lists
+        buf: List[List[int]] = [list(row) for row in grid]
+        using_shrinkable = False
+
+    rows = len(buf)
+    cols = len(buf[0]) if rows else 0
     h = len(patch)
     w = len(patch[0]) if h else 0
 
@@ -193,7 +217,9 @@ def shift_sprite_with_background(
                     if 0 <= y < rows and 0 <= x < cols:
                         buf[y][x] = val
 
-    return tuple(tuple(row) for row in buf)
+    result = tuple(tuple(row) for row in buf)
+    return shrinkCanvas(result) if using_shrinkable else result
+
 
 def normalize(grid: Grid) -> Grid:
     rows, cols = len(grid), len(grid[0])
@@ -221,18 +247,42 @@ def normalize(grid: Grid) -> Grid:
 
     return tuple(tuple(row) for row in new_grid)
 
+def makeShrinkableCanvas(size: int = 30) -> Grid:
+    """
+    Generate a square canvas of given size filled with -1 (unpainted).
+    """
+    return tuple(tuple(-1 for _ in range(size)) for _ in range(size))
 
-def paint(base: Grid, patch: Grid, top_left: Tuple[int, int]) -> Grid:
-    #print("base")
-    #print(base)
-    #print("patch")
-    #print(patch)
-    #print("top_left")
-    #print(top_left)
 
+def shrinkCanvas(canvas: Grid) -> Grid:
+    """
+    Remove empty bottom rows and rightmost columns (all -1) from the canvas.
+    """
+    # Convert to mutable rows
+    rows = [list(r) for r in canvas]
+    max_row = -1
+    max_col = -1
+    for i, row in enumerate(rows):
+        for j, val in enumerate(row):
+            if val != -1:
+                max_row = max(max_row, i)
+                max_col = max(max_col, j)
+    # If nothing painted, return a 1x1 canvas of -1
+    if max_row < 0 or max_col < 0:
+        return ((-1,),)
+    # Slice off unused bottom rows and right columns
+    cropped = [tuple(row[:max_col + 1]) for row in rows[:max_row + 1]]
+    return tuple(cropped)
+
+def most_common_color(grid: Grid) -> int:
+    flat = [cell for row in grid for cell in row if cell != -1]
+    if not flat:
+        return -1
+    return Counter(flat).most_common(1)[0][0]
+
+def paint(base: Grid, patch: Grid, top_left: Tuple[int, int], bg_color: int = -1) -> Grid:
     bi, bj = top_left
 
-    # If either coordinate is None (or not an int), just skip painting:
     if not isinstance(bi, int) or not isinstance(bj, int):
         print(f"⚠️ paint: invalid top_left={top_left!r}, skipping patch")
         return base
@@ -242,9 +292,9 @@ def paint(base: Grid, patch: Grid, top_left: Tuple[int, int]) -> Grid:
     for i in range(len(patch)):
         for j in range(len(patch[0])):
             val = patch[i][j]
-            if val != -1:
-                if 0 <= bi + i < len(result) and 0 <= bj + j < len(result[0]):
-                    result[bi + i][bj + j] = val
+            paint_val = bg_color if val == -1 else val
+            if 0 <= bi + i < len(result) and 0 <= bj + j < len(result[0]):
+                result[bi + i][bj + j] = paint_val
 
     return tuple(tuple(row) for row in result)
 
@@ -431,3 +481,42 @@ def fill_grid(mask: Grid, color: int) -> Grid:
         filled_rows.append(filled_row)
     # Convert list of rows to a Grid (tuple of tuples)
     return tuple(filled_rows)
+
+if __name__ == '__main__':
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[0, [1, 9]], [4, [0, 11]], [2, [1, 3]], [4, [1, 0]], [4, [1, 6]], [0, [0, 2]], [2, [1, 2]], [0, [1, 4]],
+         [4, [0, 6]], [4, [1, 1]], [2, [0, 8]], [4, [0, 5]], [2, [1, 8]], [2, [0, 3]], [4, [0, 0]], [0, [0, 9]],
+         [4, [1, 11]], [2, [1, 7]], [0, [0, 4]], [4, [1, 10]], [4, [0, 1]], [4, [0, 10]], [4, [1, 5]], [0, [0, 7]]]
+    )))
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[1, [0, 1]], [0, [1, 9]], [1, [0, 10]], [2, [1, 3]], [0, [1, 2]], [1, [1, 10]], [0, [0, 2]], [1, [1, 5]],
+         [0, [1, 4]], [1, [1, 0]], [2, [0, 8]], [1, [0, 11]], [1, [1, 6]], [2, [0, 3]], [1, [0, 6]], [1, [1, 1]],
+         [2, [0, 9]], [0, [1, 7]], [1, [0, 5]], [2, [0, 4]], [1, [0, 0]], [2, [1, 8]], [1, [1, 11]], [0, [0, 7]]]
+    )))
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[1, [2, 0]], [0, [0, 0]], [1, [1, 1]], [0, [1, 2]], [1, [1, 0]], [0, [2, 2]], [1, [2, 1]]]
+    )))
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[0, [4, 5]], [0, [0, 3]], [0, [1, 5]], [0, [4, 0]], [4, [0, 2]], [1, [4, 3]], [0, [1, 0]], [1, [4, 4]],
+         [0, [2, 2]], [0, [0, 5]], [0, [0, 0]], [0, [3, 5]], [0, [2, 3]], [0, [3, 0]], [4, [1, 1]], [1, [3, 3]],
+         [4, [1, 2]], [0, [4, 2]], [1, [3, 4]], [4, [0, 1]]]
+    )))
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[4, [1, 2]], [0, [0, 0]], [4, [0, 2]], [0, [1, 0]], [4, [0, 1]], [4, [1, 1]], [0, [2, 2]]]
+    )))
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[0, [4, 5]], [0, [0, 3]], [0, [1, 5]], [0, [4, 0]], [4, [0, 2]], [1, [4, 3]], [0, [1, 0]], [1, [4, 4]], [0, [2, 2]], [0, [0, 5]], [0, [0, 0]], [0, [3, 5]], [0, [2, 3]], [0, [3, 0]], [4, [1, 1]], [1, [3, 3]], [4, [1, 2]], [0, [4, 2]], [1, [3, 4]], [4, [0, 1]]]
+
+    )))
+    print(grid_to_pretty_string(to_concrete_grid(
+        [[1, [4, 6]], [0, [4, 4]], [4, [1, 13]], [0, [0, 2]], [1, [3, 6]], [0, [3, 7]], [4, [1, 8]], [4, [1, 14]], [0, [4, 14]], [2, [3, 13]], [2, [1, 10]], [4, [1, 3]], [2, [3, 8]], [2, [2, 6]], [4, [0, 8]], [2, [1, 6]], [4, [0, 14]], [0, [0, 5]], [2, [1, 1]], [2, [3, 4]], [2, [2, 2]], [2, [2, 13]], [1, [4, 5]], [4, [0, 4]], [1, [4, 0]], [0, [4, 12]], [1, [4, 1]], [0, [4, 2]], [0, [1, 7]], [0, [3, 2]], [2, [0, 11]], [0, [2, 14]], [2, [4, 8]], [1, [3, 5]], [0, [4, 9]], [0, [0, 12]], [2, [4, 3]], [1, [3, 0]], [0, [3, 12]], [0, [2, 10]], [1, [3, 1]], [4, [1, 9]], [2, [2, 11]], [2, [1, 5]], [1, [3, 11]], [4, [0, 13]], [2, [3, 14]], [4, [1, 4]], [2, [2, 12]], [2, [3, 3]], [2, [1, 0]], [2, [2, 1]], [4, [0, 3]], [2, [3, 9]], [2, [2, 7]], [4, [0, 9]], [0, [0, 0]], [0, [1, 2]], [2, [2, 8]], [2, [1, 11]], [0, [2, 9]], [2, [2, 3]], [0, [0, 10]], [2, [0, 1]], [0, [2, 4]], [0, [4, 7]], [0, [1, 12]], [1, [4, 10]], [2, [4, 13]], [0, [2, 5]], [1, [3, 10]], [1, [4, 11]], [2, [0, 6]], [0, [2, 0]], [0, [0, 7]]]
+
+    )))
+
+
+
+
+
+
+
+

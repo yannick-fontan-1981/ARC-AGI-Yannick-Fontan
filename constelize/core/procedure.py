@@ -27,6 +27,7 @@ class ActionInstance:
     toRepaint: bool = False
     repaintMinX: int = 0
     repaintMinY: int = 0
+    repaintSuggestedSpriteId: Optional[int] = None
     bufferInstance: "ActionInstance" = None
     END: bool = False
     IN_SEPARATE_RULE: bool = False

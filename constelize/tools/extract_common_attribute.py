@@ -74,13 +74,13 @@ def extract_common_object_grid_action(
                and row.get("testId") == -1
                and row.get(col) == val
         }
-        print(f"    – Testing ({col!r} == {val!r}) on input objects: matches IDs {sorted(matching_ids)!r}")
+        #print(f"    – Testing ({col!r} == {val!r}) on input objects: matches IDs {sorted(matching_ids)!r}")
         if matching_ids == target_set:
             discriminative.append((col, val))
-            print(f"      ✓ {col!r} is discriminative among inputs")
-        else:
-            print(f"      ✗ {col!r} not discriminative (matches {sorted(matching_ids)!r}, target {sorted(target_set)!r})")
-    print(f"  • Final discriminative criteria: {discriminative!r}")
+            #print(f"      ✓ {col!r} is discriminative among inputs")
+        #else:
+            #print(f"      ✗ {col!r} not discriminative (matches {sorted(matching_ids)!r}, target {sorted(target_set)!r})")
+    #print(f"  • Final discriminative criteria: {discriminative!r}")
     if not discriminative:
         print("❌ No discriminative criteria remain → aborting.")
         return None
@@ -702,7 +702,6 @@ def group_similar_sprites_by_attributes(
 
     return groups
 
-
 def find_minimal_selection_criteria_for_table(
     group: Tuple[int, ...],
     all_ids: List[int],
@@ -711,60 +710,53 @@ def find_minimal_selection_criteria_for_table(
 ) -> List[Tuple[str, Any]]:
     """
     Find a minimal set of (column,value) tests that include all group IDs (positives)
-    and exclude all other IDs (negatives), but only searching over columns that
-    are constant in the positives and actually discriminate them from negatives.
+    and exclude all other IDs (negatives), but only over rows where isInsideInput==True.
     """
-    tbl = tables.get(table_key, {})
+    # 1) pull the raw table and filter to input‐side rows only
+    raw = tables.get(table_key, {})
+    tbl = {sid: row for sid, row in raw.items() if row.get("isInsideInput")}
     if not tbl:
         return []
 
-    # split positives/negatives
-    positives = {sid for sid in group if sid is not None}
-    negatives = set(all_ids) - positives
+    ids = set(tbl.keys())
+
+    # 2) split into positives/negatives within input‐side
+    positives = {sid for sid in group if sid in ids}
+    negatives = ids - positives
     if not positives or not negatives:
         return []
 
-    # all columns in the table
+    # 3) find columns constant across the positives
     sample = next(iter(tbl.values()))
     all_cols = list(sample.keys())
+    constant_cols = [
+        col for col in all_cols
+        if len({tbl[sid][col] for sid in positives}) == 1
+    ]
 
-    # 1) keep only columns constant in positives
-    constant_cols = []
-    for col in all_cols:
-        vals = {tbl[sid][col] for sid in positives}
-        if len(vals) == 1:
-            constant_cols.append(col)
-
-    # 2) from those, keep only columns that at least one negative fails
-    discriminating_cols = []
+    # 4) keep only those that discriminate (at least one negative differs)
+    discriminating = []
     for col in constant_cols:
         val = tbl[next(iter(positives))][col]
         if any(tbl[n][col] != val for n in negatives):
-            discriminating_cols.append((col, val))
+            discriminating.append((col, val))
 
-    # if nothing discriminates at all, give up
-    if not discriminating_cols:
+    if not discriminating:
         return []
 
-    # 3) try single‐column criteria first
-    return discriminating_cols
-    #for col, val in discriminating_cols:
-    #    return [(col, val)]
+    # 5) return single‐column criteria
+    return discriminating
 
-    # (Optional) 4) if you really need multi‐column criteria, try pairs
-    #    but only on the small discriminating subset
-    if len(discriminating_cols) > 1:
-        cols_only = [col for col, _ in discriminating_cols]
-        for a, b in combinations(cols_only, 2):
-            # both must be constant in positives
-            v1 = tbl[next(iter(positives))][a]
-            v2 = tbl[next(iter(positives))][b]
-            # check that no negative matches both
-            if all(not (tbl[n][a] == v1 and tbl[n][b] == v2) for n in negatives):
-                return [(a, v1), (b, v2)]
-
-    # fallback: no minimal criteria found
-    return []
+    # (Optional) If you wanted to try pairs as a fallback, you could do:
+    # if len(discriminating) > 1:
+    #     cols = [c for c,_ in discriminating]
+    #     for a, b in combinations(cols, 2):
+    #         v1 = tbl[next(iter(positives))][a]
+    #         v2 = tbl[next(iter(positives))][b]
+    #         if all(not (tbl[n][a]==v1 and tbl[n][b]==v2) for n in negatives):
+    #             return [(a, v1), (b, v2)]
+    #
+    # return []
 
 
 

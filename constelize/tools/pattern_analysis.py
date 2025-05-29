@@ -126,6 +126,9 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                     )
         except Exception as e:
             print(f"❌ SQL test_function failed for {mapping.fact_name}: {e}")
+            traceback.print_exc()
+            tb = traceback.format_exc()
+            print("Full traceback:\n", tb)
 
     conn.close()
     return action_instances
@@ -207,6 +210,31 @@ def compute_buffer_and_repaint(action_instances, ruleId, scenarioId):
                 # update the shared buffer so the next paint sees this change
                 buffer_inst.output_value = rep.output_value
 
+def apply_suggested_defaults(action_instances: List[ActionInstance]) -> None:
+    """
+    Set the value of all unresolved bindings that have a `suggested_default` defined.
+    Works recursively for COMPOUND bindings.
+    """
+    def apply_to_binding(binding: ArgumentBinding):
+        if binding.binding == BindingStatus.UNRESOLVED and hasattr(binding, "suggested_default"):
+            default = getattr(binding, "suggested_default")
+            if default is not None:
+                binding.value = default
+                binding.binding = BindingStatus.CONSTANT
+                print(f"✅ Applied suggested_default={default} to {binding.name}")
+
+        elif binding.binding == BindingStatus.COMPOUND:
+            subs = binding.sub_bindings
+            if isinstance(subs, dict):
+                for sub in subs.values():
+                    apply_to_binding(sub)
+            elif isinstance(subs, list):
+                for sub in subs:
+                    apply_to_binding(sub)
+
+    for inst in action_instances:
+        for binding in inst.bindings.values():
+            apply_to_binding(binding)
 
 def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str, current_rule: Rule) -> List[Procedure]:
     ruleId = current_rule.id
@@ -230,6 +258,8 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
 
     print("\n🔗 Linking by common attributes...")
     action_instances = auto_link_by_common_attribute(action_instances, scenarioId, current_rule)
+
+    apply_suggested_defaults(action_instances)
 
     print("\n🧹 Filtering unresolved bindings...")
     before = len(action_instances)
@@ -478,6 +508,11 @@ def auto_link_by_common_attribute(
 
     # 2) For each path, attempt to extract a common-attribute action
     for path, pairs in trainval_by_path.items():
+        # — if any of these bindings already has a suggested_action, skip it
+        if any(getattr(binding, "suggested_action", None)
+               for consumer, binding in unresolved_by_path[path]):
+            print(f"   ⏭️ Skipping path={path} because a suggested_action is already set")
+            continue
         binding_type = unresolved_by_path[path][0][1].type
         pairs = list(dict.fromkeys(pairs))
         print(f"\n🔍 Resolving path={path} type={binding_type}, value_pairs={pairs}")
@@ -755,23 +790,41 @@ def flatten_binding(binding: ArgumentBinding) -> Tuple[bool, any]:
             all_const = False
     return (all_const, flat_vals)
 
-def create_suggested_action_instances(
+
+def create_suggested_action_instances_old(
     action_instances: List[ActionInstance],
     tables: Dict[str, Dict[int, Dict[str, Any]]],
     scenarioId: str,
     ruleId: str
 ) -> List[ActionInstance]:
     print("🔍 Starting create_suggested_action_instances")
-    # 1) Gather all suggestions, keyed by (action_type → key → trainId)
-    # key is None for selectObjectGridAction, attribute name for the two others.
+
+    # ── helper: recursively freeze dicts/lists into tuples for hashing ──────────
+    def freeze(obj):
+        if isinstance(obj, dict):
+            return tuple((k, freeze(v)) for k, v in sorted(obj.items()))
+        if isinstance(obj, list):
+            return tuple(freeze(x) for x in obj)
+        return obj
+
+    # ── helper: yield every (inst, binding), descending into COMPOUND ─────────
+    def iter_bindings(inst: ActionInstance):
+        stack = list(inst.bindings.values())
+        while stack:
+            b = stack.pop()
+            yield inst, b
+            if b.binding == BindingStatus.COMPOUND:
+                subs = b.sub_bindings
+                stack.extend(subs.values() if isinstance(subs, dict) else subs)
+
+    # 1) Gather suggestions keyed by (action → (thing_id, transform_key) → trainId)
     suggestions_by_action: Dict[
-      str,
-      Dict[Any, Dict[int, Tuple[ActionInstance, ArgumentBinding, int, Any]]]
+        str, Dict[Tuple[Any, Tuple, Any], Dict[int, ...]]
     ] = defaultdict(lambda: defaultdict(dict))
 
     for inst in action_instances:
         tid = inst.trainId
-        for bind in inst.bindings.values():
+        for inst_, bind in iter_bindings(inst):
             action = getattr(bind, "suggested_action", None)
             if action not in {
                 "selectSpriteGridAction",
@@ -781,65 +834,125 @@ def create_suggested_action_instances(
             }:
                 continue
 
-            if action == "selectObjectGridAction":
-                key = None
-                thing_id = getattr(bind, "suggested_object_id")
+            # raw transform spec (may contain lists)
+            raw_transform = getattr(bind, "suggested_transform", {}) or {}
+            # freeze it for use as a hashable key
+            transform_key = freeze(raw_transform)
+            transform = raw_transform  # pass raw lists later to builder
+
+            # determine the sprite/object id and grouping key
+            if action == "selectObjectGridAction" or action == "selectObjectAndAttributeAction":
+                thing_id = bind.suggested_object_id
+                key = (None, transform_key, bind.suggested_attribute)
             else:
-                # both sprite+attribute and object+attribute
-                key = getattr(bind, "suggested_attribute")
-                if action == "selectSpriteAndAttributeAction":
-                    thing_id = getattr(bind, "suggested_sprite_id")
-                else:  # selectObjectAndAttributeAction
-                    thing_id = getattr(bind, "suggested_object_id")
+                thing_id = bind.suggested_sprite_id
+                key = (thing_id, transform_key, bind.suggested_attribute)
 
             suggestions_by_action[action][key][tid] = (
-                inst, bind, inst.testId, thing_id
+                inst_, bind, inst_.testId, thing_id, transform
             )
-            print(f"  – Queued {action} for train {tid} key={key} id={thing_id}")
+            print(f"  – Queued {action} train={tid} key={key} id={thing_id} transform={transform_key}")
 
     new_instances: List[ActionInstance] = []
 
-    # 2) For each action type, handle its groups
+    # 2) Emit one suggested step per group
     for action, groups in suggestions_by_action.items():
-        for key, per_train in groups.items():
+        for (thing_id, transform_key, attribute_name), per_train in groups.items():
             train_ids = sorted(per_train.keys())
-            print(f"\n  • Processing {action!r} (key={key}) for trains {train_ids}")
+            print(f"\n  • Processing {action!r} (thing_id={thing_id}, transform={transform_key}) for trains {train_ids}")
 
-            if action == "selectSpriteAndAttributeAction":
-                # — exactly your existing sprite+attribute code —
+            if action == "selectSpriteGridAction":
+                # build criteria on sprite_analysis (UNCHANGED)
                 group = tuple(per_train[tid][3] for tid in train_ids)
                 all_input_sids = [
                     sid for sid, row in tables["sprite_analysis"].items()
                     if row.get("isInsideInput") == 1
                 ]
                 criteria = find_minimal_selection_criteria_for_table(
-                    group=group, all_ids=all_input_sids,
-                    tables=tables, table_key="sprite_analysis"
+                    group=group,
+                    all_ids=all_input_sids,
+                    tables=tables,
+                    table_key="sprite_analysis"
                 )
-                criteria = [
-                  (c, v) for c, v in criteria
-                  if c not in {"trainId","testId","isInsideInput","isInsideOutput",
-                               "isInsideTrain","isInsideTest","isFromSplit"}
-                ]
+                # drop metadata columns
+                exclude = {
+                    "trainId","testId",
+                    "isInsideInput","isInsideOutput",
+                    "isInsideTrain","isInsideTest",
+                    "isFromSplit"
+                }
+                criteria = [(c, v) for c, v in criteria if c not in exclude]
+
+                print(f"    ▶️ Criteria: {criteria!r}")
                 if not criteria:
-                    print(f"    ⚠️ no criteria for {key!r}, skipping")
+                    print("    ⚠️ No criteria → skipping")
                     continue
 
                 for tid in train_ids:
-                    inst, bind, test_id, sid = per_train[tid]
-                    value = _aa_mod.select_sprite_and_attribute_fn(
-                        scenarioId, ruleId,
+                    inst, bind, test_id, sid, transform = per_train[tid]
+                    grid_val = _aa_mod.select_sprite_grid_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
                         criteria=criteria,
-                        attribute_name=key,
-                        trainId=tid, testId=test_id
+                        trainId=tid,
+                        testId=test_id,
+                        transform=transform
+                    )
+                    sel = build_select_sprite_grid_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        output_grid=grid_val,
+                        criteria=criteria,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        transform=transform
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    print(f"    ↳ linked {action} step {sel.id}")
+                    new_instances.append(sel)
+
+            elif action == "selectSpriteAndAttributeAction":
+                # unchanged attribute logic, now also pass transform
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                all_input_sids = [
+                    sid for sid, row in tables["sprite_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_sids,
+                    tables=tables,
+                    table_key="sprite_analysis"
+                )
+                criteria = [
+                    (c, v) for c, v in criteria
+                    if c not in {"trainId","testId","isInsideInput","isInsideOutput",
+                                 "isInsideTrain","isInsideTest","isFromSplit"}
+                ]
+                if not criteria:
+                    print("    ⚠️ no attribute criteria → skipping")
+                    continue
+
+                for tid in train_ids:
+                    inst, bind, test_id, sid, transform = per_train[tid]
+                    value = _aa_mod.select_sprite_and_attribute_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        attribute_name=attribute_name,
+                        trainId=tid,
+                        testId=test_id
                     )
                     sel = build_select_sprite_and_attribute_instance(
-                        trainId=tid, testId=test_id,
+                        trainId=tid,
+                        testId=test_id,
                         binding_type="Integer",
                         output_value=value,
                         criteria=criteria,
-                        attribute_name=key,
-                        scenarioId=scenarioId, ruleId=ruleId
+                        attribute_name=attribute_name,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
                     )
                     bind.binding = BindingStatus.VARIABLE
                     bind.source_procedure_id = sel.id
@@ -847,33 +960,27 @@ def create_suggested_action_instances(
                     new_instances.append(sel)
 
             elif action == "selectObjectGridAction":
-                # 2a) gather the object‐IDs your bindings suggested
+                # unchanged
                 group = tuple(per_train[tid][3] for tid in train_ids)
-                print(f"    ▶️ Positive object‐ID group: {group}")
-                # 2b) all objects seen in any input
                 all_input_oids = [
                     oid for oid, row in tables["object_analysis"].items()
                     if row.get("isInsideInput") == 1
                 ]
-                print(f"    ▶️ Negative pool (all input object‐IDs): {all_input_oids}")
-                # 2c) find minimal discrimination criteria in object_analysis
                 criteria = find_minimal_selection_criteria_for_table(
                     group=group,
                     all_ids=all_input_oids,
                     tables=tables,
                     table_key="object_analysis"
                 )
-                # filter out your standard metadata columns:
-                exclude = {"trainId", "testId", "isInsideInput", "isInsideOutput",
-                           "isInsideTrain", "isInsideTest", "isFromSplit"}
-                criteria = [(c, v) for c, v in criteria if c not in exclude]
-                print(f"    ▶️ Object‐grid criteria: {criteria!r}")
+                criteria = [(c, v) for c, v in criteria
+                            if c not in {"trainId","testId","isInsideInput","isInsideOutput",
+                                         "isInsideTrain","isInsideTest","isFromSplit"}]
                 if not criteria:
-                    print("    ⚠️ No discriminating criteria for object‐grid → skipping")
+                    print("    ⚠️ no object-grid criteria → skipping")
                     continue
-                # 2d) for each train, fetch & build the selectObjectGrid instance
+
                 for tid in train_ids:
-                    inst, bind, test_id, _oid = per_train[tid]
+                    inst, bind, test_id, oid, transform = per_train[tid]
                     grid_val = _aa_mod.select_object_grid_fn(
                         scenarioId=scenarioId,
                         ruleId=ruleId,
@@ -891,102 +998,36 @@ def create_suggested_action_instances(
                     )
                     bind.binding = BindingStatus.VARIABLE
                     bind.source_procedure_id = sel.id
-                    print(f"    ↳ linked object‐grid step {sel.id} {inst.id}")
-                    new_instances.append(sel)
-
-            elif action == "selectSpriteGridAction":
-                # — very much like selectObjectGridAction, but on sprite_analysis —
-                # 2a) collect the sprite‐IDs your bindings suggested
-                group = tuple(per_train[tid][3] for tid in train_ids)
-                print(f"    ▶️ Positive sprite‐ID group: {group}")
-
-                # 2b) negative pool = all sprites seen in any input
-                all_input_sids = [
-                    sid for sid, row in tables["sprite_analysis"].items()
-                    if row.get("isInsideInput") == 1
-                ]
-                print(f"    ▶️ Negative pool (all input sprite‐IDs): {all_input_sids}")
-
-                # 2c) find minimal criteria that picks out exactly your group
-                criteria = find_minimal_selection_criteria_for_table(
-                    group=group,
-                    all_ids=all_input_sids,
-                    tables=tables,
-                    table_key="sprite_analysis"
-                )
-                # drop the usual metadata columns
-                exclude = {
-                    "trainId", "testId",
-                    "isInsideInput", "isInsideOutput",
-                    "isInsideTrain", "isInsideTest",
-                    "isFromSplit"
-                }
-                criteria = [(c, v) for c, v in criteria if c not in exclude]
-                print(f"    ▶️ Sprite‐grid criteria: {criteria!r}")
-                if not criteria:
-                    print("    ⚠️ No discriminating criteria for sprite‐grid → skipping")
-                    continue
-
-                # 2d) for each train, build a selectSpriteGridAction
-                for tid in train_ids:
-                    inst, bind, test_id, _sid = per_train[tid]
-                    grid_val = _aa_mod.select_sprite_grid_fn(
-                        scenarioId=scenarioId,
-                        ruleId=ruleId,
-                        criteria=criteria,
-                        trainId=tid,
-                        testId=test_id
-                    )
-                    sel = build_select_sprite_grid_instance(
-                        trainId=tid,
-                        testId=test_id,
-                        output_grid=grid_val,
-                        criteria=criteria,
-                        scenarioId=scenarioId,
-                        ruleId=ruleId
-                    )
-                    bind.binding = BindingStatus.VARIABLE
-                    bind.source_procedure_id = sel.id
-                    print(f"    ↳ linked sprite‐grid step {sel.id} to {inst.id}")
+                    print(f"    ↳ linked object-grid step {sel.id}")
                     new_instances.append(sel)
 
             elif action == "selectObjectAndAttributeAction":
-                # a) build the positive group of object‐IDs for this attribute
+                # unchanged
                 group = tuple(per_train[tid][3] for tid in train_ids)
-                print(f"    ▶️ Positive object-ID group for `{key}`: {group}")
-                # b) build the negative pool: all object-IDs seen in any input
                 all_input_oids = [
                     oid for oid, row in tables["object_analysis"].items()
                     if row.get("isInsideInput") == 1
                 ]
-                print(f"    ▶️ Negative pool (all input object-IDs): {all_input_oids}")
-                # c) find minimal discriminating criteria over object_analysis
                 criteria = find_minimal_selection_criteria_for_table(
                     group=group,
                     all_ids=all_input_oids,
                     tables=tables,
                     table_key="object_analysis"
                 )
-                # drop metadata cols
-                exclude = {
-                    "trainId", "testId",
-                    "isInsideInput", "isInsideOutput",
-                    "isInsideTrain", "isInsideTest",
-                    "isFromSplit"
-                }
-                criteria = [(c, v) for c, v in criteria if c not in exclude]
-                print(f"    ▶️ Discrimination criteria for `{key}`: {criteria!r}")
+                criteria = [(c, v) for c, v in criteria
+                            if c not in {"trainId","testId","isInsideInput","isInsideOutput",
+                                         "isInsideTrain","isInsideTest","isFromSplit"}]
                 if not criteria:
-                    print(f"    ⚠️ No discriminating criteria for `{key}` → skipping")
+                    print("    ⚠️ no object-attr criteria → skipping")
                     continue
-                # d) for each train, fetch & build the selectObjectAndAttribute instance
+
                 for tid in train_ids:
-                    inst, bind, test_id, _oid = per_train[tid]
+                    inst, bind, test_id, oid, transform = per_train[tid]
                     value = _aa_mod.select_object_and_attribute_fn(
                         scenarioId=scenarioId,
                         ruleId=ruleId,
                         criteria=criteria,
-                        attribute_name=key,
+                        attribute_name=bind.suggested_attribute,
                         trainId=tid,
                         testId=test_id
                     )
@@ -996,11 +1037,10 @@ def create_suggested_action_instances(
                         binding_type="Integer",
                         output_value=value,
                         criteria=criteria,
-                        attribute_name=key,
+                        attribute_name=bind.suggested_attribute,
                         scenarioId=scenarioId,
                         ruleId=ruleId
                     )
-                    # link it back
                     bind.binding = BindingStatus.VARIABLE
                     bind.source_procedure_id = sel.id
                     print(f"    ↳ linked object-attr step {sel.id}")
@@ -1008,6 +1048,261 @@ def create_suggested_action_instances(
 
     print(f"\n✅ Generated {len(new_instances)} suggested steps")
     return new_instances
+
+
+def create_suggested_action_instances(
+    action_instances: List[ActionInstance],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    scenarioId: str,
+    ruleId: str
+) -> List[ActionInstance]:
+    print("🔍 Starting create_suggested_action_instances")
+
+    def freeze(obj):
+        if isinstance(obj, dict):
+            return tuple((k, freeze(v)) for k, v in sorted(obj.items()))
+        if isinstance(obj, list):
+            return tuple(freeze(x) for x in obj)
+        return obj
+
+    def iter_bindings(inst: ActionInstance):
+        stack = list(inst.bindings.values())
+        while stack:
+            b = stack.pop()
+            yield inst, b
+            if b.binding == BindingStatus.COMPOUND:
+                subs = b.sub_bindings
+                stack.extend(subs.values() if isinstance(subs, dict) else subs)
+
+    suggestions_by_action: Dict[
+        str, Dict[Tuple[Any, Tuple, Any], Dict[int, ...]]
+    ] = defaultdict(lambda: defaultdict(dict))
+
+    for inst in action_instances:
+        tid = inst.trainId
+        for inst_, bind in iter_bindings(inst):
+            action = getattr(bind, "suggested_action", None)
+            if action not in {
+                "selectSpriteGridAction",
+                "selectSpriteAndAttributeAction",
+                "selectObjectGridAction",
+                "selectObjectAndAttributeAction"
+            }:
+                continue
+
+            raw_transform = getattr(bind, "suggested_transform", {}) or {}
+            transform_key = freeze(raw_transform)
+            transform = raw_transform
+
+            if action in {"selectObjectGridAction", "selectObjectAndAttributeAction"}:
+                thing_id = bind.suggested_object_id
+                key = (None, transform_key, bind.suggested_attribute)
+            else:
+                thing_id = bind.suggested_sprite_id
+                key = (thing_id, transform_key, bind.suggested_attribute)
+
+            suggestions_by_action[action][key][tid] = (
+                inst_, bind, inst_.testId, thing_id, transform
+            )
+            print(f"  – Queued {action} train={tid} key={key} id={thing_id} transform={transform_key}")
+
+    new_instances: List[ActionInstance] = []
+
+    for action, groups in suggestions_by_action.items():
+        for (thing_id, transform_key, attribute_name), per_train in groups.items():
+            train_ids = sorted(per_train.keys())
+            print(f"\n  • Processing {action!r} (thing_id={thing_id}, transform={transform_key}) for trains {train_ids}")
+
+            if action == "selectSpriteGridAction":
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                all_input_sids = [sid for sid, row in tables["sprite_analysis"].items() if row.get("isInsideInput") == 1]
+                criteria = find_minimal_selection_criteria_for_table(group=group, all_ids=all_input_sids, tables=tables, table_key="sprite_analysis")
+                exclude = {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest", "isFromSplit"}
+                criteria = [(c, v) for c, v in criteria if c not in exclude]
+                print(f"    ▶️ Criteria: {criteria!r}")
+                if not criteria:
+                    print("    ⚠️ No criteria → skipping")
+                    continue
+
+                for tid in train_ids:
+                    inst, bind, test_id, sid, transform = per_train[tid]
+                    grid_val = _aa_mod.select_sprite_grid_fn(scenarioId=scenarioId, ruleId=ruleId, criteria=criteria, trainId=tid, testId=test_id, transform=transform)
+                    sel = build_select_sprite_grid_instance(trainId=tid, testId=test_id, output_grid=grid_val, criteria=criteria, scenarioId=scenarioId, ruleId=ruleId, transform=transform)
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    new_instances.append(sel)
+
+                    for other_inst in action_instances:
+                        for _, other_bind in iter_bindings(other_inst):
+                            if (
+                                other_bind.binding == BindingStatus.UNRESOLVED and
+                                getattr(other_bind, "suggested_action", None) == action and
+                                getattr(other_bind, "suggested_sprite_id", None) == thing_id and
+                                freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
+                                getattr(other_bind, "suggested_attribute", None) == attribute_name
+                            ):
+                                other_bind.binding = BindingStatus.VARIABLE
+                                other_bind.source_procedure_id = sel.id
+
+            elif action == "selectSpriteAndAttributeAction":
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                all_input_sids = [sid for sid, row in tables["sprite_analysis"].items() if row.get("isInsideInput") == 1]
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_sids,
+                    tables=tables,
+                    table_key="sprite_analysis"
+                )
+                criteria = [(c, v) for c, v in criteria if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest", "isFromSplit"}]
+                if not criteria:
+                    print("    ⚠️ no attribute criteria → skipping")
+                    continue
+
+                for tid in train_ids:
+                    inst, bind, test_id, sid, transform = per_train[tid]
+                    value = _aa_mod.select_sprite_and_attribute_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        attribute_name=attribute_name,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_sprite_and_attribute_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        binding_type="Integer",
+                        output_value=value,
+                        criteria=criteria,
+                        attribute_name=attribute_name,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    new_instances.append(sel)
+
+                    for other_inst in action_instances:
+                        for _, other_bind in iter_bindings(other_inst):
+                            if (
+                                other_bind.binding == BindingStatus.UNRESOLVED and
+                                getattr(other_bind, "suggested_action", None) == action and
+                                getattr(other_bind, "suggested_sprite_id", None) == thing_id and
+                                freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
+                                getattr(other_bind, "suggested_attribute", None) == attribute_name
+                            ):
+                                other_bind.binding = BindingStatus.VARIABLE
+                                other_bind.source_procedure_id = sel.id
+
+            elif action == "selectObjectGridAction":
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                all_input_oids = [oid for oid, row in tables["object_analysis"].items() if row.get("isInsideInput") == 1]
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_oids,
+                    tables=tables,
+                    table_key="object_analysis"
+                )
+                criteria = [(c, v) for c, v in criteria if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest", "isFromSplit"}]
+                if not criteria:
+                    print("    ⚠️ no object-grid criteria → skipping")
+                    continue
+
+                for tid in train_ids:
+                    inst, bind, test_id, oid, transform = per_train[tid]
+                    grid_val = _aa_mod.select_object_grid_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_object_grid_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        output_grid=grid_val,
+                        criteria=criteria,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    new_instances.append(sel)
+
+                    for other_inst in action_instances:
+                        for _, other_bind in iter_bindings(other_inst):
+                            if (
+                                other_bind.binding == BindingStatus.UNRESOLVED and
+                                getattr(other_bind, "suggested_action", None) == action and
+                                getattr(other_bind, "suggested_object_id", None) == thing_id and
+                                freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
+                                getattr(other_bind, "suggested_attribute", None) == attribute_name
+                            ):
+                                other_bind.binding = BindingStatus.VARIABLE
+                                other_bind.source_procedure_id = sel.id
+
+            elif action == "selectObjectAndAttributeAction":
+                group = tuple(per_train[tid][3] for tid in train_ids)
+                all_input_oids = [
+                    oid for oid, row in tables["object_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_oids,
+                    tables=tables,
+                    table_key="object_analysis"
+                )
+                criteria = [(c, v) for c, v in criteria
+                            if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput",
+                                         "isInsideTrain", "isInsideTest", "isFromSplit"}]
+                if not criteria:
+                    print("    ⚠️ no object-attr criteria → skipping")
+                    continue
+
+                for tid in train_ids:
+                    inst, bind, test_id, oid, transform = per_train[tid]
+                    value = _aa_mod.select_object_and_attribute_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        attribute_name=bind.suggested_attribute,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_object_and_attribute_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        binding_type="Integer",
+                        output_value=value,
+                        criteria=criteria,
+                        attribute_name=bind.suggested_attribute,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId
+                    )
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    new_instances.append(sel)
+
+                    for other_inst in action_instances:
+                        for _, other_bind in iter_bindings(other_inst):
+                            if (
+                                other_bind.binding == BindingStatus.UNRESOLVED and
+                                getattr(other_bind, "suggested_action", None) == action and
+                                getattr(other_bind, "suggested_object_id", None) == thing_id and
+                                freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
+                                getattr(other_bind, "suggested_attribute", None) == attribute_name
+                            ):
+                                other_bind.binding = BindingStatus.VARIABLE
+                                other_bind.source_procedure_id = sel.id
+
+    print(f"\n✅ Generated {len(new_instances)} suggested steps")
+    return new_instances
+
+
+
+
+
 
 def auto_find_constant_for_signature(action_instances: List[ActionInstance]) -> None:
     """

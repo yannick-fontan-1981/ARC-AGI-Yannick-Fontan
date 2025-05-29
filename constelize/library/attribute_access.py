@@ -7,7 +7,8 @@ from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
 from constelize.core.procedure import ActionInstance
-from constelize.dsl.grid_dsl import Grid, to_concrete_grid
+from constelize.dsl.grid_dsl import Grid, to_concrete_grid, zoom, rot90, rot270, recolor_sprite, rot180, hmirror, \
+    vmirror, rot90_then_hmirror, rot90_then_vmirror
 
 _values_by_input = {}
 _attributes_by_input_and_values = {}
@@ -68,36 +69,55 @@ def select_sprite_and_attribute_fn(
     testId: int | None = None
 ) -> int | None:
     """
-    Return the attribute value of the sprite whose row best matches your criteria:
-    for each sprite, count how many (attr, val) pairs it satisfies, pick the one
-    with the highest count, and return its attribute_name. If none match anything,
-    or no sprites pass the trainId/testId filter, return None.
+    Return the attribute value of the sprite whose row best matches your criteria.
+    We now weight each match:
+      – +5 if attr == 'sizeOrder' or attr == 'isColorUnique'
+      – +2 if attr.startswith('isTouching')
+      – +1 otherwise
     """
     sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
+
+    # helper to assign a weight per attribute
+    def weight(attr: str) -> int:
+        if attr in ("sizeOrder", "isColorUnique", "colorUniqueOrder", "hasBorder"):
+            return 10
+        if attr.startswith("isTouching"):
+            return 5
+        return 1
+
+    # precompute maximum possible score for debug
+    total_possible = sum(weight(attr) for attr, _ in criteria)
 
     best_sid = None
     best_score = -1
 
     for sid, row in sprite_tbl.items():
-        # apply your train/test filtering
         if trainId is not None and row.get("trainId") != trainId:
             continue
         if testId is not None and row.get("testId") != testId:
             continue
+        if not row.get("isInsideInput", False):
+            continue
 
-        # count how many criteria this row satisfies
-        score = sum(1 for attr, val in criteria if row.get(attr) == val)
+        # compute weighted score
+        score = sum(
+            weight(attr)
+            for attr, val in criteria
+            if row.get(attr) == val
+        )
+
         if score > best_score:
             best_score = score
             best_sid = sid
 
     if best_sid is None or best_score <= 0:
-        # either no candidate or nobody matched any criterion
         return None
 
     # debug info
-    print(f"[BEST MATCH] sprite {best_sid} matched {best_score}/{len(criteria)} criteria "
-          f"→ {attribute_name} = {sprite_tbl[best_sid].get(attribute_name)}")
+    print(
+        f"[BEST MATCH] sprite {best_sid} matched {best_score}/{total_possible} points "
+        f"→ {attribute_name} = {sprite_tbl[best_sid].get(attribute_name)}"
+    )
     return sprite_tbl[best_sid].get(attribute_name)
 
 def select_object_and_attribute_fn(
@@ -126,14 +146,16 @@ def select_object_and_attribute_fn(
             continue
         if testId  is not None and row.get("testId")  != testId:
             continue
+        if not row.get("isInsideInput", False):
+            continue
 
         # 3) Score it by how many criteria it matches,
         #    but give +10 points for sizeOrder matches
         score = 0
         for attr, val in criteria:
             if row.get(attr) == val:
-                if attr == "sizeOrder" or attr == "isColorUnique":
-                    score += 5
+                if attr == "sizeOrder" or attr == "isColorUnique" or attr == "colorUniqueOrder":
+                    score += 10
                 else:
                     score += 1
 
@@ -152,14 +174,51 @@ def select_object_and_attribute_fn(
           f"{attribute_name} = {result}")
     return result
 
+def apply_transform_to_grid(
+    grid: Grid,
+    transform: dict
+) -> Grid:
+    """
+    Given a dense grid and a transform spec, apply:
+      1) one of the geometric ops (rotate or flip)
+      2) zoom
+      3) recolor
+    """
+    if transform.get("rotated_90"):
+        grid = rot90(grid)
+    elif transform.get("rotated_180"):
+        grid = rot180(grid)
+    elif transform.get("rotated_270"):
+        grid = rot270(grid)
+    elif transform.get("flipped_vert"):
+        grid = hmirror(grid)
+    elif transform.get("flipped_horiz"):
+        grid = vmirror(grid)
+    elif transform.get("flipped_vert_90"):
+        grid = rot90_then_hmirror(grid)
+    elif transform.get("flipped_horiz_90"):
+        grid = rot90_then_vmirror(grid)
 
+    # 2) zoom
+    zx = transform.get("zoom_x", 1)
+    zy = transform.get("zoom_y", 1)
+    if zx != 1 or zy != 1:
+        grid = zoom(grid, zx, zy)
+
+    # 3) recolor
+    recolor_pairs = transform.get("recolored", [])
+    if recolor_pairs:
+        grid = recolor_sprite(grid, recolor_pairs)
+
+    return grid
 
 def select_sprite_grid_fn(
     scenarioId: str,
     ruleId:     str,
     criteria:   List[Tuple[str, int]],
     trainId:    int | None = None,
-    testId:     int | None = None
+    testId:     int | None = None,
+    transform:  dict | None = None
 ) -> Grid | None:
     """
     Find the sprite whose row maximizes the number of (attr==val) hits in `criteria`,
@@ -177,12 +236,21 @@ def select_sprite_grid_fn(
             continue
         if testId  is not None and row.get("testId")  != testId:
             continue
+        if not row.get("isInsideInput", False):
+            continue
 
         # count how many criteria this row satisfies
         score = 0
         for attr, val in criteria:
             if row.get(attr) == val:
-                score += 1
+                if attr == "isGrid" or attr == "hasBorder":
+                    score += 20
+                if attr == "nbColors" or attr == "colorUniqueOrder":
+                    score += 10
+                if attr == "sizeOrder" or attr == "isColorUnique":
+                    score += 5
+                else:
+                    score += 1
 
         # keep the highest‐scoring sprite
         if score > best_score:
@@ -195,7 +263,13 @@ def select_sprite_grid_fn(
         return None
 
     raw = json.loads(sprite_tbl[best_sid]["data"])
-    return to_concrete_grid(raw)
+    grid = to_concrete_grid(raw)
+
+    # apply transform if any
+    if transform:
+        grid = apply_transform_to_grid(grid, transform)
+
+    return grid
 
 
 def select_object_grid_fn(
@@ -222,13 +296,15 @@ def select_object_grid_fn(
             continue
         if testId is not None and row.get("testId") != testId:
             continue
+        if not row.get("isInsideInput", False):
+            continue
 
         # weighted count: sizeOrder matches count for 10, everything else counts for 1
         score = 0
         for attr, val in criteria:
             if row.get(attr) == val:
-                if attr == "sizeOrder" or attr == "isColorUnique":
-                    score += 5
+                if attr == "sizeOrder" or attr == "isColorUnique" or attr == "colorUniqueOrder":
+                    score += 10
                 else:
                     score += 1
 
@@ -398,7 +474,8 @@ ACTIONS = [
         ArgumentBinding("ruleId",     "String",                       binding=BindingStatus.INSTANCE),
         ArgumentBinding("trainId",    "Integer",                      binding=BindingStatus.CONTEXT),
         ArgumentBinding("testId",     "Integer",                      binding=BindingStatus.CONTEXT),
-        ArgumentBinding("criteria",   "List[Tuple[String,Integer]]",  binding=BindingStatus.UNRESOLVED),
+        ArgumentBinding("criteria",   "List[Tuple[String,Integer]]",  binding=BindingStatus.CONSTANT),
+        ArgumentBinding("transform",  "Dict",                         binding=BindingStatus.CONSTANT),
       ],
       output_type="Grid",
       function=select_sprite_grid_fn
