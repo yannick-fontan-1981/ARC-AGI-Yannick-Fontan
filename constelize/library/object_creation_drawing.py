@@ -1,7 +1,7 @@
 from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
-from constelize.dsl.grid_dsl import fill_grid
+from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles
 
 
 def canvas(value: int, dimensions: tuple) -> tuple:
@@ -77,5 +77,17 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=fill_grid
+    ),
+    Action(
+        id="apply_light_cycles",
+        name="apply_light_cycles",
+        description="Apply all detected light cycles to the input grid, producing the output grid.",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="input_grid",    type="Grid",  binding=BindingStatus.INPUT_GRID),
+            ArgumentBinding(name="light_cycles",  type="List",  binding=BindingStatus.CONSTANT)
+        ],
+        output_type="Grid",
+        function=apply_all_cycles
     )
 ]

@@ -1798,7 +1798,7 @@ def is_straight_line(obj):
     i.e., bounding box area == number of cells, and either bh=1 or bw=1.
     """
     bh, bw = shape(obj)
-    if (bh * bw) == len(obj) and (bh == 1 or bw == 1):
+    if 2 <= len(obj) == (bh * bw) and (bh == 1 or bw == 1):
         return True
     return False
 

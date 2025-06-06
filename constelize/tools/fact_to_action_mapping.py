@@ -12,7 +12,7 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
-    shrinkCanvas, zoom
+    shrinkCanvas, zoom, apply_all_cycles
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -2367,6 +2367,183 @@ class MoveSpriteFactToAction(FactToActionMapping):
             END=False
         )
 
+class LightCycleFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("apply_light_cycles", "apply_light_cycles")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        """
+        Return one fact row per trainId (from TRAIN_INPUT_GRIDS), each containing:
+          - trainId
+          - testId = -1
+          - lightCycles: a Python list of dicts, where
+              * pixel_rel is a Python list of [color, [dx,dy]]
+              * common_neighbors and common_rowcol values are frozensets of ints
+        """
+        cursor = conn.execute("SELECT * FROM light_cycle")
+        cols = [d[0] for d in cursor.description]
+        raw_rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        # We now post‐process each raw row so that:
+        #  - row["pixel_rel"]    (a JSON string) → a Python list
+        #  - each "colors_at_*"  (a JSON string) → frozenset(ints)
+        #  - each "colors_in_*"  (a JSON string) → frozenset(ints)
+        #  - We only keep the keys you actually need (id, light_cycle_id, action, etc.)
+        #
+        # In your example, the fields we want to convert are:
+        #     pixel_rel,
+        #     colors_at_north, colors_at_north_east, …, colors_at_north_west,
+        #     colors_in_next_row, colors_in_previous_row, colors_in_next_col, colors_in_previous_col,
+        #     color, direction_x, direction_y, order_idx, action
+        #
+        # Everything else can be dropped (or left as default), but we’ll reconstruct exactly the dict shape you showed.
+
+        def parse_one(row: dict) -> dict:
+            out = {}
+            # copy over simple scalar fields
+            out["id"] = row["id"]
+            out["light_cycle_id"] = row["light_cycle_id"]
+            out["action"] = row["action"]
+            out["direction_x"] = row["direction_x"]
+            out["direction_y"] = row["direction_y"]
+            out["color"] = row["color"]
+            out["order_idx"] = row["order_idx"]
+
+            # 1) pixel_rel: originally stored as a JSON‐string in the SQL table
+            #    Example: "[[-2, [-1, -1]], [-2, [0, -1]], …]"
+            #    We want out["pixel_rel"] to be a Python list, e.g.
+            #       [[-2, [-1,-1]], [-2, [0,-1]], …]
+            try:
+                out["pixel_rel"] = json.loads(row["pixel_rel"])
+            except (TypeError, json.JSONDecodeError):
+                # If pixel_rel was NULL or not a valid JSON string, fallback to empty list
+                out["pixel_rel"] = []
+
+            # 2) common_neighbors: each direction was stored under its own column as a JSON‐string.
+            #    We want a nested dict of frozensets:
+            #       "common_neighbors": {
+            #           "north":       frozenset([...]),
+            #           "north_east":  frozenset([...]),
+            #            …,
+            #           "north_west":  frozenset([...])
+            #       }
+            cn = {}
+            for key in [
+                "colors_at_north",
+                "colors_at_north_east",
+                "colors_at_east",
+                "colors_at_south_east",
+                "colors_at_south",
+                "colors_at_south_west",
+                "colors_at_west",
+                "colors_at_north_west"
+            ]:
+                raw = row.get(key, "[]")
+                try:
+                    lst = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    lst = []
+                # store under the shorter direction name, e.g. "north"
+                dir_name = key.replace("colors_at_", "")
+                cn[dir_name] = frozenset(lst)
+            out["common_neighbors"] = cn
+
+            # 3) common_rowcol: same idea, four columns of JSON‐strings
+            crc = {}
+            for key in [
+                "colors_in_next_row",
+                "colors_in_previous_row",
+                "colors_in_next_col",
+                "colors_in_previous_col"
+            ]:
+                raw = row.get(key, "[]")
+                try:
+                    lst = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    lst = []
+                # shorten the key, e.g. "next_row"
+                short = key.replace("colors_in_", "")
+                crc[short] = frozenset(lst)
+            out["common_rowcol"] = crc
+
+            return out
+
+        all_light_cycles: List[dict] = [parse_one(r) for r in raw_rows]
+
+        # Finally, build one result‐dict per trainId
+        results: List[dict] = []
+        for train_id in TRAIN_INPUT_GRIDS.keys():
+            results.append({
+                "trainId": train_id,
+                "testId": -1,
+                # We want `lightCycles` to be a Python list, not a JSON‐string.
+                # So we pass the list of dicts directly (the framework will serialize if needed).
+                "lightCycles": all_light_cycles
+            })
+
+        return results
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        """
+        Given a fact row with keys 'trainId', 'testId', and 'lightCycles' (JSON string),
+        bind:
+          - input_grid: from TRAIN_INPUT_GRIDS[trainId]
+          - light_cycles: the parsed list of all cycle rows
+        Compute output_value by applying those cycles to input_grid.
+        """
+        train_id = row["trainId"]
+        test_id = row["testId"]
+        light_cycles = row["lightCycles"]  # list of dicts
+
+        # 1) Retrieve the input grid directly from the global dictionary
+        input_grid = TRAIN_INPUT_GRIDS[train_id]
+
+        # 2) Apply all light cycles to produce the final grid
+        output_grid = apply_all_cycles(input_grid, light_cycles)
+
+        #if train_id == 0 :
+        #    print(f"light cycles: ")
+        #    print(light_cycles)
+
+        #print(f"light cycle output_grid for train_id: {train_id}")
+        #print(grid_to_pretty_string(output_grid))
+
+        # 3) Build argument bindings
+        action_template = registry.get_by_id(self.action_id)
+        bindings = {
+            "input_grid": ArgumentBinding(
+                name="input_grid",
+                type="Grid",
+                binding=BindingStatus.INPUT_GRID,
+                value=input_grid
+            ),
+            "light_cycles": ArgumentBinding(
+                name="light_cycles",
+                type="List",
+                binding=BindingStatus.CONSTANT,
+                value=light_cycles
+            )
+        }
+
+        # 4) Construct and return the ActionInstance
+        return ActionInstance(
+            id=f"{self.action_id}_{train_id}#{getUniqueId()}",
+            action=action_template,
+            bindings=bindings,
+            output_var="result_grid",
+            output_value=output_grid,
+            output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
+            trainId=train_id,
+            testId=test_id,
+            isTrain=True,
+            isToOutput=True,
+            END=True
+        )
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -2391,4 +2568,153 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     MoveSpriteFactToAction(),
     CropSpriteFactToAction(),
     FixSymmetryFactToAction(),
+    LightCycleFactToAction(),
 ]
+
+
+
+
+def main():
+    # Example input grid (train_id = 0) as given in your test:
+    input_grid = [
+        [  1,  0,  0,  0,  1,  1,  1,  1,  0,  1,  1,  0,  1,  0,  1,  0,  1,  1,  1 ],
+        [  1,  0,  1,  0,  1,  1,  1,  1,  0,  0,  1,  1,  1,  1,  1,  1,  0,  1,  1 ],
+        [  1,  1,  1,  1,  0,  0,  1,  1,  0,  1,  0,  0,  0,  1,  0,  1,  0,  1,  0 ],
+        [  1,  0,  1,  1,  1,  1,  1,  1,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 ],
+        [  1,  0,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 ],
+        [  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  0,  1,  0,  1,  1,  0,  0,  0,  1 ],
+        [  1,  0,  0,  1,  1,  0,  1,  0,  0,  1,  1,  1,  1,  1,  1,  1,  0,  1,  0 ],
+        [  1,  1,  0,  0,  1,  1,  1,  1,  0,  1,  0,  1,  1,  1,  0,  1,  1,  1,  1 ],
+        [  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 ],  # row 8
+        [  1,  1,  1,  0,  0,  1,  1,  1,  0,  1,  0,  0,  1,  1,  1,  1,  1,  1,  1 ],
+        [  1,  1,  0,  0,  1,  1,  0,  0,  0,  1,  1,  0,  0,  0,  1,  0,  1,  0,  1 ],
+        [  1,  0,  1,  0,  1,  0,  0,  1,  0,  1,  1,  1,  1,  0,  0,  1,  1,  1,  1 ]
+    ]
+
+    # These four “start” rows come from your light_cycle table for train 0:
+    # We parse JSON‐style strings for pixel_rel, neighbor sets, and row/col sets.
+    light_cycles = [
+        {
+            "id": 1,
+            "light_cycle_id": 0,
+            "action": "start",
+            "direction_x": 0,
+            "direction_y": 1,
+            "pixel_rel": json.loads(
+                "[[-2, [-1, -1]], [-2, [0, -1]], [-2, [1, -1]], [0, [0, 0]], [0, [0, 1]], [0, [0, 2]]]"
+            ),
+            "common_neighbors": {
+                "north":        frozenset(json.loads("[-2]")),
+                "north_east":   frozenset(json.loads("[-2]")),
+                "east":         frozenset(json.loads("[-8]")),
+                "south_east":   frozenset(json.loads("[-8]")),
+                "south":        frozenset(json.loads("[0]")),
+                "south_west":   frozenset(json.loads("[-8]")),
+                "west":         frozenset(json.loads("[-8]")),
+                "north_west":   frozenset(json.loads("[-2]"))
+            },
+            "common_rowcol": {
+                "next_row":     frozenset(json.loads("[-8, 0]")),
+                "prev_row":     frozenset(json.loads("[]")),
+                "next_col":     frozenset(json.loads("[-8, 0]")),
+                "prev_col":     frozenset(json.loads("[-8, 0]"))
+            },
+            "color": 2,
+            "order_idx": 0
+        },
+        {
+            "id": 2,
+            "light_cycle_id": 0,
+            "action": "start",
+            "direction_x": 1,
+            "direction_y": 0,
+            "pixel_rel": json.loads(
+                "[[0, [1, -2]], [-2, [-1, -1]], [-2, [-1, 0]], [0, [0, 0]], [0, [1, 0]], [0, [2, 0]], [-2, [-1, 1]]]"
+            ),
+            "common_neighbors": {
+                "north":        frozenset(json.loads("[-8]")),
+                "north_east":   frozenset(json.loads("[-8]")),
+                "east":         frozenset(json.loads("[0]")),
+                "south_east":   frozenset(json.loads("[-8]")),
+                "south":        frozenset(json.loads("[-8]")),
+                "south_west":   frozenset(json.loads("[-2]")),
+                "west":         frozenset(json.loads("[-2]")),
+                "north_west":   frozenset(json.loads("[-2]"))
+            },
+            "common_rowcol": {
+                "next_row":     frozenset(json.loads("[-8, 0]")),
+                "prev_row":     frozenset(json.loads("[-8, 0]")),
+                "next_col":     frozenset(json.loads("[-8, 0]")),
+                "prev_col":     frozenset(json.loads("[]"))
+            },
+            "color": 2,
+            "order_idx": 0
+        },
+        {
+            "id": 3,
+            "light_cycle_id": 0,
+            "action": "start",
+            "direction_x": -1,
+            "direction_y": 0,
+            "pixel_rel": json.loads(
+                "[[-2, [1, -1]], [0, [-2, 0]], [0, [-1, 0]], [0, [0, 0]], [-2, [1, 0]], [-2, [1, 1]]]"
+            ),
+            "common_neighbors": {
+                "north":        frozenset(json.loads("[-8]")),
+                "north_east":   frozenset(json.loads("[-2]")),
+                "east":         frozenset(json.loads("[-2]")),
+                "south_east":   frozenset(json.loads("[-2]")),
+                "south":        frozenset(json.loads("[-8]")),
+                "south_west":   frozenset(json.loads("[-8]")),
+                "west":         frozenset(json.loads("[0]")),
+                "north_west":   frozenset(json.loads("[-8]"))
+            },
+            "common_rowcol": {
+                "next_row":     frozenset(json.loads("[-8, 0]")),
+                "prev_row":     frozenset(json.loads("[-8, 0]")),
+                "next_col":     frozenset(json.loads("[]")),
+                "prev_col":     frozenset(json.loads("[-8, 0]"))
+            },
+            "color": 2,
+            "order_idx": 0
+        },
+        {
+            "id": 4,
+            "light_cycle_id": 0,
+            "action": "start",
+            "direction_x": 0,
+            "direction_y": -1,
+            "pixel_rel": json.loads(
+                "[[0, [0, -2]], [0, [0, -1]], [0, [0, 0]], [-2, [-1, 1]], [-2, [0, 1]], [-2, [1, 1]]]"
+            ),
+            "common_neighbors": {
+                "north":        frozenset(json.loads("[0]")),
+                "north_east":   frozenset(json.loads("[-8]")),
+                "east":         frozenset(json.loads("[-8]")),
+                "south_east":   frozenset(json.loads("[-2]")),
+                "south":        frozenset(json.loads("[-2]")),
+                "south_west":   frozenset(json.loads("[-2]")),
+                "west":         frozenset(json.loads("[-8]")),
+                "north_west":   frozenset(json.loads("[-8]"))
+            },
+            "common_rowcol": {
+                "next_row":     frozenset(json.loads("[]")),
+                "prev_row":     frozenset(json.loads("[-8, 0]")),
+                "next_col":     frozenset(json.loads("[-8, 0]")),
+                "prev_col":     frozenset(json.loads("[-8, 0]"))
+            },
+            "color": 2,
+            "order_idx": 0
+        }
+    ]
+
+    print("=== Running verbose _apply_all_cycles ===")
+    output_grid = apply_all_cycles(input_grid, light_cycles)
+
+    print("\n=== Output Grid ===")
+    for row in output_grid:
+        print(row)
+
+
+if __name__ == "__main__":
+    main()

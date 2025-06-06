@@ -1,6 +1,6 @@
 # grid_dsl.py
 from collections import Counter
-from typing import Union, Tuple, List, Sequence, Iterable, Optional
+from typing import Union, Tuple, List, Sequence, Iterable, Optional, Dict, Any
 import json
 
 from typing import Tuple, List, Union
@@ -481,6 +481,406 @@ def fill_grid(mask: Grid, color: int) -> Grid:
         filled_rows.append(filled_row)
     # Convert list of rows to a Grid (tuple of tuples)
     return tuple(filled_rows)
+
+
+def apply_all_cycles(input_grid: List[List[int]], light_cycles: List[Dict[str, Any]]) -> List[List[int]]:
+    """
+    Verbose version of _apply_all_cycles. Prints every intermediate check.
+
+    1) Group actions by order_idx.
+    2) For each 'start' action:
+         For each (x,y) in grid, check:
+           (a) pixel_rel
+           (b) neighbors with strict -8 logic
+           (c) row/column contexts with strict -8 logic
+         Print each comparison and reason for failure or success.
+    3) Simulate ticks: for each tick, show which actions apply and how each cycle moves/paints.
+    """
+
+    H = len(input_grid)
+    W = len(input_grid[0]) if H > 0 else 0
+
+    # Definition of a Cycle instance
+    class CycleInst:
+        def __init__(self, sx, sy, dx, dy, color, start_tick):
+            self.x = sx
+            self.y = sy
+            self.start = (sx, sy)
+            self.dx = dx
+            self.dy = dy
+            self.color = color
+            self.active = True
+            self.start_tick = start_tick
+
+    instances: List[CycleInst] = []
+    actions_by_tick: Dict[int, List[Dict[str, Any]]] = {}
+
+    # --------------------
+    # 1) Group actions by tick
+    # --------------------
+    #print("=== Grouping actions by 'order_idx' ===")
+    for row in light_cycles:
+        tick = row.get("order_idx", 0)
+        if tick not in actions_by_tick:
+            actions_by_tick[tick] = []
+        actions_by_tick[tick].append(row)
+    #for t, rows in actions_by_tick.items():
+    #    print(f" Tick {t}: {len(rows)} action(s)")
+
+    # --------------------
+    # 2) Find all 'start' positions
+    # --------------------
+    #print("\n=== Searching for 'start' matches ===")
+    for row in light_cycles:
+        if row.get("action") != "start":
+            continue
+
+        # Extract row‐specific data
+        pixel_rel: frozenset = row.get("common_pixel_rel", frozenset())
+        common_neighbors: Dict[str, frozenset] = row.get("common_neighbors", {})
+        common_rowcol:   Dict[str, frozenset] = row.get("common_rowcol", {})
+        dx = row.get("direction_x", 0)
+        dy = row.get("direction_y", 0)
+        color_val = row.get("color")
+        start_tick = row.get("order_idx", 0)
+
+        #print(f"\n--- Processing START action at tick {start_tick}, color={color_val}, dir=({dx},{dy}) ---")
+        #print(f" pixel_rel (size {len(pixel_rel)}):", pixel_rel)
+        #print(f" common_neighbors:", common_neighbors)
+        #print(f" common_rowcol:", common_rowcol)
+
+        # Iterate every cell in the grid
+        for y in range(H):
+            for x in range(W):
+                #print(f"\nChecking candidate (x={x}, y={y}):")
+                ok = True
+
+                # ---- a) Pixel_rel check ----
+                #print("  (a) pixel_rel:")
+                for (cval, (dx_r, dy_r)) in pixel_rel:
+                    xx = x + dx_r
+                    yy = y + dy_r
+                    if 0 <= xx < W and 0 <= yy < H:
+                        actual_c = input_grid[yy][xx]
+                        #print(f"    Offset ({dx_r},{dy_r}) → position ({xx},{yy}), actual={actual_c}, required={cval}")
+                        if actual_c != cval:
+                            #print(f"      fail: actual {actual_c} ≠ required {cval}")
+                            ok = False
+                            break
+                    else:
+                        #print(f"    Offset ({dx_r},{dy_r}) → OOB, treat as -2, required={cval}")
+                        if cval != -2:
+                            #print(f"      fail: required {cval} but OOB")
+                            ok = False
+                            break
+                if not ok:
+                    continue
+                #print("    pixel_rel passed")
+
+                # ---- b) Neighbor checks (full‐ray, treat first-­step‐OOB as {-2}) ----
+                #print("  (b) neighbor checks (scanning entire ray):")
+                for key, (dx_n, dy_n) in {
+                    'north': (0, -1),
+                    'north_east': (1, -1),
+                    'east': (1, 0),
+                    'south_east': (1, 1),
+                    'south': (0, 1),
+                    'south_west': (-1, 1),
+                    'west': (-1, 0),
+                    'north_west': (-1, -1)
+                }.items():
+                    nbr_set = common_neighbors.get(key, frozenset())
+                    #print(f"    Direction '{key}': expected set = {nbr_set}")
+
+                    # (b.i) If empty set, skip constraint
+                    if not nbr_set:
+                        #print("      → empty set: skip entire-ray constraint")
+                        continue
+
+                    # (b.ii) If exactly {-8}, skip (wildcard for whole ray)
+                    if nbr_set == {-8}:
+                        #print("      → set == {-8}: skip entire-ray (wildcard)")
+                        continue
+
+                    # Otherwise, build actual_set along the ray.
+
+                    # First, check if the very first step is OOB:
+                    xx1 = x + dx_n
+                    yy1 = y + dy_n
+                    if not (0 <= xx1 < W and 0 <= yy1 < H):
+                        # First neighbor is out-of-bounds → treat actual_set = {-2}
+                        actual_set = {-2}
+                        #print(f"      → first step to ({xx1},{yy1}) is OOB → actual_set = {{-2}}")
+                    else:
+                        # At least one in-bounds cell; collect along the ray
+                        actual_set = set()
+                        k = 1
+                        while True:
+                            xxk = x + k * dx_n
+                            yyk = y + k * dy_n
+                            if 0 <= xxk < W and 0 <= yyk < H:
+                                c = input_grid[yyk][xxk]
+                                actual_set.add(c)
+                                #print(f"      → at k={k}, pos=({xxk},{yyk}), color={c}")
+                                k += 1
+                            else:
+                                #print(f"      → reached OOB at k={k}, pos=({xxk},{yyk}); stop scanning ray")
+                                break
+
+                    # (b.iii) If -8 ∈ nbr_set (and |nbr_set| > 1),
+                    #           let R = nbr_set \ {-8}, require R ⊆ actual_set
+                    if -8 in nbr_set:
+                        R = set(nbr_set)
+                        R.discard(-8)
+                        #print(f"      → -8 ∈ set, required colors R = {R} (extras allowed)")
+                        if not R.issubset(actual_set):
+                            missing = R - actual_set
+                            #print(f"        fail: missing {missing} from actual_set {actual_set}")
+                            ok = False
+                            break
+                        #print(f"        OK: all required {R} appear in {actual_set}")
+                    else:
+                        # (b.iv) No -8 at all: require exact match
+                        #print(f"      → require exact match: actual_set == {nbr_set}")
+                        if actual_set != set(nbr_set):
+                            #print(f"        fail: actual_set {actual_set} ≠ {nbr_set}")
+                            ok = False
+                            break
+                        #print("        OK: entire-ray exactly matches")
+
+                if not ok:
+                    continue
+                #print("    All full-ray neighbor checks passed")
+
+                # ---- c) Row/column checks ----
+                def actual_row_set(ridx):
+                    if 0 <= ridx < H:
+                        return set(input_grid[ridx])
+                    else:
+                        return {-2}
+
+                def actual_col_set(cidx):
+                    if 0 <= cidx < W:
+                        return {input_grid[r][cidx] for r in range(H)}
+                    else:
+                        return {-2}
+
+                #print("  (c) row/column checks:")
+
+                # prev_row
+                pr_set = common_rowcol.get('prev_row', frozenset())
+                #print(f"    prev_row set = {pr_set}")
+                if pr_set:
+                    if pr_set == {-8}:
+                        actual = actual_row_set(y - 1)
+                        #print(f"      → must be all OOB. actual prev_row = {actual}")
+                        if actual != {-2}:
+                            #print("        fail: prev_row not entirely OOB")
+                            continue
+                        #else:
+                            #print("        OK: prev_row is OOB")
+                    else:
+                        actual = actual_row_set(y - 1)
+                        #print(f"      → actual prev_row = {actual}")
+                        if -8 in pr_set:
+                            R = set(pr_set)
+                            R.discard(-8)
+                            #print(f"      → require R={R} ⊆ actual (extras allowed)")
+                            if not R.issubset(actual):
+                                #print(f"        fail: not all R appear in actual")
+                                continue
+                            #print("        OK: prev_row matches -8+R logic")
+                        else:
+                            #print(f"      → require actual == {pr_set}")
+                            if actual != set(pr_set):
+                                #print(f"        fail: actual {actual} ≠ {pr_set}")
+                                continue
+                            #print("        OK: prev_row matches exactly")
+
+                # next_row
+                nr_set = common_rowcol.get('next_row', frozenset())
+                #print(f"    next_row set = {nr_set}")
+                if nr_set:
+                    if nr_set == {-8}:
+                        actual = actual_row_set(y + 1)
+                        #print(f"      → must be all OOB. actual next_row = {actual}")
+                        if actual != {-2}:
+                            #print("        fail: next_row not entirely OOB")
+                            continue
+                        #else:
+                        #    print("        OK: next_row is OOB")
+                    else:
+                        actual = actual_row_set(y + 1)
+                        #print(f"      → actual next_row = {actual}")
+                        if -8 in nr_set:
+                            R = set(nr_set)
+                            R.discard(-8)
+                            #print(f"      → require R={R} ⊆ actual (extras allowed)")
+                            if not R.issubset(actual):
+                                #print(f"        fail: not all R appear in actual")
+                                continue
+                            #print("        OK: next_row matches -8+R logic")
+                        else:
+                            #print(f"      → require actual == {nr_set}")
+                            if actual != set(nr_set):
+                                #print(f"        fail: actual {actual} ≠ {nr_set}")
+                                continue
+                            #print("        OK: next_row matches exactly")
+
+                # prev_col
+                pc_set = common_rowcol.get('prev_col', frozenset())
+                #print(f"    prev_col set = {pc_set}")
+                if pc_set:
+                    if pc_set == {-8}:
+                        actual = actual_col_set(x - 1)
+                        #print(f"      → must be all OOB. actual prev_col = {actual}")
+                        if actual != {-2}:
+                            #print("        fail: prev_col not entirely OOB")
+                            continue
+                        #else:
+                        #    print("        OK: prev_col is OOB")
+                    else:
+                        actual = actual_col_set(x - 1)
+                        #print(f"      → actual prev_col = {actual}")
+                        if -8 in pc_set:
+                            R = set(pc_set)
+                            R.discard(-8)
+                            #print(f"      → require R={R} ⊆ actual (extras allowed)")
+                            if not R.issubset(actual):
+                                #print(f"        fail: not all R appear in actual")
+                                continue
+                            #print("        OK: prev_col matches -8+R logic")
+                        else:
+                            #print(f"      → require actual == {pc_set}")
+                            if actual != set(pc_set):
+                                #print(f"        fail: actual {actual} ≠ {pc_set}")
+                                continue
+                            #print("        OK: prev_col matches exactly")
+
+                # next_col
+                nc_set = common_rowcol.get('next_col', frozenset())
+                #print(f"    next_col set = {nc_set}")
+                if nc_set:
+                    if nc_set == {-8}:
+                        actual = actual_col_set(x + 1)
+                        #print(f"      → must be all OOB. actual next_col = {actual}")
+                        if actual != {-2}:
+                            #print("        fail: next_col not entirely OOB")
+                            continue
+                        #else:
+                        #    print("        OK: next_col is OOB")
+                    else:
+                        actual = actual_col_set(x + 1)
+                        #print(f"      → actual next_col = {actual}")
+                        if -8 in nc_set:
+                            R = set(nc_set)
+                            R.discard(-8)
+                            #print(f"      → require R={R} ⊆ actual (extras allowed)")
+                            if not R.issubset(actual):
+                                #print(f"        fail: not all R appear in actual")
+                                continue
+                            #print("        OK: next_col matches -8+R logic")
+                        else:
+                            #print(f"      → require actual == {nc_set}")
+                            if actual != set(nc_set):
+                                #print(f"        fail: actual {actual} ≠ {nc_set}")
+                                continue
+                            #print("        OK: next_col matches exactly")
+
+                # If we reach here, all conditions (a), (b), (c) passed
+                #print(f"*** Found START at (x={x}, y={y}), color={color_val}, dir=({dx},{dy}) ***")
+                instances.append(CycleInst(x, y, dx, dy, color_val, start_tick))
+
+    # --------------------
+    # 3) Simulate ticks, showing every move
+    # --------------------
+    #print("\n=== Simulating ticks ===")
+    current_tick = 0
+    max_tick = max(actions_by_tick.keys(), default=0)
+    while True:
+        #print(f"\n-- Tick {current_tick} --")
+        # a) apply non-"start" actions
+        tick_actions = actions_by_tick.get(current_tick, [])
+        #print(f" Applying {len(tick_actions)} action(s) at this tick")
+        for action_row in tick_actions:
+            act = action_row.get("action")
+            if act == "start":
+                #print("  Skipping 'start' at tick")
+                continue
+            sx = action_row.get("start_x")
+            sy = action_row.get("start_y")
+            #print(f"  Action '{act}' for start at ({sx},{sy})")
+            for inst in instances:
+                if inst.start != (sx, sy):
+                    continue
+                #print(f"    → Found instance at {inst.start}, active={inst.active}")
+                if act in ("stop", "land"):
+                    inst.active = False
+                    #print("      → deactivated")
+                elif act == "take-off":
+                    inst.active = True
+                    #print("      → activated")
+                elif act == "rot-left-90":
+                    old = (inst.dx, inst.dy)
+                    inst.dx, inst.dy = -inst.dy, inst.dx
+                    #print(f"      → rotated left 90° from {old} to ({inst.dx},{inst.dy})")
+                elif act == "rot-right-90":
+                    old = (inst.dx, inst.dy)
+                    inst.dx, inst.dy = inst.dy, -inst.dx
+                    #print(f"      → rotated right 90° from {old} to ({inst.dx},{inst.dy})")
+                elif act == "rot-left-45":
+                    old = (inst.dx, inst.dy)
+                    ndx, ndy = inst.dx - inst.dy, inst.dx + inst.dy
+                    mag = max(abs(ndx), abs(ndy)) or 1
+                    inst.dx, inst.dy = ndx // mag, ndy // mag
+                    #print(f"      → rotated left 45° from {old} to ({inst.dx},{inst.dy})")
+                elif act == "rot-right-45":
+                    old = (inst.dx, inst.dy)
+                    ndx, ndy = inst.dx + inst.dy, -inst.dx + inst.dy
+                    mag = max(abs(ndx), abs(ndy)) or 1
+                    inst.dx, inst.dy = ndx // mag, ndy // mag
+                    #print(f"      → rotated right 45° from {old} to ({inst.dx},{inst.dy})")
+                #else:
+                #    print(f"      → (unhandled action '{act}')")
+
+        # b) Move each active instance
+        any_active = False
+        for idx, inst in enumerate(instances):
+            if not inst.active:
+                #print(f"  Instance #{idx} at {inst.start} is inactive; skipping")
+                continue
+            #print(f"  Moving instance #{idx} from ({inst.x},{inst.y}) dir=({inst.dx},{inst.dy})")
+            nx = inst.x + inst.dx
+            ny = inst.y + inst.dy
+            # OOB?
+            if not (0 <= nx < W and 0 <= ny < H):
+                #print(f"    → Next ({nx},{ny}) is OOB; deactivate")
+                inst.active = False
+                continue
+            # Loops back to start?
+            if (nx, ny) == inst.start:
+                #print(f"    → Next ({nx},{ny}) equals start {inst.start}; deactivate")
+                inst.active = False
+                continue
+            # Paint & move
+            #print(f"    → Painting at ({nx},{ny}) with color={inst.color}")
+            input_grid[ny][nx] = inst.color
+            inst.x, inst.y = nx, ny
+            any_active = True
+
+        # c) Termination check
+        if not any_active and current_tick >= max_tick:
+            #print("  No active instances and no future actions → ending simulation")
+            break
+
+        current_tick += 1
+
+    #print("\n=== Final grid after light cycles ===")
+    #for row in input_grid:
+    #    print(" ", row)
+    return input_grid
+
+
 
 if __name__ == '__main__':
     print(grid_to_pretty_string(to_concrete_grid(

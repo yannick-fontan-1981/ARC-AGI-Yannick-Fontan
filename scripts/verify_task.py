@@ -127,9 +127,10 @@ def run_analysis_scripts(
     Optionally override the “filename” each one sees via --name.
     """
     scripts = {
-        "first_sight": os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"),
-        "object"     : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
-        "sprite"     : os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"),
+        "first_sight" : os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"),
+        "object"      : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
+        "sprite"      : os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"),
+        "light_cycle" : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
     }
 
     for which, script_path in scripts.items():
@@ -563,17 +564,17 @@ if __name__ == "__main__":
 
     # Training 3
     #DEFAULT_TASK_ID = "1cf80156"
-    #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
-    #DEFAULT_TASK_ID = "25ff71a9"
+     #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
+     #DEFAULT_TASK_ID = "25ff71a9"
     #DEFAULT_TASK_ID = "0b148d64"
-    #DEFAULT_TASK_ID = "1f85a75f" # 1/2 try to improve crop
+    #DEFAULT_TASK_ID = "1f85a75f" # crop
     #DEFAULT_TASK_ID = "23b5c85d"
     #DEFAULT_TASK_ID = "9ecd008a" # find missing sprite in symmetry
     #DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
     #DEFAULT_TASK_ID = "be94b721" # select greater object (sizeOrder 2 ?)
     #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
     #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
-    DEFAULT_TASK_ID = "c1d99e64" # lightCycle !
+    DEFAULT_TASK_ID = "c1d99e64" # red lightCycle on black line touching both border
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Repeated sprite ?
@@ -637,104 +638,104 @@ if __name__ == "__main__":
 
     # Training 5
     #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
-    #DEFAULT_TASK_ID = "445eab21"
-    #DEFAULT_TASK_ID = "6f8cd79b"
-    #DEFAULT_TASK_ID = "2013d3e2"
-    #DEFAULT_TASK_ID = "41e4d17e"
-    #DEFAULT_TASK_ID = "9565186b"
-    #DEFAULT_TASK_ID = "aedd82e4"
-    #DEFAULT_TASK_ID = "bb43febb"
-    #DEFAULT_TASK_ID = "e98196ab"
-    #DEFAULT_TASK_ID = "f76d97a5"
-    #DEFAULT_TASK_ID = "ce9e57f2"
-    #DEFAULT_TASK_ID = "22eb0ac0"
-    #DEFAULT_TASK_ID = "9f236235"
-    #DEFAULT_TASK_ID = "a699fb00"
+    #DEFAULT_TASK_ID = "445eab21" # create 2x2 object with same color as greater rect
+    #DEFAULT_TASK_ID = "6f8cd79b" # color border, cellular automation or lightCycle ?
+    #DEFAULT_TASK_ID = "2013d3e2" # crop 3x3 with right-bottom at center of sprite
+    #DEFAULT_TASK_ID = "41e4d17e" # pink lightCycle, ground teal, cloud blue
+    #DEFAULT_TASK_ID = "9565186b" # repaint greater object with gray background
+    #DEFAULT_TASK_ID = "aedd82e4" # cellular automation
+    #DEFAULT_TASK_ID = "bb43febb" # fill with red gray block but keep gray border
+    #DEFAULT_TASK_ID = "e98196ab" # gray split line + Superposition with black bg
+    #DEFAULT_TASK_ID = "f76d97a5" # recolor gray in black + invert color
+    #DEFAULT_TASK_ID = "ce9e57f2" # lightCycle step by step with red first
+    #DEFAULT_TASK_ID = "22eb0ac0" # lightCycle between same color
+    #DEFAULT_TASK_ID = "9f236235" # unzoom without split grid + flip horizontal
+    #DEFAULT_TASK_ID = "a699fb00" # cellular automation
 
     # Training 6
-    #DEFAULT_TASK_ID = "46442a0e"
-    #DEFAULT_TASK_ID = "7fe24cdd"
-    #DEFAULT_TASK_ID = "0ca9ddb6"
-    #DEFAULT_TASK_ID = "543a7ed5"
-    #DEFAULT_TASK_ID = "0520fde7"
-    #DEFAULT_TASK_ID = "dae9d2b5"
-    #DEFAULT_TASK_ID = "8d5021e8"
-    #DEFAULT_TASK_ID = "928ad970"
-    #DEFAULT_TASK_ID = "b60334d2"
-    #DEFAULT_TASK_ID = "b94a9452"
-    #DEFAULT_TASK_ID = "d037b0a7"
-    #DEFAULT_TASK_ID = "d0f5fe59"
-    #DEFAULT_TASK_ID = "e3497940"
-    #DEFAULT_TASK_ID = "e9afcf9a"
-    #DEFAULT_TASK_ID = "48d8fb45"
-    #DEFAULT_TASK_ID = "d406998b"
-    #DEFAULT_TASK_ID = "5117e062"
-    #DEFAULT_TASK_ID = "3906de3d"
-    #DEFAULT_TASK_ID = "00d62c1b"
-    #DEFAULT_TASK_ID = "7b6016b9"
-    #DEFAULT_TASK_ID = "67385a82"
-    #DEFAULT_TASK_ID = "a5313dff"
-    #DEFAULT_TASK_ID = "ea32f347"
-    #DEFAULT_TASK_ID = "d631b094"
-    #DEFAULT_TASK_ID = "10fcaaa3"
+    #DEFAULT_TASK_ID = "46442a0e" # sprite composition
+    #DEFAULT_TASK_ID = "7fe24cdd" # sprite composition
+    #DEFAULT_TASK_ID = "0ca9ddb6" # cellular automation
+    #DEFAULT_TASK_ID = "543a7ed5" # fill hole with yellow and draw a border, cellular automation ?
+    #DEFAULT_TASK_ID = "0520fde7" # gray splitter line + superposition: 2 blue = red
+    #DEFAULT_TASK_ID = "dae9d2b5" # superposition: 2 black = black else pink
+    #DEFAULT_TASK_ID = "8d5021e8" # sprite composition
+    #DEFAULT_TASK_ID = "928ad970" # lightCycle ? colorZone ? draw rect inside 4 gray points
+    #DEFAULT_TASK_ID = "b60334d2" # cellular automation
+    #DEFAULT_TASK_ID = "b94a9452" # invert color and shrink
+    #DEFAULT_TASK_ID = "d037b0a7" # lightCycle ? Fluid ? repeat pixel to the bottom
+    #DEFAULT_TASK_ID = "d0f5fe59" # count object = canvas size + diagonal lightCycle
+    #DEFAULT_TASK_ID = "e3497940" # gray splitter + superposition right & left flipped horizontally
+    #DEFAULT_TASK_ID = "e9afcf9a" # lightCycle with jump ?
+    #DEFAULT_TASK_ID = "48d8fb45" # select object under gray pixel
+    #DEFAULT_TASK_ID = "d406998b" # columns recoloring 1/2 starting from right
+    #DEFAULT_TASK_ID = "5117e062" # select sprite with teal + recolor with sprite first color
+    #DEFAULT_TASK_ID = "3906de3d" # gravity up !
+    #DEFAULT_TASK_ID = "00d62c1b" # fill holes with yellow
+    #DEFAULT_TASK_ID = "7b6016b9" # change black to green + fill holes with red
+    #DEFAULT_TASK_ID = "67385a82" # fill block with size > 1 with teal
+    #DEFAULT_TASK_ID = "a5313dff" # fill holes not touching border with blue
+    #DEFAULT_TASK_ID = "ea32f347" # sizeOrder : 1 blue, 2 yellow, 3 red
+    #DEFAULT_TASK_ID = "d631b094" # create object with height 1 and width nb colored pixels
+    #DEFAULT_TASK_ID = "10fcaaa3" # 1) composition 2) cellular automation
 
     # Training 7
-    #DEFAULT_TASK_ID = "007bbfb7"
-    #DEFAULT_TASK_ID = "496994bd"
-    #DEFAULT_TASK_ID = "1f876c06"
-    #DEFAULT_TASK_ID = "05f2a901"
-    #DEFAULT_TASK_ID = "39a8645d"
-    #DEFAULT_TASK_ID = "1b2d62fb"
-    #DEFAULT_TASK_ID = "90c28cc7"
-    #DEFAULT_TASK_ID = "b6afb2da"
-    #DEFAULT_TASK_ID = "b9b7f026"
-    #DEFAULT_TASK_ID = "ba97ae07"
-    #DEFAULT_TASK_ID = "c9f8e694"
-    #DEFAULT_TASK_ID = "d23f8c26"
-    #DEFAULT_TASK_ID = "d5d6de2d"
-    #DEFAULT_TASK_ID = "dbc1a6ce"
-    #DEFAULT_TASK_ID = "ded97339"
-    #DEFAULT_TASK_ID = "ea786f4a"
-    #DEFAULT_TASK_ID = "08ed6ac7"
-    #DEFAULT_TASK_ID = "40853293"
-    #DEFAULT_TASK_ID = "5521c0d9"
-    #DEFAULT_TASK_ID = "f8ff0b80"
-    #DEFAULT_TASK_ID = "85c4e7cd"
-    #DEFAULT_TASK_ID = "d2abd087"
-    #DEFAULT_TASK_ID = "017c7c7b"
-    #DEFAULT_TASK_ID = "363442ee"
-    #DEFAULT_TASK_ID = "5168d44c"
-    #DEFAULT_TASK_ID = "e9614598"
-    #DEFAULT_TASK_ID = "d9fac9be"
+    #DEFAULT_TASK_ID = "007bbfb7" #
+    #DEFAULT_TASK_ID = "496994bd" #
+    #DEFAULT_TASK_ID = "1f876c06" #
+    #DEFAULT_TASK_ID = "05f2a901" #
+    #DEFAULT_TASK_ID = "39a8645d" #
+    #DEFAULT_TASK_ID = "1b2d62fb" #
+    #DEFAULT_TASK_ID = "90c28cc7" #
+    #DEFAULT_TASK_ID = "b6afb2da" #
+    #DEFAULT_TASK_ID = "b9b7f026" #
+    #DEFAULT_TASK_ID = "ba97ae07" #
+    #DEFAULT_TASK_ID = "c9f8e694" #
+    #DEFAULT_TASK_ID = "d23f8c26" #
+    #DEFAULT_TASK_ID = "d5d6de2d" #
+    #DEFAULT_TASK_ID = "dbc1a6ce" #
+    #DEFAULT_TASK_ID = "ded97339" #
+    #DEFAULT_TASK_ID = "ea786f4a" #
+    #DEFAULT_TASK_ID = "08ed6ac7" #
+    #DEFAULT_TASK_ID = "40853293" #
+    #DEFAULT_TASK_ID = "5521c0d9" #
+    #DEFAULT_TASK_ID = "f8ff0b80" #
+    #DEFAULT_TASK_ID = "85c4e7cd" #
+    #DEFAULT_TASK_ID = "d2abd087" #
+    #DEFAULT_TASK_ID = "017c7c7b" #
+    #DEFAULT_TASK_ID = "363442ee" #
+    #DEFAULT_TASK_ID = "5168d44c" #
+    #DEFAULT_TASK_ID = "e9614598" #
+    #DEFAULT_TASK_ID = "d9fac9be" #
 
     # Training 8
-    #DEFAULT_TASK_ID = "e50d258f"
-    #DEFAULT_TASK_ID = "810b9b61"
-    #DEFAULT_TASK_ID = "54d82841"
-    #DEFAULT_TASK_ID = "60b61512"
-    #DEFAULT_TASK_ID = "25d8a9c8"
-    #DEFAULT_TASK_ID = "239be575"
-    #DEFAULT_TASK_ID = "67a423a3"
-    #DEFAULT_TASK_ID = "5c0a986e"
-    #DEFAULT_TASK_ID = "6430c8c4"
-    #DEFAULT_TASK_ID = "94f9d214"
-    #DEFAULT_TASK_ID = "a1570a43"
-    #DEFAULT_TASK_ID = "ce4f8723"
-    #DEFAULT_TASK_ID = "d13f3404"
-    #DEFAULT_TASK_ID = "dc433765"
-    #DEFAULT_TASK_ID = "f2829549"
-    #DEFAULT_TASK_ID = "fafffa47"
-    #DEFAULT_TASK_ID = "fcb5c309"
-    #DEFAULT_TASK_ID = "ff805c23"
-    #DEFAULT_TASK_ID = "e76a88a6"
-    #DEFAULT_TASK_ID = "7c008303"
-    #DEFAULT_TASK_ID = "7f4411dc"
-    #DEFAULT_TASK_ID = "b230c067"
-    #DEFAULT_TASK_ID = "e8593010"
-    #DEFAULT_TASK_ID = "6d75e8bb"
-    #DEFAULT_TASK_ID = "3f7978a0"
-    #DEFAULT_TASK_ID = "1190e5a7"
-    #DEFAULT_TASK_ID = "6e02f1e3"
-    #DEFAULT_TASK_ID = "a61f2674"
+    #DEFAULT_TASK_ID = "e50d258f" #
+    #DEFAULT_TASK_ID = "810b9b61" #
+    #DEFAULT_TASK_ID = "54d82841" #
+    #DEFAULT_TASK_ID = "60b61512" #
+    #DEFAULT_TASK_ID = "25d8a9c8" #
+    #DEFAULT_TASK_ID = "239be575" #
+    #DEFAULT_TASK_ID = "67a423a3" #
+    #DEFAULT_TASK_ID = "5c0a986e" #
+    #DEFAULT_TASK_ID = "6430c8c4" #
+    #DEFAULT_TASK_ID = "94f9d214" #
+    #DEFAULT_TASK_ID = "a1570a43" #
+    #DEFAULT_TASK_ID = "ce4f8723" #
+    #DEFAULT_TASK_ID = "d13f3404" #
+    #DEFAULT_TASK_ID = "dc433765" #
+    #DEFAULT_TASK_ID = "f2829549" #
+    #DEFAULT_TASK_ID = "fafffa47" #
+    #DEFAULT_TASK_ID = "fcb5c309" #
+    #DEFAULT_TASK_ID = "ff805c23" #
+    #DEFAULT_TASK_ID = "e76a88a6" #
+    #DEFAULT_TASK_ID = "7c008303" #
+    #DEFAULT_TASK_ID = "7f4411dc" #
+    #DEFAULT_TASK_ID = "b230c067" #
+    #DEFAULT_TASK_ID = "e8593010" #
+    #DEFAULT_TASK_ID = "6d75e8bb" #
+    #DEFAULT_TASK_ID = "3f7978a0" #
+    #DEFAULT_TASK_ID = "1190e5a7" #
+    #DEFAULT_TASK_ID = "6e02f1e3" #
+    #DEFAULT_TASK_ID = "a61f2674" #
 
     # Training 9

@@ -487,6 +487,98 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
 
     conn.commit()
 
+    # Create the output_diff_object_analysis table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS output_diff_object_analysis (
+        id INTEGER PRIMARY KEY,
+        filename TEXT NOT NULL,
+        trainId INTEGER NOT NULL,
+
+        isBlock BOOLEAN,
+        isZone BOOLEAN,
+
+        color INTEGER,
+        minX INTEGER,
+        minY INTEGER,
+        maxX INTEGER,
+        maxY INTEGER,
+
+        height INTEGER,
+        width INTEGER,
+        ratioWidthHeight REAL,
+        area INTEGER,
+        pixelCount INTEGER,
+        sizeOrder INTEGER,
+        sizeOrderDesc INTEGER,
+        hasOddPixelCount BOOLEAN,
+        hasEvenPixelCount BOOLEAN,
+        areaPerimeter INTEGER,
+        pixelPerimeter INTEGER,
+        ratioPixelsArea REAL,
+
+        isBlack BOOLEAN,
+        isBlue BOOLEAN,
+        isRed BOOLEAN,
+        isGreen BOOLEAN,
+        isYellow BOOLEAN,
+        isGrey BOOLEAN,
+        isFuchsia BOOLEAN,
+        isOrange BOOLEAN,
+        isTeal BOOLEAN,
+        isBrown BOOLEAN,
+
+        isColorUnique BOOLEAN,
+
+        isSquare BOOLEAN,
+        isRectangle BOOLEAN,
+        isLine BOOLEAN,
+        isHorizontal BOOLEAN,
+        isVertical BOOLEAN,
+        diagonalLength REAL,
+
+        sameColorBlocksCount INTEGER,
+        sameColorZonesCount INTEGER,
+
+        distanceFromTopBorder INTEGER,
+        distanceFromBottomBorder INTEGER,
+        distanceFromLeftBorder INTEGER,
+        distanceFromRightBorder INTEGER,
+        minRow INTEGER,
+        minCol INTEGER,
+        maxRow INTEGER,
+        maxCol INTEGER,
+
+        areaCenterX REAL,
+        areaCenterY REAL,
+        massCenterX REAL,
+        massCenterY REAL,
+        isHorizontallyCentered BOOLEAN,
+        isVerticallyCentered BOOLEAN,
+        isCentered BOOLEAN,
+
+        isTouchingTop BOOLEAN,
+        isTouchingBottom BOOLEAN,
+        isTouchingLeft BOOLEAN,
+        isTouchingRight BOOLEAN,
+        isTouchingBorder BOOLEAN,
+
+        isTouchingTopRight BOOLEAN,
+        isTouchingBottomRight BOOLEAN,
+        isTouchingTopLeft BOOLEAN,
+        isTouchingBottomLeft BOOLEAN,
+        isTouchingCorner BOOLEAN,
+
+        isObjectRepeated BOOLEAN,
+
+        isPath BOOLEAN,
+        isTree BOOLEAN,
+
+        data TEXT NOT NULL
+    );
+    """)
+
+    conn.commit()
+
     # Create table: shape
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS shape (
@@ -788,6 +880,41 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         """)
 
     conn.commit()
+    cursor.execute("""
+        CREATE TABLE light_cycle (
+            id                            INTEGER PRIMARY KEY,
+            light_cycle_id                INTEGER       NOT NULL,
+            action                        TEXT          NOT NULL,
+            direction_x                   INTEGER       NOT NULL CHECK(direction_x IN (-1, 0, 1)),
+            direction_y                   INTEGER       NOT NULL CHECK(direction_y IN (-1, 0, 1)),
+            pixel_rel                     TEXT,         -- e.g. JSON or serialized list: [ [color, [posX, posY]], ... ]
+            colors_at_north               TEXT,         -- serialized list of colors (e.g. JSON array or comma-separated)
+            colors_at_north_east          TEXT,
+            colors_at_east                TEXT,
+            colors_at_south_east          TEXT,
+            colors_at_south               TEXT,
+            colors_at_south_west          TEXT,
+            colors_at_west                TEXT,
+            colors_at_north_west          TEXT,
+            colors_in_next_row            TEXT,
+            colors_in_previous_row        TEXT,
+            colors_in_next_col            TEXT,
+            colors_in_previous_col        TEXT,
+            picked_color_type             TEXT          CHECK(picked_color_type IN ('constant', 'posRel', 'posDirRel')),
+            picked_color_pos_rel_x        INTEGER,
+            picked_color_pos_rel_y        INTEGER,
+            picked_color_pos_dir_rel_x    INTEGER,
+            picked_color_pos_dir_rel_y    INTEGER,
+            color                         INTEGER,
+            floor                         TEXT,         -- serialized list of colors (e.g. JSON array or comma-separated)
+            wall                          TEXT,         -- serialized list of colors
+            cloud                         TEXT,         -- serialized list of colors
+            tracing                       BOOLEAN       NOT NULL,
+            order_idx                     INTEGER       NOT NULL,    -- "order" is a reserved word; renamed to order_idx
+            state                         TEXT          CHECK(state IN ('suggested', 'verified'))
+        );
+        """)
+    conn.commit()
 
     # Fetch and print data
     cursor.execute("SELECT * FROM first_sight_analysis LIMIT 1")
@@ -825,6 +952,9 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
 
     cursor.execute("SELECT * FROM sprite_computation LIMIT 1")
     print("sprite_computation in database:", cursor.fetchall())
+
+    cursor.execute("SELECT * FROM light_cycle LIMIT 1")
+    print("light_cycle in database:", cursor.fetchall())
 
     # Save the in-memory database to disk
     save_memory_db_to_disk(conn)

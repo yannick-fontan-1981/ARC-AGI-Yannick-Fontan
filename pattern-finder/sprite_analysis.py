@@ -1384,7 +1384,7 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
     - Then unify holes (non-bg) via objects_with_explicit_bg.
     """
 
-    print(f"[compute_hole_sprites] START filename={filename} trainId={trainId} testId={testId} isInsideInput={isInsideInput}")
+    #print(f"[compute_hole_sprites] START filename={filename} trainId={trainId} testId={testId} isInsideInput={isInsideInput}")
     sprites = []
     seen_bboxes = set()
 
@@ -1428,15 +1428,15 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
     # grid dimensions
     grid_h = len(grid)
     grid_w = len(grid[0]) if grid_h > 0 else 0
-    print(f"[compute_hole_sprites] grid size: height={grid_h}, width={grid_w}")
+    #print(f"[compute_hole_sprites] grid size: height={grid_h}, width={grid_w}")
 
     all_objects = zones(grid)
-    print(f"[compute_hole_sprites] found {len(all_objects)} object(s) in grid")
+    #print(f"[compute_hole_sprites] found {len(all_objects)} object(s) in grid")
 
     for obj_idx, obj in enumerate(all_objects, start=1):
-        print(f"\n[compute_hole_sprites] processing object #{obj_idx}")
+        #print(f"\n[compute_hole_sprites] processing object #{obj_idx}")
         indices = list(toindices(obj))
-        print(f"  - total pixels in object: {len(indices)}")
+        #print(f"  - total pixels in object: {len(indices)}")
         if not indices:
             #print("  -> skip: no indices")
             continue
@@ -1451,18 +1451,18 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
         max_col = max(c for r, c in indices) + 1
         obj_h = max_row - min_row
         obj_w = max_col - min_col
-        print(f"  - bounding box rows {min_row}:{max_row}, cols {min_col}:{max_col} => size {obj_h}×{obj_w}")
+        #print(f"  - bounding box rows {min_row}:{max_row}, cols {min_col}:{max_col} => size {obj_h}×{obj_w}")
 
         subgrid_obj = crop(grid, (min_row, min_col), (obj_h, obj_w))
         obj_bg = color_of(obj)
-        print(f"  - object background color: {obj_bg}")
+        #print(f"  - object background color: {obj_bg}")
 
         # decide which edges are internal to the grid
         top_internal = min_row > 0
         bottom_internal = max_row < grid_h
         left_internal = min_col > 0
         right_internal = max_col < grid_w
-        print(f"  - edges internal? top={top_internal}, bottom={bottom_internal}, left={left_internal}, right={right_internal}")
+        #print(f"  - edges internal? top={top_internal}, bottom={bottom_internal}, left={left_internal}, right={right_internal}")
 
         # remove non-bg blocks from internal edges
         remove_border_colored_blocks_subgrid(
@@ -1482,10 +1482,10 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
             diagonal=True,
             skip_color=obj_bg
         )
-        print(f"  - detected {len(holes)} hole region(s)")
+        #print(f"  - detected {len(holes)} hole region(s)")
 
         for hole_idx, region in enumerate(holes, start=1):
-            print(f"    [hole #{hole_idx}] region pixel entries: {len(region)}")
+            #print(f"    [hole #{hole_idx}] region pixel entries: {len(region)}")
             coords = [pos for (_, pos) in region]
             sub_min_i = min(r for r, c in coords)
             sub_max_i = max(r for r, c in coords) + 1
@@ -1493,7 +1493,7 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
             sub_max_j = max(c for r, c in coords) + 1
             hole_h = sub_max_i - sub_min_i
             hole_w = sub_max_j - sub_min_j
-            print(f"      - subgrid hole bbox rows {sub_min_i}:{sub_max_i}, cols {sub_min_j}:{sub_max_j} => size {hole_h}×{hole_w}")
+            #print(f"      - subgrid hole bbox rows {sub_min_i}:{sub_max_i}, cols {sub_min_j}:{sub_max_j} => size {hole_h}×{hole_w}")
 
             # build the hole's own grid
             region_set = {pos for (_, pos) in region}
@@ -1513,7 +1513,7 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
             global_minY = min_row + sub_min_i
             global_maxY = min_row + sub_max_i
             bbox = (global_minX, global_minY, global_maxX, global_maxY)
-            print(f"      - global bbox: {bbox}")
+            #print(f"      - global bbox: {bbox}")
 
             # prepare sprite flags
             flags = {
@@ -1534,13 +1534,13 @@ def compute_hole_sprites(grid, filename, trainId, testId, isInsideInput):
             hole_obj = asobject(hole_grid)
             final_obj = frozenset((c, pos) for (c, pos) in hole_obj if c != obj_bg)
             num_colors = len({c for c, _ in final_obj})
-            print(f"      - final object has {num_colors} distinct color(s)")
+            #print(f"      - final object has {num_colors} distinct color(s)")
 
             # only keep sprites with at least 2 distinct colors
             if num_colors >= 2:
                 # dedupe against bg-based hits and prior holes
                 if bbox in seen_bboxes:
-                    print(f"      -> duplicate bbox {bbox}, skipping")
+                    #print(f"      -> duplicate bbox {bbox}, skipping")
                     continue
                 seen_bboxes.add(bbox)
 
@@ -1753,8 +1753,8 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
                         item["input"], fake_ref,
                         filename, trainId, testId, is_input
                     )
-                else:
-                    print(f"⏭ skipping test‐split; ratios={_train_split_ratios}, dims={_train_output_dims}")
+                #else:
+                #    print(f"⏭ skipping test‐split; ratios={_train_split_ratios}, dims={_train_output_dims}")
         all_sprite_rows.extend(split_sprites)
 
         # Now also fill the new tables.
@@ -2296,7 +2296,7 @@ def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
     W = len(output_grid[0]) if H else 0
     for r, c in pixels:
         if r < 0 or r >= H or c < 0 or c >= W:
-            print(f"→ Sprite pixel {(r, c)} outside output grid, returning -1")
+            #print(f"→ Sprite pixel {(r, c)} outside output grid, returning -1")
             return -1
 
     # 2) collect whatever’s now in those original spots
@@ -2312,7 +2312,7 @@ def compute_move_behind_color(input_grid, output_grid, pixels, sprite_color):
     # 4) if they’re all the same, that’s your background
     first = filtered[0]
     if all(col == first for col in filtered):
-        print(f"→ Uniform sprite behind-color = {first}")
+        #print(f"→ Uniform sprite behind-color = {first}")
         return first
 
     # 5) non-uniform → give up
@@ -2400,7 +2400,7 @@ def detect_and_store_glued_and_new(conn, data, filename):
     train_items   = data.get("train", [])
     train_inputs  = {i: itm["input"]  for i, itm in enumerate(train_items)}
     train_outputs = {i: itm["output"] for i, itm in enumerate(train_items) if "output" in itm}
-    print(f"[GLUED] TRAIN count={len(train_items)}; inputs={len(train_inputs)}, outputs={len(train_outputs)}")
+    #print(f"[GLUED] TRAIN count={len(train_items)}; inputs={len(train_inputs)}, outputs={len(train_outputs)}")
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def sprite_to_grid(sprite_obj: frozenset, bg: int):
@@ -2522,7 +2522,7 @@ def detect_and_store_glued_and_new(conn, data, filename):
 
             # skip any sub‐sprite that's bigger than its canvas
             if H > canvas_H or W > canvas_W:
-                print(f"⏭ Skipping UID#{uid} – sub‐sprite {H}×{W} exceeds canvas {canvas_H}×{canvas_W}")
+                #print(f"⏭ Skipping UID#{uid} – sub‐sprite {H}×{W} exceeds canvas {canvas_H}×{canvas_W}")
                 continue
 
             pxs = json.loads(data_str)  # list of [color, [r, c]]
@@ -2651,7 +2651,7 @@ def detect_and_store_glued_and_new(conn, data, filename):
                         ]).fetchone()
                         if not su_row:
                             # no matching unique → skip this occurrence
-                            print(f"[glued] skip occurrence, no sprite_unique for sprite_analysis.id={sprite_row_id}")
+                            #print(f"[glued] skip occurrence, no sprite_unique for sprite_analysis.id={sprite_row_id}")
                             continue
                         sprite_unique_id = su_row[0]
 
@@ -2775,7 +2775,7 @@ def insert_sprite_computation_records(conn, computation_results: list[dict]):
     """
     Insert only computation groups that contain more than one distinct sub_sprite_id for a given (trainId, sprite_id, computation_id).
     """
-    print(f"[insert_sprite_computation_records] Filtering {len(computation_results)} records...")
+    #print(f"[insert_sprite_computation_records] Filtering {len(computation_results)} records...")
     cursor = conn.cursor()
 
     # Group results by (trainId, sprite_id, computation_id)
@@ -2960,7 +2960,7 @@ def detect_and_store_sprite_computation(conn, data=None):
 
     for trainId, sprite_list in sprites_by_train.items():
         mains = [s for s in sprite_list if s["isInsideOutput"]]
-        print(f"\n[PASS1] TRAIN {trainId}: found {len(mains)} mains")
+        #print(f"\n[PASS1] TRAIN {trainId}: found {len(mains)} mains")
         for main in mains:
             mid = main["id"]
             mbbox = (main["minX"], main["minY"], main["maxX"], main["maxY"])
@@ -3005,9 +3005,9 @@ def detect_and_store_sprite_computation(conn, data=None):
                     fl = (inv, r90, r180, r270, fv, fh, fv90, fh90, zx, zy, pairs)
                     flag_list.append(fl)
 
-                print(f"  MAIN#{mid} SUB#{sid} TRAIN#{trainId} flags found:")
-                for fl in flag_list:
-                    print(f"    {fl}")
+                #print(f"  MAIN#{mid} SUB#{sid} TRAIN#{trainId} flags found:")
+                #for fl in flag_list:
+                #    print(f"    {fl}")
 
                 key = (mid, sid)
                 if key not in transform_candidates:
@@ -3015,19 +3015,19 @@ def detect_and_store_sprite_computation(conn, data=None):
                 else:
                     transform_candidates[key] &= set(flag_list)
 
-                print(f"  → candidates now for MAIN#{mid} SUB#{sid}:")
-                for fl in sorted(transform_candidates[key]):
-                    print(f"     {fl}")
+                #print(f"  → candidates now for MAIN#{mid} SUB#{sid}:")
+                #for fl in sorted(transform_candidates[key]):
+                #    print(f"     {fl}")
 
     # 3) Pick one flag-tuple per (main, sub): lexicographically smallest
     chosen_flags: dict[tuple[int,int], tuple|None] = {}
     for key, flags in transform_candidates.items():
         if not flags:
-            print(f"[CHOICE] MAIN#{key[0]} SUB#{key[1]} → NO common transform")
+            #print(f"[CHOICE] MAIN#{key[0]} SUB#{key[1]} → NO common transform")
             chosen_flags[key] = None
         else:
             choice = sorted(flags)[0]
-            print(f"[CHOICE] MAIN#{key[0]} SUB#{key[1]} → chosen {choice}")
+            #print(f"[CHOICE] MAIN#{key[0]} SUB#{key[1]} → chosen {choice}")
             chosen_flags[key] = choice
 
     # 4) SECOND PASS: record computations using chosen_flags
@@ -3035,7 +3035,7 @@ def detect_and_store_sprite_computation(conn, data=None):
 
     for trainId, sprite_list in sprites_by_train.items():
         mains = [s for s in sprite_list if s["isInsideOutput"]]
-        print(f"\n[PASS2] TRAIN {trainId}: recording computations")
+        #print(f"\n[PASS2] TRAIN {trainId}: recording computations")
         for main in mains:
             mid = main["id"]
             mbbox = (main["minX"], main["minY"], main["maxX"], main["maxY"])
@@ -3068,14 +3068,14 @@ def detect_and_store_sprite_computation(conn, data=None):
             comp_id = 1
             for mask, subs in zip(masks, mask_maps):
                 if not is_fully_filled(mask):
-                    print(f"  MAIN#{mid} fill#{comp_id} incomplete, skipping")
+                    #print(f"  MAIN#{mid} fill#{comp_id} incomplete, skipping")
                     comp_id += 1
                     continue
 
-                print(f"  MAIN#{mid} fill#{comp_id} COMPLETE with {len(subs)} subs")
-                print(grid_to_pretty_string(mask))
+                #print(f"  MAIN#{mid} fill#{comp_id} COMPLETE with {len(subs)} subs")
+                #print(grid_to_pretty_string(mask))
                 for sub in subs:
-                    print(grid_to_pretty_string(to_concrete_grid(json.loads(sub["data"]))))
+                    #print(grid_to_pretty_string(to_concrete_grid(json.loads(sub["data"]))))
                     sid = sub["id"]
                     key = (mid, sid)
                     flags = chosen_flags[key]
@@ -3130,11 +3130,11 @@ def detect_and_store_sprite_computation(conn, data=None):
                              sprite_unique_id,
                              sprite_transformation_id,
                              sprite_origin_id) = occ
-                            print(f"    SUB#{sid} → TRANS#{sprite_transformation_id} flags={flags}")
-                        else:
-                            print(f"    WARNING: SUB#{sid} no match for chosen flags {flags}")
-                    else:
-                        print(f"    SUB#{sid} has no common transform; leaving IDs null")
+                            #print(f"    SUB#{sid} → TRANS#{sprite_transformation_id} flags={flags}")
+                        #else:
+                        #    print(f"    WARNING: SUB#{sid} no match for chosen flags {flags}")
+                    #else:
+                    #    print(f"    SUB#{sid} has no common transform; leaving IDs null")
 
                     rel_x = sub["minX"] - main["minX"]
                     rel_y = sub["minY"] - main["minY"]
