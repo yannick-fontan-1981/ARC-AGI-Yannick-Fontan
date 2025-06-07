@@ -127,10 +127,11 @@ def run_analysis_scripts(
     Optionally override the “filename” each one sees via --name.
     """
     scripts = {
-        "first_sight" : os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"),
-        "object"      : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
-        "sprite"      : os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"),
-        "light_cycle" : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
+        "first_sight"        : os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"),
+        "object"             : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
+        "sprite"             : os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"),
+        "light_cycle"        : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
+        "cellular_automaton" : os.path.join(PROJECT_ROOT, "pattern-finder", "cellular_automaton_analysis.py"),
     }
 
     for which, script_path in scripts.items():

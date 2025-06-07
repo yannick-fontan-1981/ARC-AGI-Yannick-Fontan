@@ -880,6 +880,65 @@ def apply_all_cycles(input_grid: List[List[int]], light_cycles: List[Dict[str, A
     #    print(" ", row)
     return input_grid
 
+def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict]) -> List[List[int]]:
+    def get_neighborhood(grid, x, y, bg=0):
+        """
+        Return the 3×3 neighborhood around (x,y) as a length-9 tuple in row-major order:
+          (nw, n, ne, w, center, e, sw, s, se).
+        Out-of-bounds cells are filled with `bg`.
+        """
+        H, W = len(grid), len(grid[0])
+        nbr = []
+        for dy in (-1, 0, +1):
+            for dx in (-1, 0, +1):
+                ny, nx = y + dy, x + dx
+                nbr.append(grid[ny][nx] if 0 <= ny < H and 0 <= nx < W else bg)
+        return tuple(nbr)
+
+    def canonical(nbr):
+        """
+        If orientation_invariant, pick the lexicographically smallest of
+        all 8 dihedral variants (4 rotations + 4 horizontal flips).
+        """
+        rots = all_rotations(nbr)
+        flips = [tuple(r[i] for i in [2, 1, 0, 5, 4, 3, 8, 7, 6]) for r in rots]
+        return min(rots + flips)
+
+    def rotate90(nbr):
+        """Rotate a flattened 3×3 neighborhood 90° clockwise."""
+        mapping = [6, 3, 0, 7, 4, 1, 8, 5, 2]
+        return tuple(nbr[i] for i in mapping)
+
+    def all_rotations(nbr):
+        r0 = nbr
+        r1 = rotate90(r0)
+        r2 = rotate90(r1)
+        r3 = rotate90(r2)
+        return [r0, r1, r2, r3]
+
+    # Reconstruct rule_dict
+    rule_dict: Dict[Tuple[int,...], int] = {}
+    for rule in ca_rules:
+        center = rule['input_color']
+        out_col = rule['output_color']
+        # build neighborhood tuple
+        nbr = [0]*9
+        nbr[4] = center
+        for dx, dy, color in rule['neighbors']:
+            idx = (dy+1)*3 + (dx+1)
+            nbr[idx] = color
+        # canonical form
+        key = canonical(tuple(nbr))
+        rule_dict[key] = out_col
+    # apply
+    H, W = len(input_grid), len(input_grid[0])
+    result = [[0]*W for _ in range(H)]
+    for y in range(H):
+        for x in range(W):
+            nbr = get_neighborhood(input_grid, x, y, bg=0)
+            key = canonical(nbr)
+            result[y][x] = rule_dict.get(key, input_grid[y][x])
+    return result
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
-from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles
+from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles, apply_ca
 
 
 def canvas(value: int, dimensions: tuple) -> tuple:
@@ -89,5 +89,18 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=apply_all_cycles
+    ),
+    Action(
+        id="apply_cellular_automaton",
+        name="apply_cellular_automaton",
+        description="Apply all detected cellular automaton rules to the input grid, producing the output grid.",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="input_grid", type="Grid", binding=BindingStatus.INPUT_GRID),
+            ArgumentBinding(name="ca_rules",   type="List", binding=BindingStatus.CONSTANT)
+        ],
+        output_type="Grid",
+        function=apply_ca
     )
+
 ]

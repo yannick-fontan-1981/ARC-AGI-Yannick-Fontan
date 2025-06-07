@@ -878,8 +878,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             FOREIGN KEY (sub_sprite_id) REFERENCES sprite_analysis(id)
         );
         """)
-
     conn.commit()
+
     cursor.execute("""
         CREATE TABLE light_cycle (
             id                            INTEGER PRIMARY KEY,
@@ -912,6 +912,29 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             tracing                       BOOLEAN       NOT NULL,
             order_idx                     INTEGER       NOT NULL,    -- "order" is a reserved word; renamed to order_idx
             state                         TEXT          CHECK(state IN ('suggested', 'verified'))
+        );
+        """)
+    conn.commit()
+
+    cursor.execute("""
+        CREATE TABLE cellular_automaton (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            input_color  INTEGER NOT NULL,
+            output_color INTEGER NOT NULL,
+            neighbor_count INTEGER NOT NULL DEFAULT 0,
+            cumulative_color INTEGER NOT NULL DEFAULT 0
+        );
+        """)
+    conn.commit()
+
+    cursor.execute("""
+        CREATE TABLE cellular_automaton_cells (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id       INTEGER NOT NULL,
+            posRelX       INTEGER NOT NULL,
+            posRelY       INTEGER NOT NULL,
+            color         INTEGER NOT NULL,
+            FOREIGN KEY(rule_id) REFERENCES cellular_automaton(id)
         );
         """)
     conn.commit()

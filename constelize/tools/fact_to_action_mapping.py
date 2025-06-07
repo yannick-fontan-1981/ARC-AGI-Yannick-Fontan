@@ -12,7 +12,7 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
-    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal
+    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal, apply_ca
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -2583,6 +2583,59 @@ class LightCycleFactToAction(FactToActionMapping):
             END=False
         )
 
+class CellularAutomatonFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("apply_cellular_automaton", "apply_cellular_automaton")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
+        cur = conn.execute("SELECT id, input_color, output_color, cumulative_color FROM cellular_automaton")
+        rules_raw = [dict(zip([d[0] for d in cur.description], row)) for row in cur.fetchall()]
+        ca_rules: List[Dict] = []
+        for rw in rules_raw:
+            rid = rw['id']
+            cur = conn.execute("SELECT posRelX, posRelY, color FROM cellular_automaton_cells WHERE rule_id=?",(rid,))
+            neighbors = [(dx, dy, color) for dx, dy, color in cur.fetchall()]
+            ca_rules.append({
+                'input_color': rw['input_color'],
+                'output_color': rw['output_color'],
+                'cumulative_color': rw['cumulative_color'],
+                'neighbors': neighbors
+            })
+        results: List[dict] = []
+        for train_id in TRAIN_INPUT_GRIDS.keys():
+            results.append({'trainId': train_id, 'testId': -1, 'ca_rules': ca_rules})
+        return results
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        train_id = row['trainId']
+        test_id = row.get('testId', -1)
+        ca_rules = row.get('ca_rules', [])
+        input_grid = TRAIN_INPUT_GRIDS[train_id]
+        output_grid = apply_ca(input_grid, ca_rules)
+        action = registry.get_by_id(self.action_id)
+        bindings = {
+            'input_grid': ArgumentBinding('input_grid','Grid',BindingStatus.INPUT_GRID,input_grid),
+            'ca_rules': ArgumentBinding('ca_rules','List',BindingStatus.CONSTANT,ca_rules)
+        }
+        return ActionInstance(
+            id=f"{self.action_id}_{train_id}#{getUniqueId()}",
+            action=action,
+            bindings=bindings,
+            output_var='result_grid',
+            output_value=output_grid,
+            output_type='Grid',
+            scenarioId=row.get('scenarioId'),
+            ruleId=row.get('ruleId'),
+            trainId=train_id,
+            testId=test_id,
+            isTrain=True,
+            isToOutput=True,
+            END=False
+        )
+
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -2608,4 +2661,5 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     CropSpriteFactToAction(),
     FixSymmetryFactToAction(),
     LightCycleFactToAction(),
+    CellularAutomatonFactToAction(),
 ]
