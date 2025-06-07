@@ -17,7 +17,7 @@ def _make_diff_grid(input_grid, output_grid):
     H = len(input_grid)
     W = len(input_grid[0])
     if H != len(output_grid) or any(len(input_grid[y]) != len(output_grid[y]) for y in range(H)):
-        raise ValueError("Input and output must have identical shape")
+        return None #raise ValueError("Input and output must have identical shape")
     diff = [[None] * W for _ in range(H)]
     for y in range(H):
         for x in range(W):
@@ -185,6 +185,9 @@ def process_output_diff_from_json(filename, data, conn, clear_table=True):
             grid_input = item.get("input")
             grid_output = item.get("output")
             grid_diff = _make_diff_grid(grid_input, grid_output)
+
+            if grid_diff is None:
+                return
 
             # Determine train or test index
             train_id = idx

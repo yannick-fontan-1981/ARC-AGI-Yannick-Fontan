@@ -204,29 +204,60 @@ class ZoomFactToAction(FactToActionMapping):
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = """
-        SELECT st.sprite_unique_id,
-               st.sprite_produce_id,
-               so.trainId,
-               so.testId,
-               so.isInsideOutput,
-               su.data,
-               st.zoom_x,
-               st.zoom_y,
-               so.minX,
-               so.minY
-        FROM sprite_transformation st
-        JOIN sprite_occurrence so ON so.sprite_transformation_id = st.id
-        JOIN sprite_unique su ON su.id = st.sprite_produce_id
-        WHERE (zoom_x > 1 OR zoom_y > 1)
-          AND COALESCE(st.rotated_90, 0) = 0
-          AND COALESCE(st.rotated_180, 0) = 0
-          AND COALESCE(st.rotated_270, 0) = 0
-          AND COALESCE(st.flipped_vert, 0) = 0
-          AND COALESCE(st.flipped_horiz, 0) = 0
-          AND COALESCE(st.flipped_vert_90, 0) = 0
-          AND COALESCE(st.flipped_horiz_90, 0) = 0
-          AND (st.recolored IS NULL OR st.recolored = '[]')
-          AND so.sprite_id IS NOT NULL
+        WITH filtered AS (
+          SELECT
+            st.sprite_unique_id,
+            st.sprite_produce_id,
+            so.trainId,
+            so.testId,
+            so.isInsideOutput,
+            su.data,
+            st.zoom_x,
+            st.zoom_y,
+            so.minX,
+            so.minY,
+            -- compute a per-row zoom_factor without any window/aggregate
+            CASE 
+              WHEN st.zoom_x > st.zoom_y THEN st.zoom_x 
+              ELSE st.zoom_y 
+            END AS zoom_factor
+          FROM sprite_transformation st
+          JOIN sprite_occurrence  so ON so.sprite_transformation_id = st.id
+          JOIN sprite_unique      su ON su.id = st.sprite_produce_id
+          WHERE (st.zoom_x > 1 OR st.zoom_y > 1)
+            AND COALESCE(st.rotated_90 , 0) = 0
+            AND COALESCE(st.rotated_180, 0) = 0
+            AND COALESCE(st.rotated_270, 0) = 0
+            AND COALESCE(st.flipped_vert , 0) = 0
+            AND COALESCE(st.flipped_horiz, 0) = 0
+            AND COALESCE(st.flipped_vert_90 , 0) = 0
+            AND COALESCE(st.flipped_horiz_90, 0) = 0
+            AND (st.recolored IS NULL OR st.recolored = '[]')
+            AND so.sprite_id IS NOT NULL
+        ),
+        ranked AS (
+          SELECT
+            *,
+            ROW_NUMBER() 
+              OVER (
+                PARTITION BY trainId 
+                ORDER   BY zoom_factor DESC
+              ) AS rn
+          FROM filtered
+        )
+        SELECT
+          sprite_unique_id,
+          sprite_produce_id,
+          trainId,
+          testId,
+          isInsideOutput,
+          data,
+          zoom_x,
+          zoom_y,
+          minX,
+          minY
+        FROM ranked
+        WHERE rn = 1;
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
@@ -2578,151 +2609,3 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     FixSymmetryFactToAction(),
     LightCycleFactToAction(),
 ]
-
-
-
-
-def main():
-    # Example input grid (train_id = 0) as given in your test:
-    input_grid = [
-        [  1,  0,  0,  0,  1,  1,  1,  1,  0,  1,  1,  0,  1,  0,  1,  0,  1,  1,  1 ],
-        [  1,  0,  1,  0,  1,  1,  1,  1,  0,  0,  1,  1,  1,  1,  1,  1,  0,  1,  1 ],
-        [  1,  1,  1,  1,  0,  0,  1,  1,  0,  1,  0,  0,  0,  1,  0,  1,  0,  1,  0 ],
-        [  1,  0,  1,  1,  1,  1,  1,  1,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 ],
-        [  1,  0,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 ],
-        [  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  0,  1,  0,  1,  1,  0,  0,  0,  1 ],
-        [  1,  0,  0,  1,  1,  0,  1,  0,  0,  1,  1,  1,  1,  1,  1,  1,  0,  1,  0 ],
-        [  1,  1,  0,  0,  1,  1,  1,  1,  0,  1,  0,  1,  1,  1,  0,  1,  1,  1,  1 ],
-        [  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 ],  # row 8
-        [  1,  1,  1,  0,  0,  1,  1,  1,  0,  1,  0,  0,  1,  1,  1,  1,  1,  1,  1 ],
-        [  1,  1,  0,  0,  1,  1,  0,  0,  0,  1,  1,  0,  0,  0,  1,  0,  1,  0,  1 ],
-        [  1,  0,  1,  0,  1,  0,  0,  1,  0,  1,  1,  1,  1,  0,  0,  1,  1,  1,  1 ]
-    ]
-
-    # These four “start” rows come from your light_cycle table for train 0:
-    # We parse JSON‐style strings for pixel_rel, neighbor sets, and row/col sets.
-    light_cycles = [
-        {
-            "id": 1,
-            "light_cycle_id": 0,
-            "action": "start",
-            "direction_x": 0,
-            "direction_y": 1,
-            "pixel_rel": json.loads(
-                "[[-2, [-1, -1]], [-2, [0, -1]], [-2, [1, -1]], [0, [0, 0]], [0, [0, 1]], [0, [0, 2]]]"
-            ),
-            "common_neighbors": {
-                "north":        frozenset(json.loads("[-2]")),
-                "north_east":   frozenset(json.loads("[-2]")),
-                "east":         frozenset(json.loads("[-8]")),
-                "south_east":   frozenset(json.loads("[-8]")),
-                "south":        frozenset(json.loads("[0]")),
-                "south_west":   frozenset(json.loads("[-8]")),
-                "west":         frozenset(json.loads("[-8]")),
-                "north_west":   frozenset(json.loads("[-2]"))
-            },
-            "common_rowcol": {
-                "next_row":     frozenset(json.loads("[-8, 0]")),
-                "prev_row":     frozenset(json.loads("[]")),
-                "next_col":     frozenset(json.loads("[-8, 0]")),
-                "prev_col":     frozenset(json.loads("[-8, 0]"))
-            },
-            "color": 2,
-            "order_idx": 0
-        },
-        {
-            "id": 2,
-            "light_cycle_id": 0,
-            "action": "start",
-            "direction_x": 1,
-            "direction_y": 0,
-            "pixel_rel": json.loads(
-                "[[0, [1, -2]], [-2, [-1, -1]], [-2, [-1, 0]], [0, [0, 0]], [0, [1, 0]], [0, [2, 0]], [-2, [-1, 1]]]"
-            ),
-            "common_neighbors": {
-                "north":        frozenset(json.loads("[-8]")),
-                "north_east":   frozenset(json.loads("[-8]")),
-                "east":         frozenset(json.loads("[0]")),
-                "south_east":   frozenset(json.loads("[-8]")),
-                "south":        frozenset(json.loads("[-8]")),
-                "south_west":   frozenset(json.loads("[-2]")),
-                "west":         frozenset(json.loads("[-2]")),
-                "north_west":   frozenset(json.loads("[-2]"))
-            },
-            "common_rowcol": {
-                "next_row":     frozenset(json.loads("[-8, 0]")),
-                "prev_row":     frozenset(json.loads("[-8, 0]")),
-                "next_col":     frozenset(json.loads("[-8, 0]")),
-                "prev_col":     frozenset(json.loads("[]"))
-            },
-            "color": 2,
-            "order_idx": 0
-        },
-        {
-            "id": 3,
-            "light_cycle_id": 0,
-            "action": "start",
-            "direction_x": -1,
-            "direction_y": 0,
-            "pixel_rel": json.loads(
-                "[[-2, [1, -1]], [0, [-2, 0]], [0, [-1, 0]], [0, [0, 0]], [-2, [1, 0]], [-2, [1, 1]]]"
-            ),
-            "common_neighbors": {
-                "north":        frozenset(json.loads("[-8]")),
-                "north_east":   frozenset(json.loads("[-2]")),
-                "east":         frozenset(json.loads("[-2]")),
-                "south_east":   frozenset(json.loads("[-2]")),
-                "south":        frozenset(json.loads("[-8]")),
-                "south_west":   frozenset(json.loads("[-8]")),
-                "west":         frozenset(json.loads("[0]")),
-                "north_west":   frozenset(json.loads("[-8]"))
-            },
-            "common_rowcol": {
-                "next_row":     frozenset(json.loads("[-8, 0]")),
-                "prev_row":     frozenset(json.loads("[-8, 0]")),
-                "next_col":     frozenset(json.loads("[]")),
-                "prev_col":     frozenset(json.loads("[-8, 0]"))
-            },
-            "color": 2,
-            "order_idx": 0
-        },
-        {
-            "id": 4,
-            "light_cycle_id": 0,
-            "action": "start",
-            "direction_x": 0,
-            "direction_y": -1,
-            "pixel_rel": json.loads(
-                "[[0, [0, -2]], [0, [0, -1]], [0, [0, 0]], [-2, [-1, 1]], [-2, [0, 1]], [-2, [1, 1]]]"
-            ),
-            "common_neighbors": {
-                "north":        frozenset(json.loads("[0]")),
-                "north_east":   frozenset(json.loads("[-8]")),
-                "east":         frozenset(json.loads("[-8]")),
-                "south_east":   frozenset(json.loads("[-2]")),
-                "south":        frozenset(json.loads("[-2]")),
-                "south_west":   frozenset(json.loads("[-2]")),
-                "west":         frozenset(json.loads("[-8]")),
-                "north_west":   frozenset(json.loads("[-8]"))
-            },
-            "common_rowcol": {
-                "next_row":     frozenset(json.loads("[]")),
-                "prev_row":     frozenset(json.loads("[-8, 0]")),
-                "next_col":     frozenset(json.loads("[-8, 0]")),
-                "prev_col":     frozenset(json.loads("[-8, 0]"))
-            },
-            "color": 2,
-            "order_idx": 0
-        }
-    ]
-
-    print("=== Running verbose _apply_all_cycles ===")
-    output_grid = apply_all_cycles(input_grid, light_cycles)
-
-    print("\n=== Output Grid ===")
-    for row in output_grid:
-        print(row)
-
-
-if __name__ == "__main__":
-    main()

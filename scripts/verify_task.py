@@ -575,8 +575,8 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
     #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
     #DEFAULT_TASK_ID = "c1d99e64" # red lightCycle on black line touching both border
-    DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
-    #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
+    #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
+    DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Repeated sprite ?
     #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 

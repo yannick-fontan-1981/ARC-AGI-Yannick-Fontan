@@ -210,33 +210,33 @@ def extract_common_attribute_action(
       7) early getAttributeAction return if applicable
     """
 
-    print("=== extract_common_attribute_action START ===")
-    print(f"Path: {path!r}")
-    print(f"Input pairs (trainId,testId): {pairs}")
-    print(f"Loaded tables: {list(tables.keys())}")
-    print(f"Attributes buckets: {list(attributes_by_input_and_values.keys())}")
+    #print("=== extract_common_attribute_action START ===")
+    #print(f"Path: {path!r}")
+    #print(f"Input pairs (trainId,testId): {pairs}")
+    #print(f"Loaded tables: {list(tables.keys())}")
+    #print(f"Attributes buckets: {list(attributes_by_input_and_values.keys())}")
 
     # 0) Group criteria values by train
     values_by_train = group_values_by_train(pairs)
-    print("1) group_values_by_train →")
-    for tid, vals in values_by_train.items():
-        print(f"   Train {tid}: {vals}")
+    #print("1) group_values_by_train →")
+    #for tid, vals in values_by_train.items():
+    #    print(f"   Train {tid}: {vals}")
 
     # ∎ very first: look for a common FIRST_SIGHT_ANALYSIS attribute
-    print("2) Computing per-train common columns for 'first_sight_analysis'")
+    #print("2) Computing per-train common columns for 'first_sight_analysis'")
     per_train_fsa = compute_common_columns(
         attributes_by_input_and_values,
         values_by_train,
         "first_sight_analysis",
     )
-    print(f"   per_train_fsa: {per_train_fsa}")
+    #print(f"   per_train_fsa: {per_train_fsa}")
 
-    print("3) Intersect and prioritize across trains")
+    #print("3) Intersect and prioritize across trains")
     fsa_common = intersect_and_prioritize(path, per_train_fsa)
-    print(f"   fsa_common: {fsa_common}")
+    #print(f"   fsa_common: {fsa_common}")
 
     if fsa_common:
-        print(f"4) Found common first_sight_analysis.{fsa_common[0]}, returning GET_ATTRIBUTE")
+        #print(f"4) Found common first_sight_analysis.{fsa_common[0]}, returning GET_ATTRIBUTE")
         return {
             "type": "getAttributeAction",
             "attribute": f"first_sight_analysis.{fsa_common[0]}"
@@ -264,16 +264,16 @@ def extract_common_attribute_action(
 
     deduped = dedupe_sprite_by_train(sprite_ids_by_train, tables)
 
-    print("\n==> 8) Find most‐alike sprite pairs")
+    #print("\n==> 8) Find most‐alike sprite pairs")
     groups = group_similar_sprites_by_attributes(common_columns, deduped, tables)
-    print("    Most-alike pairs:", groups)
+    #print("    Most-alike pairs:", groups)
 
     all_sprites = compute_all_input_only_sprites(deduped, tables)
 
     action = compute_select_sprite_and_attribute_action(all_sprites, common_columns, groups, pairs, path, tables,
                                                         values_by_train)
     if action:
-        print("\n==> Returning select action:", action)
+        #print("\n==> Returning select action:", action)
         return action
 
     # --- FALLBACK: object‐level grouping using the same 5–10 pipeline ---
@@ -308,7 +308,7 @@ def extract_common_attribute_action(
                     if table_name in ("object_analysis", "shape_occurrence"):
                         per_train_rows_obj[train_id].append(table_row)
 
-    print("    per_train_rows_obj (prioritized):", per_train_rows_obj)
+    #print("    per_train_rows_obj (prioritized):", per_train_rows_obj)
 
     # 6) Resolve object_occurrence → object_analysis IDs
     obj_occ = tables.get("object_occurrence", {})
@@ -331,7 +331,7 @@ def extract_common_attribute_action(
             ordered.append(oid)
         key = f"{train_id}#-1"
         object_ids_by_train[key] = ordered
-        print(f"  {key} → raw object IDs (ordered):", ordered)
+        #print(f"  {key} → raw object IDs (ordered):", ordered)
 
     # 8) Deduplicate by object 'data' payload
     deduped_obj: Dict[str, List[int]] = {}
@@ -343,14 +343,14 @@ def extract_common_attribute_action(
                 seen.add(data)
                 uniq.append(oid)
         deduped_obj[key] = uniq
-        print(f"  {key} → deduped object IDs:", uniq)
+        #print(f"  {key} → deduped object IDs:", uniq)
 
     # 9) Build all candidate object‐groups via Cartesian product
     from itertools import product
     train_keys   = sorted(deduped_obj.keys())                # e.g. ["0#-1","1#-1","2#-1"]
     per_id_lists = [deduped_obj[k] for k in train_keys]      # e.g. [[2], [4], [5,6]]
     groups_obj   = list(product(*per_id_lists))
-    print("    Candidate object groups:", groups_obj)
+    #print("    Candidate object groups:", groups_obj)
 
     # 10) Build negatives = all input‐only objects
     train_ids = [int(k.split("#",1)[0]) for k in deduped_obj]
@@ -358,7 +358,7 @@ def extract_common_attribute_action(
         oid for oid,row in tables["object_analysis"].items()
         if row.get("trainId") in train_ids and row.get("isInsideInput") == 1
     ]
-    print("    all_objects (negatives):", all_objects)
+    #print("    all_objects (negatives):", all_objects)
 
     # 11) Find minimal distinguishing criteria per object‐group
     for group in groups_obj:
@@ -367,9 +367,9 @@ def extract_common_attribute_action(
         crit = find_minimal_selection_criteria_for_table(
             group, all_objects, tables, table_key="object_analysis"
         )
-        print(f"    Object group {group} → criteria: {crit}")
+        #print(f"    Object group {group} → criteria: {crit}")
         output_attr = next(iter(common_columns_obj), None)
-        print(f"    output attribute: {output_attr}")
+        #print(f"    output attribute: {output_attr}")
         if crit and output_attr:
             action = {
                 "type":             "selectObjectAndAttributeAction",
@@ -377,10 +377,10 @@ def extract_common_attribute_action(
                 "output_attribute": output_attr,
                 "for_objects":      list(group)
             }
-            print("==> Returning selectObjectAndAttributeAction:", action)
+            #print("==> Returning selectObjectAndAttributeAction:", action)
             return action
 
-    print("==> No object‐level group matched either → returning None")
+    #print("==> No object‐level group matched either → returning None")
     return None
 
 def intersect_and_prioritize(
@@ -392,13 +392,13 @@ def intersect_and_prioritize(
     (if present) comes first, the rest in alphabetical order.
     Returns the final prioritized list of column names.
     """
-    print("\n==> Intersect across trains")
+    #print("\n==> Intersect across trains")
     if not per_train_common:
         return []
 
     # compute the intersection
     common_cols = set.intersection(*per_train_common.values())
-    print(f"    intersection: {common_cols}")
+    #print(f"    intersection: {common_cols}")
 
     if not common_cols:
         return []
@@ -410,19 +410,19 @@ def intersect_and_prioritize(
     else:
         result = sorted(common_cols)
 
-    print(f"    prioritized columns: {result}")
+    #print(f"    prioritized columns: {result}")
     return result
 
 def compute_select_sprite_and_attribute_action(all_sprites, common_columns, groups, pairs, path, tables,
                                                values_by_train):
     action = None
-    print("\n==> 10) Search minimal distinguishing criteria for each group")
+    #print("\n==> 10) Search minimal distinguishing criteria for each group")
     for group in groups:
         if any(sid is None for sid in group):
-            print(f"    🔹 Skipping incomplete group {group}")
+            #print(f"    🔹 Skipping incomplete group {group}")
             continue
         crit = find_minimal_selection_criteria_for_table(group, all_sprites, tables, table_key="sprite_analysis")
-        print(f"    Group {group} → criteria: {crit}")
+        #print(f"    Group {group} → criteria: {crit}")
         if crit:
             # 11) restrict to columns that actually exist on sprite_analysis
             sprite_tbl = tables["sprite_analysis"]
@@ -462,18 +462,18 @@ def compute_select_sprite_and_attribute_action(all_sprites, common_columns, grou
 
 
 def compute_all_input_only_sprites(deduped, tables):
-    print("\n==> 9) input-only sprites in these trains")
+    #print("\n==> 9) input-only sprites in these trains")
     train_ids = [int(k.split("#", 1)[0]) for k in deduped]
     all_sprites = [
         sid for sid, row in tables["sprite_analysis"].items()
         if row["trainId"] in train_ids and row.get("isInsideInput") == 1
     ]
-    print("    all_sprites:", all_sprites)
+    #print("    all_sprites:", all_sprites)
     return all_sprites
 
 
 def dedupe_sprite_by_train(sprite_ids_by_train, tables):
-    print("\n==> 7) Deduplicate by sprite data per train")
+    #print("\n==> 7) Deduplicate by sprite data per train")
     deduped: Dict[str, List[int]] = {}
     for key, sids in sprite_ids_by_train.items():
         seen, uniq = set(), []
@@ -483,12 +483,12 @@ def dedupe_sprite_by_train(sprite_ids_by_train, tables):
                 seen.add(data)
                 uniq.append(sid)
         deduped[key] = uniq
-        print(f"  {key} → deduped sprite IDs:", uniq)
+        #print(f"  {key} → deduped sprite IDs:", uniq)
     return deduped
 
 
 def compute_sprite_ids_by_train(occ2sprite, per_train_rows):
-    print("\n==> 6) Collapse to sprite IDs per train")
+    #print("\n==> 6) Collapse to sprite IDs per train")
     sprite_ids_by_train: Dict[str, List[int]] = {}
     for train_id, rows in per_train_rows.items():
         sids = set()
@@ -505,20 +505,20 @@ def compute_sprite_ids_by_train(occ2sprite, per_train_rows):
                     sids.add(target)
         key = f"{train_id}#-1"
         sprite_ids_by_train[key] = sorted(sids)
-        print(f"  {key} → raw sprite IDs:", sprite_ids_by_train[key])
+        #print(f"  {key} → raw sprite IDs:", sprite_ids_by_train[key])
     return sprite_ids_by_train
 
 
 def compute_occ2sprite(tables):
-    print("\n==> 5) Resolve sprite_occurrence → sprite_analysis IDs")
+    #print("\n==> 5) Resolve sprite_occurrence → sprite_analysis IDs")
     sprite_occ = tables.get("sprite_occurrence", {})
     occ2sprite = {rid: row["sprite_id"] for rid, row in sprite_occ.items()}
-    print("    occ2sprite map size:", len(occ2sprite))
+    #print("    occ2sprite map size:", len(occ2sprite))
     return occ2sprite
 
 
 def compute_per_train_rows(attributes_by_input_and_values, common_columns, values_by_train):
-    print("\n==> 4) Build per-train list of table#rowId for those columns")
+    #print("\n==> 4) Build per-train list of table#rowId for those columns")
     per_train_rows: Dict[int, List[str]] = {tid: [] for tid in values_by_train}
     for train_id, vals in values_by_train.items():
         key = f"{train_id}#-1"
@@ -534,36 +534,36 @@ def compute_per_train_rows(attributes_by_input_and_values, common_columns, value
                     continue
                 if col in common_columns:
                     per_train_rows[train_id].append(table_row)
-        print(f"  Train {train_id} rows:", per_train_rows[train_id])
+        #print(f"  Train {train_id} rows:", per_train_rows[train_id])
     return per_train_rows
 
 
 def group_values_by_train(pairs):
-    print("==> 1) Group & dedupe values by train")
+    #print("==> 1) Group & dedupe values by train")
     values_by_train: Dict[int, List[int]] = {}
     for train_id, value in pairs:
         values_by_train.setdefault(train_id, []).append(value)
-    print("    values_by_train:", values_by_train)
+    #print("    values_by_train:", values_by_train)
     return values_by_train
 
 
 def intersect_common_columns(path: str, per_train_common: Dict[int, Set[str]]) -> List[str]:
-    print("==> 3) Intersect across trains (with verbose tracking)")
+    #print("==> 3) Intersect across trains (with verbose tracking)")
     common_columns = None
 
     for tid, cols in per_train_common.items():
-        print(f"  Train {tid} has common columns: {sorted(cols)}")
+        #print(f"  Train {tid} has common columns: {sorted(cols)}")
         if common_columns is None:
             common_columns = set(cols)
         else:
-            print(f"    ∩ with previous: {sorted(common_columns)}")
+            #print(f"    ∩ with previous: {sorted(common_columns)}")
             common_columns &= cols
-            print(f"    → intersection now: {sorted(common_columns)}")
+            #print(f"    → intersection now: {sorted(common_columns)}")
 
-    if not common_columns:
-        print("⚠️ Intersection is empty — no column common to all trains.")
-    else:
-        print(f"✅ Final common columns: {sorted(common_columns)}")
+    #if not common_columns:
+    #    print("⚠️ Intersection is empty — no column common to all trains.")
+    #else:
+    #    print(f"✅ Final common columns: {sorted(common_columns)}")
     return common_columns
 
 def compute_common_columns(
@@ -577,12 +577,12 @@ def compute_common_columns(
     TABLE_NAME (e.g. "sprite_analysis" or "first_sight_analysis"), and intersect them.
     Returns a map trainId → set of common column names.
     """
-    print(f"\n==> Compute per-train common columns for `{table_name}`")
+    #print(f"\n==> Compute per-train common columns for `{table_name}`")
     per_train_common: Dict[int, Set[str]] = {}
     for train_id, vals in values_by_train.items():
         key = f"{train_id}#-1"
         attr_map = attributes_by_input_and_values.get(key, {})
-        print(f"  Train {train_id}, values={vals}, attr_map keys={list(attr_map.keys())}")
+        #print(f"  Train {train_id}, values={vals}, attr_map keys={list(attr_map.keys())}")
 
         common_for_train: Optional[Set[str]] = None
         for v in dict.fromkeys(vals):
@@ -595,7 +595,7 @@ def compute_common_columns(
                 tname = table_row.split("#", 1)[0]
                 if tname == table_name:
                     cols.add(col)
-            print(f"    Value {v} → filtered columns: {cols}")
+            #print(f"    Value {v} → filtered columns: {cols}")
 
             if common_for_train is None:
                 common_for_train = cols
@@ -604,7 +604,7 @@ def compute_common_columns(
 
         # if nothing matched at all, produce an empty set
         per_train_common[train_id] = common_for_train or set()
-        print(f"    → common_for_train[{train_id}] = {per_train_common[train_id]}")
+        #print(f"    → common_for_train[{train_id}] = {per_train_common[train_id]}")
     return per_train_common
 
 def group_similar_sprites_by_attributes(
@@ -632,12 +632,12 @@ def group_similar_sprites_by_attributes(
     # 2) colonnes communes valides
     sprite_tbl = tables.get("sprite_analysis", {})
     if not sprite_tbl:
-        print("⚠️ sprite_analysis vide")
+        #print("⚠️ sprite_analysis vide")
         return []
     sample = next(iter(sprite_tbl.values()))
     valid_cols = [c for c in common_columns if c in sample]
     if not valid_cols:
-        print("⚠️ Pas de colonne commune:", common_columns)
+        #print("⚠️ Pas de colonne commune:", common_columns)
         return []
 
     # 3) vecteurs de features pour chaque train
@@ -795,7 +795,7 @@ def common_attributes_by_train_value_pairs(
 
             # if no common column **names** in this train, bail out
             if not common_for_train:
-                print(f"no common column **names** in this train, bail out")
+                #print(f"no common column **names** in this train, bail out")
                 return []
 
         per_train_common[train_id] = common_for_train  # type: ignore
@@ -803,7 +803,7 @@ def common_attributes_by_train_value_pairs(
     # 3) cross-train intersection
     common_attrs = set.intersection(*per_train_common.values()) if per_train_common else set()
     if not common_attrs:
-        print(f"not common_attrs")
+        #print(f"not common_attrs")
         return []
 
     # 4) split out table#row → column, but only for columns we kept
@@ -820,10 +820,10 @@ def common_attributes_by_train_value_pairs(
                     col_to_rows.setdefault(col, []).append(table_row)
 
     # 5) display and return
-    for col in sorted(common_attrs):
-        rows = sorted(set(col_to_rows.get(col, [])))
-        print(f"{col} → {rows}")
-        #print(f"{col}")
+    #for col in sorted(common_attrs):
+    #    rows = sorted(set(col_to_rows.get(col, [])))
+    #    print(f"{col} → {rows}")
+    #    #print(f"{col}")
 
     # Step 5) split into sprite vs object
     sprite_rows_by_table = defaultdict(set)
@@ -859,8 +859,8 @@ def common_attributes_by_train_value_pairs_old(
     pairs: list[tuple[int, int]],
     path: str
 ) -> list[str]:
-    if( path == "minX"):
-        print("common_attributes_by_train_value_pairs")
+    #if( path == "minX"):
+    #    print("common_attributes_by_train_value_pairs")
     common_attrs = None
 
     for train_id, value in pairs:
