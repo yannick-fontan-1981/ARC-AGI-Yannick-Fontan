@@ -483,7 +483,7 @@ def fill_grid(mask: Grid, color: int) -> Grid:
     return tuple(filled_rows)
 
 
-def apply_all_cycles(input_grid: List[List[int]], light_cycles: List[Dict[str, Any]]) -> List[List[int]]:
+def apply_all_cycles(input_grid: List[List[int]], light_cycles: List[Dict[str, Any]]) -> Grid:
     """
     Verbose version of _apply_all_cycles. Prints every intermediate check.
 

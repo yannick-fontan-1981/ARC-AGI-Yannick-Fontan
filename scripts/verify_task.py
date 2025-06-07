@@ -564,8 +564,8 @@ if __name__ == "__main__":
 
     # Training 3
     #DEFAULT_TASK_ID = "1cf80156"
-     #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
-     #DEFAULT_TASK_ID = "25ff71a9"
+    #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
+    #DEFAULT_TASK_ID = "25ff71a9" # move object 1 pixel lower
     #DEFAULT_TASK_ID = "0b148d64"
     #DEFAULT_TASK_ID = "1f85a75f" # crop
     #DEFAULT_TASK_ID = "23b5c85d"
@@ -574,8 +574,8 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "be94b721" # select greater object (sizeOrder 2 ?)
     #DEFAULT_TASK_ID = "c909285e" # get sprite with alone color
     #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
-    DEFAULT_TASK_ID = "c1d99e64" # red lightCycle on black line touching both border
-    #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
+    #DEFAULT_TASK_ID = "c1d99e64" # red lightCycle on black line touching both border
+    DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Repeated sprite ?
     #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !

@@ -12,7 +12,7 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
-    shrinkCanvas, zoom, apply_all_cycles
+    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -367,8 +367,16 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             so.testId;
         """
         cursor = conn.execute(query)
-        columns = [desc[0] for desc in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cols = [d[0] for d in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        # require at least one recolor hit in every train
+        train_ids_with_recolor = {r["trainId"] for r in rows if r["trainId"] != -1}
+        all_train_ids = set(TRAIN_INPUT_GRIDS.keys())
+        if not all_train_ids.issubset(train_ids_with_recolor):
+            return []
+
+        return rows
 
     def _build_function(self, row: dict) -> ActionInstance:
         from constelize.dsl.grid_dsl import to_concrete_grid, paint
@@ -2541,7 +2549,7 @@ class LightCycleFactToAction(FactToActionMapping):
             testId=test_id,
             isTrain=True,
             isToOutput=True,
-            END=True
+            END=False
         )
 
 # =============================================================================

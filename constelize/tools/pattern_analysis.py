@@ -209,6 +209,8 @@ def compute_buffer_and_repaint(action_instances, ruleId, scenarioId):
                 action_instances.append(rep)
                 # update the shared buffer so the next paint sees this change
                 buffer_inst.output_value = rep.output_value
+                if concrete_grids_equal(rep.output_value, TRAIN_OUTPUT_GRIDS[inst.trainId]):
+                    rep.END = True
 
 def apply_suggested_defaults(action_instances: List[ActionInstance]) -> None:
     """
