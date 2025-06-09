@@ -79,7 +79,7 @@ def select_sprite_and_attribute_fn(
 
     # helper to assign a weight per attribute
     def weight(attr: str) -> int:
-        if attr in ("sizeOrder", "isColorUnique", "colorUniqueOrder", "hasBorder"):
+        if attr in ("sizeOrder", "nbColors", "isColorUnique", "colorUniqueOrder", "hasBorder"):
             return 10
         if attr.startswith("isTouching"):
             return 5

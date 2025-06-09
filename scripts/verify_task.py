@@ -579,11 +579,10 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Un-Repeat sprite !
-    DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
-
+    #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 
     # Training 4
-    #DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
+    DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
     #DEFAULT_TASK_ID = "28bf18c6" # repeated object x2 horizontal
     #DEFAULT_TASK_ID = "3af2c5a8" # repeated object x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "44f52bb0" # pixel blue if symmetry else pixel orange !
@@ -610,8 +609,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
     #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
 
-
-    trainings_number = 3
+    trainings_number = 4
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
