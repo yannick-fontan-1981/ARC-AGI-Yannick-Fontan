@@ -577,36 +577,9 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "f25ffba3" # composition with vertical symmetry
     #DEFAULT_TASK_ID = "c1d99e64" # red lightCycle on black line touching both border
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
-    DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
-    #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Repeated sprite ?
-    #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
-
-    trainings_number = 3
-    TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
-
-    PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-    db_path          = os.path.join(PROJECT_ROOT, "db", "database.db")
-    json_path        = os.path.join(PROJECT_ROOT, "pattern-finder", "data", f"training-{trainings_number}", f"{TASK_ID}.json")
-    results_path     = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_results.txt")
-    submission_path  = os.path.join(PROJECT_ROOT, "results", "submission.json")
-    comparison_path  = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_comparison.txt")
-
-    #success = test_file(json_path, db_path, results_path, submission_path, comparison_path, TASK_ID, trainings_number)
-    try:
-        success = run_with_timeout(
-            test_file,
-            json_path,
-            db_path,
-            results_path,
-            submission_path,
-            comparison_path,
-            TASK_ID,
-            trainings_number,
-            timeout=30000000000000,
-        )
-    except TimeoutException as te:
-        print(f"⚠️ Overall test_file timed out: {te}")
-        success = False
+    #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
+    #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Un-Repeat sprite !
+    DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 
 
     # Training 4
@@ -636,6 +609,35 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "0d3d703e" # apply cumulated recolor !
     #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
     #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
+
+
+    trainings_number = 3
+    TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
+
+    PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+    db_path          = os.path.join(PROJECT_ROOT, "db", "database.db")
+    json_path        = os.path.join(PROJECT_ROOT, "pattern-finder", "data", f"training-{trainings_number}", f"{TASK_ID}.json")
+    results_path     = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_results.txt")
+    submission_path  = os.path.join(PROJECT_ROOT, "results", "submission.json")
+    comparison_path  = os.path.join(PROJECT_ROOT, "results", f"test_{TASK_ID}_comparison.txt")
+
+    #success = test_file(json_path, db_path, results_path, submission_path, comparison_path, TASK_ID, trainings_number)
+    try:
+        success = run_with_timeout(
+            test_file,
+            json_path,
+            db_path,
+            results_path,
+            submission_path,
+            comparison_path,
+            TASK_ID,
+            trainings_number,
+            timeout=30000000000000,
+        )
+    except TimeoutException as te:
+        print(f"⚠️ Overall test_file timed out: {te}")
+        success = False
+
 
     # Training 5
     #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
@@ -681,33 +683,33 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "10fcaaa3" # 1) composition 2) cellular automation
 
     # Training 7
-    #DEFAULT_TASK_ID = "007bbfb7" #
-    #DEFAULT_TASK_ID = "496994bd" #
-    #DEFAULT_TASK_ID = "1f876c06" #
-    #DEFAULT_TASK_ID = "05f2a901" #
-    #DEFAULT_TASK_ID = "39a8645d" #
-    #DEFAULT_TASK_ID = "1b2d62fb" #
-    #DEFAULT_TASK_ID = "90c28cc7" #
-    #DEFAULT_TASK_ID = "b6afb2da" #
-    #DEFAULT_TASK_ID = "b9b7f026" #
-    #DEFAULT_TASK_ID = "ba97ae07" #
-    #DEFAULT_TASK_ID = "c9f8e694" #
-    #DEFAULT_TASK_ID = "d23f8c26" #
-    #DEFAULT_TASK_ID = "d5d6de2d" #
-    #DEFAULT_TASK_ID = "dbc1a6ce" #
-    #DEFAULT_TASK_ID = "ded97339" #
-    #DEFAULT_TASK_ID = "ea786f4a" #
-    #DEFAULT_TASK_ID = "08ed6ac7" #
-    #DEFAULT_TASK_ID = "40853293" #
-    #DEFAULT_TASK_ID = "5521c0d9" #
-    #DEFAULT_TASK_ID = "f8ff0b80" #
-    #DEFAULT_TASK_ID = "85c4e7cd" #
-    #DEFAULT_TASK_ID = "d2abd087" #
-    #DEFAULT_TASK_ID = "017c7c7b" #
-    #DEFAULT_TASK_ID = "363442ee" #
-    #DEFAULT_TASK_ID = "5168d44c" #
-    #DEFAULT_TASK_ID = "e9614598" #
-    #DEFAULT_TASK_ID = "d9fac9be" #
+    #DEFAULT_TASK_ID = "007bbfb7" # zoom + replace colored pixel by input
+    #DEFAULT_TASK_ID = "496994bd" # top sprite flip vertical + repaint at bottom on input
+    #DEFAULT_TASK_ID = "1f876c06" # lightCycle : trace diagonal line between same color pixel
+    #DEFAULT_TASK_ID = "05f2a901" # gravity on red block toward teal block
+    #DEFAULT_TASK_ID = "39a8645d" # un-repeat most present zone
+    #DEFAULT_TASK_ID = "1b2d62fb" # brown superposition + recolored teal + inverted
+    #DEFAULT_TASK_ID = "90c28cc7" # for block read, draw pixel same color
+    #DEFAULT_TASK_ID = "b6afb2da" # cellular automation
+    #DEFAULT_TASK_ID = "b9b7f026" # draw 1 pixel same color as block with 1 hole
+    #DEFAULT_TASK_ID = "ba97ae07" # cellular automation ? lightCycle ? create object ?
+    #DEFAULT_TASK_ID = "c9f8e694" # lightCycle : from left to right with same color + jump black
+    #DEFAULT_TASK_ID = "d23f8c26" # redraw only center column
+    #DEFAULT_TASK_ID = "d5d6de2d" # recolor + repaint
+    #DEFAULT_TASK_ID = "dbc1a6ce" # lightCycle : draw line between aligned pixels
+    #DEFAULT_TASK_ID = "ded97339" # lightCycle : draw line between aligned pixels
+    #DEFAULT_TASK_ID = "ea786f4a" # lightCycle : draw black diagonal from corners
+    #DEFAULT_TASK_ID = "08ed6ac7" # recolor based on size order
+    #DEFAULT_TASK_ID = "40853293" # lightCycle : draw line between aligned pixels but vertical last
+    #DEFAULT_TASK_ID = "5521c0d9" # shift upper, nb pixels = height
+    #DEFAULT_TASK_ID = "f8ff0b80" # draw 3 pixels vertically with color based on size order
+    #DEFAULT_TASK_ID = "85c4e7cd" # revert fill color based on size order
+    #DEFAULT_TASK_ID = "d2abd087" # recolor red if 6 pixels else blue
+    #DEFAULT_TASK_ID = "017c7c7b" # resize canvas + fill blue in red + repeat pixel + bigger black object
+    #DEFAULT_TASK_ID = "363442ee" # repeat sprite on every blue pixel, anchor center
+    #DEFAULT_TASK_ID = "5168d44c" # move red object 2 pixel right or down, green pixel anchor center
+    #DEFAULT_TASK_ID = "e9614598" # draw green cross between 2 blue pixel
+    #DEFAULT_TASK_ID = "d9fac9be" # draw pixel inside sprite hole (not bg holes)
 
     # Training 8
     #DEFAULT_TASK_ID = "e50d258f" #

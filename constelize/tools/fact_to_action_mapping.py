@@ -525,6 +525,116 @@ class RepeatedSpriteFactToAction(FactToActionMapping):
             END=False
         )
 
+class UnRepeatSpriteFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("unrepeated_sprite", "unrepeated_sprite")
+
+    def _test_function(self, conn):
+        query = """
+        WITH sprite_output_counts AS (
+            SELECT
+                st.sprite_produce_id AS sprite_unique_id,
+                so.trainId,
+                COUNT(DISTINCT so.minX || ',' || so.minY) AS count_occurrences,
+                MAX(LENGTH(su.data)) AS data_len
+            FROM sprite_occurrence so
+            JOIN sprite_transformation st ON so.sprite_transformation_id = st.id
+            JOIN sprite_unique su ON su.id = st.sprite_produce_id
+            WHERE so.isInsideOutput = 1
+            GROUP BY st.sprite_produce_id, so.trainId
+        )
+        SELECT
+            so.sprite_transformation_id,
+            st.sprite_produce_id AS sprite_unique_id,
+            so.trainId,
+            so.testId,
+            su.data,
+            so.minX,
+            so.minY,
+            COUNT(DISTINCT so.minX || ',' || so.minY) AS occurrence_count
+        FROM sprite_occurrence so
+        JOIN sprite_transformation st ON so.sprite_transformation_id = st.id
+        JOIN sprite_unique su ON su.id = st.sprite_produce_id
+        JOIN sprite_output_counts soc ON soc.sprite_unique_id = st.sprite_produce_id AND soc.trainId = so.trainId
+        WHERE so.isInsideOutput = 1
+        GROUP BY st.sprite_produce_id, so.trainId, so.testId
+        HAVING occurrence_count = 1
+        ORDER BY soc.data_len DESC
+        LIMIT 1
+        """
+        cursor = conn.execute(query)
+        cols = [desc[0] for desc in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        train_ids_found = {r["trainId"] for r in rows if r["trainId"] != -1}
+        if not set(TRAIN_OUTPUT_GRIDS.keys()).issubset(train_ids_found):
+            return []
+
+        return rows
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        sprite_grid = to_concrete_grid(json.loads(row["data"]))
+        output_coords = [(row["minX"], row["minY"])]
+        trainId = row["trainId"]
+        testId = row["testId"]
+
+        output_grid_raw = TRAIN_OUTPUT_GRIDS.get(trainId)
+        if output_grid_raw is None:
+            raise ValueError(f"Missing output grid for trainId={trainId}")
+
+        anonymized_canvas = tuple(tuple(-8 for _ in r) for r in output_grid_raw)
+        painted_canvas = paint(anonymized_canvas, sprite_grid, (row["minY"], row["minX"]))
+
+        output_positions_binding = ArgumentBinding(
+            name="output_positions",
+            type="Array<Coord>",
+            binding=BindingStatus.COMPOUND,
+            sub_bindings=[],
+            sub_bindings_length_status=BindingStatus.UNRESOLVED,
+            sub_bindings_length_value=1
+        )
+        x_val = int(row["minX"])
+        y_val = int(row["minY"])
+        output_positions_binding.sub_bindings.append(
+            ArgumentBinding(
+                name="coord_0",
+                type="Coord",
+                binding=BindingStatus.COMPOUND,
+                sub_bindings={
+                    "x": ArgumentBinding(name="x", type="Integer", binding=BindingStatus.UNRESOLVED, value=x_val),
+                    "y": ArgumentBinding(name="y", type="Integer", binding=BindingStatus.UNRESOLVED, value=y_val),
+                },
+                sub_bindings_length_status=BindingStatus.CONSTANT,
+                sub_bindings_length_value=2
+            )
+        )
+
+        return ActionInstance(
+            id=f"unrepeated_sprite_{row['sprite_unique_id']}#{getUniqueId()}",
+            action=self.action,
+            bindings={
+                "output_canvas": ArgumentBinding(
+                    name="output_canvas", type="Grid", binding=BindingStatus.UNRESOLVED, value=anonymized_canvas),
+                "sprite": ArgumentBinding(
+                    name="sprite", type="Grid", binding=BindingStatus.UNRESOLVED, value=sprite_grid),
+                "output_positions": output_positions_binding,
+            },
+            output_var="unrepeated_grid",
+            output_value=painted_canvas,
+            output_type="Grid",
+            scenarioId=row["scenarioId"],
+            ruleId=row["ruleId"],
+            trainId=trainId,
+            testId=testId,
+            isTrain=(trainId != -1),
+            isToOutput=True,
+            toRepaint=True,
+            repaintMinX=row["minX"],
+            repaintMinY=row["minY"],
+            END=False
+        )
+
+
 # =============================================================================
 # CanvasByRatioFactToAction: mapping for canvas by ratio.
 # =============================================================================

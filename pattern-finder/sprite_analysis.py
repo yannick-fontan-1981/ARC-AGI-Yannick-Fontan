@@ -1734,7 +1734,6 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
                     item["input"], item["output"],
                     filename, trainId, testId, is_input
                 )
-
             else:
                 # TEST: first try the original ratio‐based split
                 if len(_train_split_ratios) == 1:
@@ -1751,6 +1750,21 @@ def process_sprites_from_json(filename, data, conn, clear_table=True):
                     fake_ref = [[0]*const_w for _ in range(const_h)]
                     split_sprites = compute_split_sprites_by_ratio(
                         item["input"], fake_ref,
+                        filename, trainId, testId, is_input
+                    )
+                elif len(_train_split_ratios) == 2 \
+                        and (ratios := list(_train_split_ratios)) \
+                        and (r1 := ratios[0]) \
+                        and (r2 := ratios[1]) \
+                        and r1[0] == r2[1] \
+                        and r1[1] == r2[0]:
+                    vert_ratio = next(r for r in ratios if r[1] == 1.0)
+                    hori_ratio = next(r for r in ratios if r[0] == 1.0)
+                    in_h = len(item["input"])
+                    in_w = len(item["input"][0]) if in_h else 0
+                    w_ratio, h_ratio = (vert_ratio if in_w > in_h else hori_ratio)
+                    split_sprites = compute_split_sprites_by_input_ratio(
+                        item["input"], w_ratio, h_ratio,
                         filename, trainId, testId, is_input
                     )
                 #else:
