@@ -578,13 +578,14 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "c1d99e64" # red lightCycle on black line touching both border
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
-    #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Un-Repeat sprite !
+    #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Un-Repeat sprite ?
     #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 
     # Training 4
-    DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
+    #DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
     #DEFAULT_TASK_ID = "28bf18c6" # repeated object x2 horizontal
-    #DEFAULT_TASK_ID = "3af2c5a8" # repeated object x4 with flip horizontal + vertical
+    #DEFAULT_TASK_ID = "3af2c5a8_simple" # repeated object x4 with flip horizontal + vertical
+    DEFAULT_TASK_ID = "3af2c5a8" # repeated object x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "44f52bb0" # pixel blue if symmetry else pixel orange !
     #DEFAULT_TASK_ID = "62c24649" # repeated sprite x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "67e8384a" # repeated sprite x4 with flip horizontal + vertical
@@ -710,9 +711,9 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "d9fac9be" # draw pixel inside sprite hole (not bg holes)
 
     # Training 8
-    #DEFAULT_TASK_ID = "e50d258f" #
-    #DEFAULT_TASK_ID = "810b9b61" #
-    #DEFAULT_TASK_ID = "54d82841" #
+    #DEFAULT_TASK_ID = "e50d258f" # sprite with more red pixels
+    #DEFAULT_TASK_ID = "810b9b61" # recolored green for has-border
+    #DEFAULT_TASK_ID = "54d82841" # Gun ?
     #DEFAULT_TASK_ID = "60b61512" #
     #DEFAULT_TASK_ID = "25d8a9c8" #
     #DEFAULT_TASK_ID = "239be575" #

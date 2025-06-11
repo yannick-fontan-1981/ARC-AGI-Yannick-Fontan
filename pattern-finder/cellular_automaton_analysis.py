@@ -57,6 +57,12 @@ def detect_ca(input_grid, output_grid, orientation_invariant=False, bg=0):
         for x in range(W):
             nbr = get_neighborhood(input_grid, x, y, bg=bg)
             key = canonical(nbr) if orientation_invariant else nbr
+
+            # guard against out-of-range
+            if not (0 <= y < len(output_grid) and 0 <= x < len(output_grid[0])):
+                # skip this cell
+                continue
+
             new_col = output_grid[y][x]
             if key in rule and rule[key] != new_col:
                 return None

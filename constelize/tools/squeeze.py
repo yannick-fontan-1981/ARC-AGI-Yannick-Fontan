@@ -486,7 +486,6 @@ def print_bindings_recursive(proc):
         for arg, b in step.bindings.items():
             print_binding(f"{sid}.{arg}", b)
 
-
 def normalize_procedures_with_levels(
     procs: List[Procedure],
     scenarioId: str,

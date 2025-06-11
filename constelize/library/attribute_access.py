@@ -79,6 +79,8 @@ def select_sprite_and_attribute_fn(
 
     # helper to assign a weight per attribute
     def weight(attr: str) -> int:
+        if attr in ("isFromSplit", "isFromGlued"):
+            return 20
         if attr in ("sizeOrder", "nbColors", "isColorUnique", "colorUniqueOrder", "hasBorder"):
             return 10
         if attr.startswith("isTouching"):
@@ -243,7 +245,7 @@ def select_sprite_grid_fn(
         score = 0
         for attr, val in criteria:
             if row.get(attr) == val:
-                if attr == "isGrid" or attr == "hasBorder":
+                if attr == "isFromSplit" or attr == "isGrid" or attr == "hasBorder":
                     score += 20
                 if attr == "nbColors" or attr == "colorUniqueOrder":
                     score += 10

@@ -711,6 +711,7 @@ def find_minimal_selection_criteria_for_table(
     """
     Find a minimal set of (column,value) tests that include all group IDs (positives)
     and exclude all other IDs (negatives), but only over rows where isInsideInput==True.
+    If all positives have isFromSplit==1, ensure ('isFromSplit', 1) is always returned.
     """
     # 1) pull the raw table and filter to input‐side rows only
     raw = tables.get(table_key, {})
@@ -741,24 +742,7 @@ def find_minimal_selection_criteria_for_table(
         if any(tbl[n][col] != val for n in negatives):
             discriminating.append((col, val))
 
-    if not discriminating:
-        return []
-
-    # 5) return single‐column criteria
     return discriminating
-
-    # (Optional) If you wanted to try pairs as a fallback, you could do:
-    # if len(discriminating) > 1:
-    #     cols = [c for c,_ in discriminating]
-    #     for a, b in combinations(cols, 2):
-    #         v1 = tbl[next(iter(positives))][a]
-    #         v2 = tbl[next(iter(positives))][b]
-    #         if all(not (tbl[n][a]==v1 and tbl[n][b]==v2) for n in negatives):
-    #             return [(a, v1), (b, v2)]
-    #
-    # return []
-
-
 
 def common_attributes_by_train_value_pairs(
     attributes_by_input_and_values: dict[str, dict[int, list[str]]],
