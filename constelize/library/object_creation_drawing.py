@@ -1,7 +1,7 @@
 from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
-from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles, apply_ca
+from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles, apply_ca, select_conditional_object
 
 
 def canvas(value: int, dimensions: tuple) -> tuple:
@@ -101,6 +101,22 @@ ACTIONS = [
         ],
         output_type="Grid",
         function=apply_ca
+    ),
+    Action(
+        id="conditional_objects",
+        name="conditional_objects",
+        description="Selects the conditional object matching criteria and renders its grid.",
+        category=ActionCategory.OBJECT_CREATION_DRAWING,
+        input_arguments=[
+            ArgumentBinding(name="trainId",            type="Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding(name="testId",             type="Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding(name="conditionalObjects", type="List",    binding=BindingStatus.CONSTANT),
+            ArgumentBinding(name="tables",             type="Tables",  binding=BindingStatus.CONSTANT)
+        ],
+        output_type="Grid",
+        function=select_conditional_object,
+        deterministic=True,
+        pure=True,
+        reversible=False
     )
-
 ]

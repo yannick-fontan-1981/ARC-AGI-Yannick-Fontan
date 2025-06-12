@@ -939,6 +939,19 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         """)
     conn.commit()
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS shape_conditional (
+            id INTEGER PRIMARY KEY,
+            shape_transformation_id INTEGER NOT NULL,     -- the transformation we’re flagging
+            shape_id             INTEGER NOT NULL,        -- for convenience
+            color                INTEGER NOT NULL,        -- again, for easy reference
+            criteria_first_sight TEXT,
+            criteria_sprite_grid TEXT,
+            else_transformation_id INTEGER
+        );
+        """)
+    conn.commit()
+
     # Fetch and print data
     cursor.execute("SELECT * FROM first_sight_analysis LIMIT 1")
     print("first_sight_analysis in database:", cursor.fetchall())

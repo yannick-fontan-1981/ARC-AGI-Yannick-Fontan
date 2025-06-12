@@ -65,9 +65,8 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
     action_instances = []
 
     for mapping in FACT_TO_ACTION_MAPPING:
+        mapping.current_rule = current_rule
         try:
-            if(mapping.fact_name=="denoise"):
-                print("FACT_TO_ACTION_MAPPING denoise")
             rows = mapping.test_function(conn)
             for row in rows:
                 # skip any rows with invalid trainId
@@ -81,7 +80,7 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                     action_instances.append(instance)
                     if concrete_grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
                         instance.END = True
-                    if instance.action.id == "move_object" and grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
+                    if instance.action and instance.action.id == "move_object" and grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
                         if instance.action.id == "move_object":
                             print("extract_bg_colors_from_template")
                         # 1) look up all the real colors under the “-1” or “-8” holes in our template
@@ -287,7 +286,7 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
         print(f"    ➤ bindings:")
         for path, bind in _iter_all_bindings(inst.bindings):
             line = f"      • {path} → {bind.binding.name}"
-            if bind.binding in {BindingStatus.MULTIPLE, BindingStatus.CONSTANT, BindingStatus.CONTEXT}:
+            if bind.binding in {BindingStatus.MULTIPLE, BindingStatus.CONSTANT, BindingStatus.CONTEXT} and bind.type in ("Color","Integer"):
                 line += f" = {bind.value}"
             elif bind.binding == BindingStatus.VARIABLE:
                 line += f" ← from {bind.source_procedure_id}"
@@ -376,7 +375,7 @@ def auto_link_by_value_and_type(action_instances: list):
                     return
 
                 print(f"🔗 Attempting to resolve binding '{path}'")
-                print(f"    ➤ Required type: {binding.type}, Current status: {binding.binding}, Current value: {binding.value}")
+                print(f"    ➤ Required type: {binding.type}, Current status: {binding.binding}") # , Current value: {binding.value}
 
                 if binding.binding == BindingStatus.COMPOUND:
                     if isinstance(binding.sub_bindings, list):
@@ -1186,7 +1185,7 @@ def auto_find_constant_without_compound(action_instances: List[ActionInstance]) 
                         b.binding = BindingStatus.CONSTANT
                         b.value   = first_val
                 print(f"[auto_find_constant_without_compound] Action '{action_id}', "
-                      f"argument '{arg_name}' → CONSTANT = {first_val}")
+                      f"argument '{arg_name}' → CONSTANT ") # = {first_val}
 
 ###############################################################################
 # Function: auto_find_constant_for_compound
@@ -1274,10 +1273,10 @@ def process_compound_binding_recursive(bindings: List[ArgumentBinding], path: st
                 if b.binding == BindingStatus.UNRESOLVED:
                     b.binding = BindingStatus.CONSTANT
                     b.value = values[0]
-            print(
-                f"[auto_find_constant_for_compound] Sub-binding '{path}' stabilized as CONSTANT with value: {values[0]}")
+            if bindings[0].type in ("Integer", "Color"):
+                print( f"[auto_find_constant_for_compound] Sub-binding '{path}' stabilized as CONSTANT with value: {values[0]}")
         else:
-            print(f"[auto_find_constant_for_compound] Sub-binding '{path}' NOT constant, values: {values}")
+            print(f"[auto_find_constant_for_compound] Sub-binding '{path}' NOT constant") # , values: {values}
         return
 
     # Now, for COMPOUND bindings, recurse into sub-bindings.
@@ -1650,7 +1649,7 @@ def evaluate_generic_procedures(
                 if skip:
                     continue
 
-                print(f"⚙️  Evaluating {step.action.name} with args: {resolved_args}")
+                print(f"⚙️  Evaluating {step.action.name} ") # with args: {resolved_args}
                 output = step.action.function(**resolved_args)
                 print(f"⚙️ {step.id} = {output}")
                 step.output_value = output
@@ -2657,10 +2656,11 @@ def resolve_binding_recursive(binding, context, input_grid, step):
     #print(f"resolve_binding_recursive: context={context}")
     #print(f"resolve_binding_recursive: input_grid={input_grid}")
 
-    print(f"🧠 Resolving binding: name={binding.name}, status={binding.binding}, value={binding.value}, source={binding.source_procedure_id}")
+    print(f"🧠 Resolving binding: name={binding.name}, status={binding.binding}, source={binding.source_procedure_id}") # value={binding.value},
 
     if binding.binding == BindingStatus.CONSTANT:
-        print(f"  📌 Constant binding resolved to: {binding.value}")
+        if binding.type in ("Integer", "Color", "Grid"):
+            print(f"  📌 Constant binding resolved to: {binding.value}")
         return binding.value
 
     elif binding.binding == BindingStatus.INSTANCE:

@@ -33,7 +33,8 @@ def load_all_tables_from_sqlite(db_path: str) -> Dict[str, Dict[int, Dict[str, A
         "sprite_analysis",
         "sprite_unique",
         "sprite_transformation",
-        "sprite_occurrence"
+        "sprite_occurrence",
+        "shape_conditional"
     ]:
         cursor.execute(f"SELECT * FROM {table_name}")
         columns = [desc[0] for desc in cursor.description]

@@ -6,9 +6,13 @@ import json
 import sys
 
 from sympy import false
+
+from constelize.tools.extract_common_attribute import find_minimal_selection_criteria_for_table, \
+    find_minimal_selection_criteria_for_table_strict
+from constelize.tools.sqlite_loader import load_table_from_sqlite
 from solver.dsl import *
 import time
-from collections import OrderedDict, Counter
+from collections import OrderedDict, Counter, defaultdict
 
 
 def compute_object_analysis(filename: str, trainId: int, testId: int, grid, isInsideInput: bool, global_data, conn):
@@ -814,7 +818,162 @@ def process_objects_from_json(filename, data, conn, clear_table=True):
 
     # 4) finally, commit all of it in one go
     conn.commit()
-    conn.close()
+
+def detect_and_persist_conditional_shapes(conn):
+    cur = conn.cursor()
+    #print("\n=== detect_and_persist_conditional_shapes_verbose ===")
+    #print("Clearing existing rows in 'shape_conditional'...")
+    cur.execute("DELETE FROM shape_conditional")
+
+    # 1) Load analysis tables via helper
+    #print("Loading first_sight_analysis into memory...")
+    fsa_raw = load_table_from_sqlite(conn, "first_sight_analysis", "id")
+    fsa_table = {int(k): v for k, v in fsa_raw.items()}
+    #print(f"  → Loaded {len(fsa_table)} rows from first_sight_analysis")
+
+    #print("Loading sprite_analysis into memory...")
+    sa_raw = load_table_from_sqlite(conn, "sprite_analysis", "id")
+    sa_table = {int(k): v for k, v in sa_raw.items()}
+    sa_cols = list(next(iter(sa_table.values())).keys())
+    #print(f"  → Loaded {len(sa_table)} rows from sprite_analysis")
+
+    # Prepare for minimal-criteria calls
+    all_fsa_ids = [rid for rid, row in fsa_table.items() if row.get('testId') == -1]
+    all_sa_ids = [rid for rid, row in sa_table.items() if row.get('isInsideInput') == 1 and row.get('isGrid') == 1 and row.get('testId') == -1]
+    tables = {
+        'first_sight_analysis': fsa_table,
+        'sprite_analysis': sa_table
+    }
+    #print(f"All FSA IDs (testId=-1): {all_fsa_ids}")
+    #print(f"All SA input-grid IDs: {all_sa_ids}\n")
+
+    # 2) Collect training IDs
+    cur.execute("""
+      SELECT DISTINCT trainId
+        FROM shape_occurrence
+       WHERE isInsideTrain=1 AND testId=-1
+    """)
+    train_ids = [r[0] for r in cur.fetchall()]
+    total_trains = len(train_ids)
+    #print(f"Train IDs: {train_ids} (total={total_trains})\n")
+
+    # 3) Map each transformation to trains in which it's in output
+    cur.execute("""
+      SELECT shape_transformation_id, trainId
+        FROM shape_occurrence
+       WHERE isInsideOutput=1 AND isInsideTrain=1 AND testId=-1
+    """)
+    trains_per_trans = defaultdict(set)
+    for trans_id, tid in cur.fetchall():
+        trains_per_trans[trans_id].add(tid)
+    #print(f"Transformation → train-occurrence map: {dict(trains_per_trans)}\n")
+
+    # 4) Helper to find sprite_analysis IDs per train & flag
+    def find_sa_id(tid):
+        cur.execute(f"""
+          SELECT id
+            FROM sprite_analysis
+           WHERE isGrid = 1
+             AND trainId              = {tid}
+             AND isInsideInput        = 1
+             AND testId               = -1
+           LIMIT 1
+        """)
+        r = cur.fetchone()
+        sid = r[0] if r else None
+        #print(f"    find_sa_id(train={tid}) -> {sid}")
+        return sid
+
+    skip_cols = {'id','filename','trainId','testId','minX','minY','maxX','maxY'}
+
+    # 5) Iterate over each transformation candidate
+    for trans_id, seen_trains in trains_per_trans.items():
+        #print(f"\nProcessing transformation {trans_id}, seen in trains={seen_trains}")
+        if not (1 < len(seen_trains) < total_trains):
+            #print("  → Not conditional (doesn't meet >1 and <total trains), skipping.")
+            continue
+
+        # Get shape_id & color for insertion
+        cur.execute("SELECT shape_id, color FROM shape_transformation WHERE id=?", (trans_id,))
+        shape_id, color = cur.fetchone()
+        #print(f"  shape_id={shape_id}, color={color}")
+
+        # --- Compute criteria_first_sight via minimal selection ---
+        all_fsa_ids = [
+            fsa_id
+            for fsa_id, row in tables['first_sight_analysis'].items()
+            if row.get("testId") == -1
+        ]
+
+        # 2) for each train in seen_trains, pick its one FSA ID (or None)
+        group_fsa: List[int | None] = []
+        for tid in seen_trains:
+            fsa_id = next(
+                (fid for fid, row in tables['first_sight_analysis'].items()
+                 if row.get("trainId") == tid and row.get("testId") == -1),
+                None
+            )
+            group_fsa.append(fsa_id)
+            #print(f"Train {tid} → first_sight_analysis ID {fsa_id}")
+
+        crit_fsa = find_minimal_selection_criteria_for_table_strict(
+            group=tuple(group_fsa),
+            all_ids=all_fsa_ids,
+            tables=tables,
+            table_key='first_sight_analysis'
+        ) or []
+        #print(f"  → criteria_first_sight: {crit_fsa}\n")
+
+        # --- Compute criteria_sprite_grid via minimal selection ---
+        group_sa = []
+        for tid in seen_trains:
+            sid = find_sa_id(tid)
+            group_sa.append(sid)
+        #print(f"    SA group for minimal selection: {group_sa}")
+        crit_sprite = find_minimal_selection_criteria_for_table_strict(
+            group=tuple(group_sa),
+            all_ids=all_sa_ids,
+            tables=tables,
+            table_key='sprite_analysis'
+        ) or []
+        #print(f"  → criteria_sprite_grid: {crit_sprite}\n")
+
+        # --- Compute else_transformation_id if applicable ---
+        other_trains = set(train_ids) - seen_trains
+        else_trans = None
+        if other_trains:
+            placeholders = ",".join("?" for _ in other_trains)
+            cur.execute(f"""
+              SELECT DISTINCT shape_transformation_id
+                FROM shape_occurrence
+               WHERE isInsideOutput=1 AND isInsideTrain=1
+                 AND trainId IN ({placeholders})
+            """, tuple(other_trains))
+            alts = {r[0] for r in cur.fetchall()}
+            #print(f"  Other transformations in other trains: {alts}")
+            if len(alts) == 1:
+                else_trans = alts.pop()
+                #print(f"    → else_transformation_id={else_trans}")
+
+        # --- Insert record into shape_conditional ---
+        #print(f"Inserting record for transformation {trans_id} into shape_conditional...\n")
+        cur.execute("""
+          INSERT INTO shape_conditional
+            (shape_transformation_id, shape_id, color,
+             criteria_first_sight, criteria_sprite_grid,
+             else_transformation_id)
+          VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            trans_id,
+            shape_id,
+            color,
+            json.dumps(crit_fsa),
+            json.dumps(crit_sprite),
+            else_trans
+        ))
+
+    conn.commit()
+    #print("=== Completed detect_and_persist_conditional_shapes_verbose ===\n")
 
 
 ###############################################
@@ -841,6 +1000,7 @@ def main(json_source, *, inline=False, name=None):
             data = json.load(f)
 
     process_objects_from_json(filename, data, conn)
+    detect_and_persist_conditional_shapes(conn)
     conn.close()
 
 

@@ -744,6 +744,86 @@ def find_minimal_selection_criteria_for_table(
 
     return discriminating
 
+def find_minimal_selection_criteria_for_table_strict(
+    group: Tuple[int, ...],
+    all_ids: List[int],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    table_key: str
+) -> List[Tuple[str, Any]]:
+    """
+    Verbose version of minimal selection criteria finder.
+    Finds a minimal set of (column, value) pairs that include all group IDs and exclude negatives.
+    Always prints internal state at each step.
+    """
+    #print("\n=== find_minimal_selection_criteria_for_table_verbose ===")
+    #print(f"Table key: {table_key}")
+    #print(f"Group IDs: {group}")
+    #print(f"All IDs: {all_ids}")
+
+    # 1) pull the raw table and filter to input‑side rows only
+    raw = tables.get(table_key, {})
+    #print(f"Loaded raw rows count: {len(raw)}")
+    if table_key == "first_sight_analysis":
+        tbl = {sid: row for sid, row in raw.items() if row.get("testId") == -1}
+    else:
+        tbl = {sid: row for sid, row in raw.items() if row.get("isInsideInput") }
+    #print(f"Filtered to isInsideInput rows: {len(tbl)} rows")
+    if not tbl:
+        #print("No input‑side rows found; returning []")
+        return []
+
+    ids = set(all_ids) #set(tbl.keys())
+    #print(f"Candidate row IDs after filtering: {ids}")
+    filtered_ids = set(tbl.keys())
+    #print(f"Rows present in tbl: {filtered_ids}")
+
+    # 2) split into positives and negatives within input‑side
+    positives = {sid for sid in group if sid in ids}
+    negatives = ids - positives
+    #print(f"Positives: {positives}")
+    #print(f"Negatives: {negatives}")
+
+    if not positives:
+        #print("No positives; returning []")
+        return []
+    if not negatives:
+        #print("No negatives; returning []")
+        return []
+
+    # 3) find columns constant across the positives
+    sample = next(iter(tbl.values()))
+    all_cols = list(sample.keys())
+    #print(f"All columns: {all_cols}")
+    constant_cols = []
+    for col in all_cols:
+        values = {tbl[s][col] for s in positives}
+        if len(values) == 1:
+            constant_cols.append(col)
+        #print(f"Column '{col}' values in positives: {values}")
+    #print(f"Constant columns across positives: {constant_cols}")
+
+    # 4) keep only those that discriminate (all negatives differ)
+    discriminating: List[Tuple[str, Any]] = []
+    for col in constant_cols:
+        # get the single positive value
+        val = tbl[next(iter(positives))][col]
+        # collect every negative’s value for this column
+        neg_vals = [tbl[n][col] for n in negatives]
+        # check that none of the negatives match the positive
+        all_differ = all(v != val for v in neg_vals)
+        #print(f"Checking column '{col}': positive value = {val}, negative values = {neg_vals}")
+        if all_differ:
+            discriminating.append((col, val))
+            #print(f"  → Column '{col}' discriminates all negatives; keeping ({col}, {val})")
+        #else:
+        #    print(f"  → Column '{col}' does not discriminate all negatives; skipping")
+
+    #print(f"Discriminating criteria: {discriminating}")
+    #print("=== end ===\n")
+    return discriminating
+
+
+
 def common_attributes_by_train_value_pairs(
     attributes_by_input_and_values: dict[str, dict[int, list[str]]],
     pairs: list[tuple[int, int]],

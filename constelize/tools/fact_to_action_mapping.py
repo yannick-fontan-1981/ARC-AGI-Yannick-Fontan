@@ -12,7 +12,7 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
-    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal, apply_ca
+    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal, apply_ca, select_conditional_object
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -106,6 +106,7 @@ class FactToActionMapping:
         action_id: str,
         column_name: Optional[str] = None
     ):
+        self.current_rule = None
         self.fact_name = fact_name
         self.column_name = column_name or fact_name
         self.action_id = action_id
@@ -161,12 +162,12 @@ class FactToActionMapping:
         produced_raw_data = json.loads(row["produced_data"])
         output_grid = to_concrete_grid(produced_raw_data)
 
-        if self.column_name == "rotated_180":
-           print("[ rotated_180 ]")
-           print("input_grid")
-           print(grid_to_pretty_string(input_grid))
-           print("output_grid")
-           print(grid_to_pretty_string(output_grid))
+        #if self.column_name == "rotated_180":
+           #print("[ rotated_180 ]")
+           #print("input_grid")
+           #print(grid_to_pretty_string(input_grid))
+           #print("output_grid")
+           #print(grid_to_pretty_string(output_grid))
 
         trainId = row["trainId"]
         return ActionInstance(
@@ -268,8 +269,7 @@ class ZoomFactToAction(FactToActionMapping):
         all_train_ids = set(TRAIN_INPUT_GRIDS.keys())
 
         if not all_train_ids.issubset(train_ids_with_zoom):
-            print(
-                f"❌ Zoom not detected in all training examples. Found: {train_ids_with_zoom}, Expected: {all_train_ids}")
+            #print(f"❌ Zoom not detected in all training examples. Found: {train_ids_with_zoom}, Expected: {all_train_ids}")
             return []
 
         seen = set()
@@ -289,13 +289,13 @@ class ZoomFactToAction(FactToActionMapping):
         input_grid = unzoom(output_grid, zoom_x, zoom_y)
         trainId = row["trainId"]
 
-        print("ZoomFactToAction _build_function ")
-        print("grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))")
-        print(grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId)))
-        print("output_grid")
-        print(output_grid)
-        print("END_OUTPUTS_BY_TRAINID.get(trainId))")
-        print(END_OUTPUTS_BY_TRAINID.get(trainId))
+        #print("ZoomFactToAction _build_function ")
+        #print("grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))")
+        #print(grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId)))
+        #print("output_grid")
+        #print(output_grid)
+        #print("END_OUTPUTS_BY_TRAINID.get(trainId))")
+        #print(END_OUTPUTS_BY_TRAINID.get(trainId))
 
         return ActionInstance(
             id=f"zoom_instance_{row['sprite_unique_id']}#{getUniqueId()}",
@@ -690,24 +690,24 @@ class CanvasByRatioFactToAction(FactToActionMapping):
         # Retrieve the trainId; a valid training fact has trainId != -1.
         trainId = row.get("trainId", -1)
         if trainId != -1:
-            print("TRAIN_INPUT_GRIDS")
-            print(TRAIN_INPUT_GRIDS)
+            #print("TRAIN_INPUT_GRIDS")
+            #print(TRAIN_INPUT_GRIDS)
             if trainId in TRAIN_INPUT_GRIDS:
                 input_grid = TRAIN_INPUT_GRIDS[trainId]
-                print(f"[CanvasByRatio] Using TRAIN_INPUT_GRIDS for trainId {trainId}: {input_grid}")
+                #print(f"[CanvasByRatio] Using TRAIN_INPUT_GRIDS for trainId {trainId}: {input_grid}")
             else:
                 raise ValueError(f"No input grid found in TRAIN_INPUT_GRIDS for trainId {trainId}")
         else:
-            print("TEST_INPUT_GRIDS")
-            print(TEST_INPUT_GRIDS)
+            #print("TEST_INPUT_GRIDS")
+            #print(TEST_INPUT_GRIDS)
             testId = row.get("testId", -1)
             if testId in TEST_INPUT_GRIDS:
                 input_grid = TEST_INPUT_GRIDS[testId]
-                print(f"[CanvasByRatio] Using TEST_INPUT_GRIDS for testId {testId}: {input_grid}")
+                #print(f"[CanvasByRatio] Using TEST_INPUT_GRIDS for testId {testId}: {input_grid}")
             else:
                 raise ValueError(f"No input grid found in TEST_INPUT_GRIDS for testId {testId}")
         output_grid = canvas_by_ratio_fn(input_grid, ratio_w, ratio_h)
-        print(f"[CanvasByRatio] For id {trainId if trainId != -1 else row.get('testId', -1)}, using ratio=({ratio_w}, {ratio_h}), computed canvas: {output_grid}")
+        #print(f"[CanvasByRatio] For id {trainId if trainId != -1 else row.get('testId', -1)}, using ratio=({ratio_w}, {ratio_h}), computed canvas: {output_grid}")
         return ActionInstance(
             id=f"canvas_by_ratio#{getUniqueId()}",
             action=action,
@@ -848,9 +848,9 @@ class CanvasByObjectSizeFactToAction(FactToActionMapping):
 # build_start_input: Now modified to use BindingStatus.INPUT_GRID
 # =============================================================================
 def build_start_input(id: int, grid, isTrain: bool, scenarioId: str = "scenario_1", ruleId: str = "rule_1") -> ActionInstance:
-    print("[ build_start_input ] registry.get_by_id(get_start_input)")
+    #print("[ build_start_input ] registry.get_by_id(get_start_input)")
     action = registry.get_by_id("get_start_input")
-    print(action)
+    #print(action)
     return ActionInstance(
         id=f"start_input_{'train' if isTrain else 'test'}_{id}#{getUniqueId()}",
         action=action,
@@ -890,7 +890,7 @@ def build_get_attribute_instance(
     # Grab the action from the registry (we assume it’s already registered)
     action   = registry.get_by_id("get_attribute")
 
-    print(f"build_get_attribute_instance binding_type: {binding_type}")
+    #print(f"build_get_attribute_instance binding_type: {binding_type}")
 
     return ActionInstance(
         id=f"get_attribute_{scenarioId}_{ruleId}_{trainId}_{testId}_{attribute_name}",
@@ -1124,9 +1124,9 @@ def build_repaint_instance(
     action = registry.get_by_id("repaint")
     instance_id = f"repaint_{instance.scenarioId}_{instance.ruleId}_{instance.id}_train{instance.trainId}_test{instance.testId}"
 
-    print(f"build_repaint_instance repaintMinX {instance.repaintMinX} repaintMinY {instance.repaintMinY}")
-    print(f"buffer_inst.output_value {buffer_inst.output_value}")
-    print(f"instance.output_value {instance.output_value}")
+    #print(f"build_repaint_instance repaintMinX {instance.repaintMinX} repaintMinY {instance.repaintMinY}")
+    #print(f"buffer_inst.output_value {buffer_inst.output_value}")
+    #print(f"instance.output_value {instance.output_value}")
 
     output_value = repaint(
         buffer_inst.output_value,
@@ -1346,7 +1346,7 @@ class CropSpriteFactToAction(FactToActionMapping):
 
     def _test_function(self, conn):
         if checkAnyInputEqualOrSmallerThanOutput():
-            print("CropSpriteFactToAction: checkAnyInputEqualOrSmallerThanOutput")
+            #print("CropSpriteFactToAction: checkAnyInputEqualOrSmallerThanOutput")
             return []
         query = """
         SELECT DISTINCT
@@ -1388,9 +1388,9 @@ class CropSpriteFactToAction(FactToActionMapping):
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
     def _build_function(self, row):
-        print(f"[DEBUG crop_sprite] Received row: {row}")
+        #print(f"[DEBUG crop_sprite] Received row: {row}")
         if row is None:
-            print("[DEBUG crop_sprite] Row is None, skipping build")
+            #print("[DEBUG crop_sprite] Row is None, skipping build")
             return None
         if row is None:
             return None
@@ -1408,8 +1408,8 @@ class CropSpriteFactToAction(FactToActionMapping):
         #print(grid_to_pretty_string(cropped))
 
         raw_data = to_concrete_grid(json.loads(row["data"]))
-        print("grid_to_pretty_string(raw_data)")
-        print(grid_to_pretty_string(raw_data))
+        #print("grid_to_pretty_string(raw_data)")
+        #print(grid_to_pretty_string(raw_data))
 
         return ActionInstance(
             id=f"crop_sprite_{row['trainId']}_{row['minX']}_{row['minY']}#{getUniqueId()}",
@@ -1458,7 +1458,7 @@ class CropObjectFactToAction(FactToActionMapping):
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
     def _build_function(self, row: dict) -> ActionInstance:
-        print(f"[DEBUG crop_object] row → {row}")
+        #print(f"[DEBUG crop_object] row → {row}")
         # pick the right grid
         raw = TRAIN_INPUT_GRIDS if row["trainId"] != -1 else TEST_INPUT_GRIDS
         grid = to_concrete_grid(raw[row["trainId"] if row["trainId"] != -1 else row["testId"]])
@@ -1475,8 +1475,8 @@ class CropObjectFactToAction(FactToActionMapping):
         #print(grid_to_pretty_string(cropped))
 
         raw_data = to_concrete_grid(json.loads(row["data"]))
-        print("grid_to_pretty_string(raw_data)")
-        print(grid_to_pretty_string(raw_data))
+        #print("grid_to_pretty_string(raw_data)")
+        #print(grid_to_pretty_string(raw_data))
 
         # build the instance, but leave every dimension UNRESOLVED
         # and tag them so we can suggest a selectObjectAndAttributeAction later
@@ -1648,7 +1648,7 @@ class SpriteComputationFactToAction:
             sprite_grids.append(grid)
 
         painted = shrinkCanvas(painted)
-        print(f"[ painted: {painted} ]")
+        #print(f"[ painted: {painted} ]")
 
         # 3) Build ArgumentBindings for sub_sprites, including suggested_transform
         sub_bindings = []
@@ -1791,14 +1791,14 @@ class DenoiseFactToAction(FactToActionMapping):
         return rows
 
     def _build_function(self, row: dict) -> ActionInstance:
-        print("[ DenoiseFactToAction ] _build_function")
+        #print("[ DenoiseFactToAction ] _build_function")
         input_grid = json.loads(row["input_grid"])
         noise_list = json.loads(row["noise_map"])  # [[i,j,color], ...]
         noise_map = {(i, j): color for i, j, color in noise_list}
         output_grid = json.loads(row["output_grid"])
 
-        print(f"[ DenoiseFactToAction ] input_grid : {grid_to_pretty_string(input_grid)}")
-        print(f"[ DenoiseFactToAction ] output_grid : {grid_to_pretty_string(output_grid)}")
+        #print(f"[ DenoiseFactToAction ] input_grid : {grid_to_pretty_string(input_grid)}")
+        #print(f"[ DenoiseFactToAction ] output_grid : {grid_to_pretty_string(output_grid)}")
 
         trainId = row["trainId"]
         testId = row["testId"]
@@ -1840,26 +1840,26 @@ class FixSymmetryFactToAction(FactToActionMapping):
         self.build_function = self._build_function
 
     def _test_function(self, conn):
-        print("\n🔍 Running FixSymmetryFactToAction._test_function")
+        #print("\n🔍 Running FixSymmetryFactToAction._test_function")
         results = []
         skipped = []
         for trainId, grid in TRAIN_INPUT_GRIDS.items():
-            print(f"  ▶️ Checking trainId={trainId}")
+            #print(f"  ▶️ Checking trainId={trainId}")
             h = len(grid)
             w = len(grid[0]) if h else 0
-            print(f"    Grid size: {h}x{w}")
+            #print(f"    Grid size: {h}x{w}")
             if h < 10 or w < 10:
-                print("    ⚠️ Grid too small (<10x10), skipping")
+                #print("    ⚠️ Grid too small (<10x10), skipping")
                 skipped.append(trainId)
                 continue
             sym_rows = sum(all(row[j] == row[w-1-j] for j in range(w)) for row in grid)
             sym_cols = sum(all(grid[i][j] == grid[h-1-i][j] for i in range(h)) for j in range(w))
             pct_rows, pct_cols = sym_rows / h, sym_cols / w
-            print(f"    Symmetric rows: {sym_rows}/{h} ({pct_rows:.2%}), cols: {sym_cols}/{w} ({pct_cols:.2%})")
+            #print(f"    Symmetric rows: {sym_rows}/{h} ({pct_rows:.2%}), cols: {sym_cols}/{w} ({pct_cols:.2%})")
             isH, isV = pct_rows >= 0.75, pct_cols >= 0.75
-            print(f"    Detected isH={isH}, isV={isV}")
+            #print(f"    Detected isH={isH}, isV={isV}")
             if not (isH or isV):
-                print("    ❌ Neither symmetry meets threshold, skipping")
+                #print("    ❌ Neither symmetry meets threshold, skipping")
                 skipped.append(trainId)
                 continue
 
@@ -1875,17 +1875,17 @@ class FixSymmetryFactToAction(FactToActionMapping):
             # 3. Count frequencies and pick the most common
             color_counts = Counter(colors)
             mode_color, mode_count = color_counts.most_common(1)[0]
-            print(f"Most frequent hole‐color is {mode_color} (appears {mode_count} times)")
+            #print(f"Most frequent hole‐color is {mode_color} (appears {mode_count} times)")
             filtered_holes = [
                 (i, j)
                 for (i, j) in merged_holes
                 if grid[i][j] == mode_color
             ]
 
-            print(f"Filtered holes (only color={mode_color}): {filtered_holes}")
+            #print(f"Filtered holes (only color={mode_color}): {filtered_holes}")
 
             if not filtered_holes:
-                print("    ⚠️ No holes to fix after filtering, skipping")
+                #print("    ⚠️ No holes to fix after filtering, skipping")
                 skipped.append(trainId)
                 continue
             axeX, axeY = (w-1)/2, (h-1)/2
@@ -1899,7 +1899,7 @@ class FixSymmetryFactToAction(FactToActionMapping):
                 "axeY": axeY,
                 "Holes": filtered_holes
             })
-            print(f"    ✅ Appended symmetry fix task for trainId={trainId}")
+            #print(f"    ✅ Appended symmetry fix task for trainId={trainId}")
         if skipped:
             return []
         return results
@@ -1908,19 +1908,19 @@ class FixSymmetryFactToAction(FactToActionMapping):
         trainId = row["trainId"]
         testId = row["testId"]
         scenarioId = row["scenarioId"]
-        print(f"\n🔧 Running FixSymmetryFactToAction._build_function for trainId={trainId}")
+        #print(f"\n🔧 Running FixSymmetryFactToAction._build_function for trainId={trainId}")
         grid = TRAIN_INPUT_GRIDS[trainId]
         holes = row["Holes"]
         #print("    Original grid:")
         #print(grid_to_pretty_string(grid))
         fixed = apply_symmetry_fill(grid, row['isHorizontal'], row['isVertical'], holes)
-        print("   🔄 Resulting filled grid:")
-        print(grid_to_pretty_string(fixed))
+        #print("   🔄 Resulting filled grid:")
+        #print(grid_to_pretty_string(fixed))
         sprites = extract_connected_components(fixed, holes)
-        print(f"    🆕 NEW_SPRITES count={len(sprites)}")
-        for idx, sp in enumerate(sprites):
-            print(f"      🖼️ Sprite[{idx}]:")
-            print(grid_to_pretty_string(sp))
+        #print(f"    🆕 NEW_SPRITES count={len(sprites)}")
+        #for idx, sp in enumerate(sprites):
+        #    print(f"      🖼️ Sprite[{idx}]:")
+        #    print(grid_to_pretty_string(sp))
         inst = ActionInstance(
             id=f"fix_symmetry_{trainId}#{getUniqueId()}",
             action=registry.get_by_id("fix_symmetry"),
@@ -1942,7 +1942,7 @@ class FixSymmetryFactToAction(FactToActionMapping):
         )
         inst.IN_SEPARATE_RULE = True
         inst.NEW_SPRITES = sprites
-        print(f"    📦 Generated ActionInstance with NEW_SPRITES={sprites}")
+        #print(f"    📦 Generated ActionInstance with NEW_SPRITES={sprites}")
         return inst
 
 class ZoomOutFactToAction(FactToActionMapping):
@@ -2010,11 +2010,11 @@ class ZoomOutFactToAction(FactToActionMapping):
         zx = int(row["zoom_x"])
         zy = int(row["zoom_y"])
 
-        print("[ Zoom Out build ]")
-        print("input_grid")
-        print(grid_to_pretty_string(input_grid))
-        print("output_grid")
-        print(grid_to_pretty_string(output_grid))
+        #print("[ Zoom Out build ]")
+        #print("input_grid")
+        #print(grid_to_pretty_string(input_grid))
+        #print("output_grid")
+        #print(grid_to_pretty_string(output_grid))
 
         return ActionInstance(
             id=f"zoom_out_{row['input_sprite_id']}#{getUniqueId()}",
@@ -2115,11 +2115,11 @@ class CreateObjectFactToAction(FactToActionMapping):
         color = row["color"]
         output_grid: Grid = fill_grid(mask_grid,color)
 
-        print(f" [ CreateObjectFactToAction ] color: {color}")
-        print(f"mask_grid")
-        print(grid_to_pretty_string(mask_grid))
-        print(f"output_grid")
-        print(grid_to_pretty_string(output_grid))
+        #print(f" [ CreateObjectFactToAction ] color: {color}")
+        #print(f"mask_grid")
+        #print(grid_to_pretty_string(mask_grid))
+        #print(f"output_grid")
+        #print(grid_to_pretty_string(output_grid))
 
         action = registry.get_by_id(self.action_id)
         return ActionInstance(
@@ -2236,8 +2236,8 @@ class MoveObjectFactToAction(FactToActionMapping):
             bg_color
         )
 
-        print("MoveObjectFactToAction")
-        print(grid_to_pretty_string(updated_grid))
+        #print("MoveObjectFactToAction")
+        #print(grid_to_pretty_string(updated_grid))
 
         action = registry.get_by_id(self.action_id)
         # Bind all 8 parameters as UNRESOLVED
@@ -2435,9 +2435,9 @@ class MoveSpriteFactToAction(FactToActionMapping):
         # freeze into tuples
         patch = tuple(tuple(r) for r in patch_grid)
 
-        print("MoveSpriteFactToAction")
-        print("patch")
-        print(grid_to_pretty_string(patch))
+        #print("MoveSpriteFactToAction")
+        #print("patch")
+        #print(grid_to_pretty_string(patch))
 
         # prepare anonymized output canvas
         base_output = TRAIN_OUTPUT_GRIDS[row["trainId"]]
@@ -2445,8 +2445,8 @@ class MoveSpriteFactToAction(FactToActionMapping):
         cols_out = len(base_output[0]) if rows_out else 0
         anon_grid = tuple(tuple(-8 for _ in range(cols_out)) for _ in range(rows_out))
 
-        print("anon_grid")
-        print(grid_to_pretty_string(anon_grid))
+        #print("anon_grid")
+        #print(grid_to_pretty_string(anon_grid))
 
         # shift with background color
         updated_grid = shift_sprite_with_background(
@@ -2461,8 +2461,8 @@ class MoveSpriteFactToAction(FactToActionMapping):
             grid=anon_grid
         )
 
-        print("updated_grid")
-        print(grid_to_pretty_string(updated_grid))
+        #print("updated_grid")
+        #print(grid_to_pretty_string(updated_grid))
 
         # Create bindings
         bindings = {}
@@ -2745,6 +2745,138 @@ class CellularAutomatonFactToAction(FactToActionMapping):
             END=False
         )
 
+class ConditionalObjectFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("conditional_objects", "conditional_objects")
+        self.test_function  = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> list[dict]:
+        """
+        Use the in-memory tables (current_rule.tables) rather than SQL.
+        Returns one fact‐row per trainId with key 'conditionalObjects' = list of dicts.
+        """
+        # grab all four tables
+        tables = self.current_rule.tables
+        sc_tbl = tables["shape_conditional"]        # {id: { ... }}
+        so_tbl = tables["shape_occurrence"]
+        sh_tbl = tables["shape"]
+        st_tbl = tables["shape_transformation"]
+
+        # collect one conditional‐object row per (sc, occurrence)
+        all_conds = []
+        for sc_id, sc in sc_tbl.items():
+            # parse criteria JSON once
+            sc_color = sc.get("color")
+            crit_fsa = json.loads(sc["criteria_first_sight"] or "[]")
+            crit_ssg = json.loads(sc["criteria_sprite_grid"] or "[]")
+            else_tid = sc.get("else_transformation_id")
+
+            # find all matching occurrences
+            for so in so_tbl.values():
+                if (so["shape_transformation_id"] != sc["shape_transformation_id"]
+                    or so["isInsideOutput"] != 1
+                    or so["isInsideTrain"]  != 1
+                    or so["testId"]         != -1):
+                    continue
+
+                trainId = so["trainId"]
+                testId  = so["testId"]
+
+                # find the corresponding shape row
+                sh = next(
+                    row for row in sh_tbl.values()
+                    if (row["id"]==sc["shape_id"])
+                )
+                obj_data = json.loads(sh["data"])
+
+                # transformation flags
+                st = st_tbl[sc["shape_transformation_id"]]
+
+                fact = {
+                    "id":                        sc_id,
+                    "color":                     sc_color,
+                    "criteria_first_sight":      crit_fsa,
+                    "criteria_sprite_grid":      crit_ssg,
+                    "else_transformation_id":    else_tid,
+                    "trainId":                   trainId,
+                    "testId":                    testId,
+                    "object_data":               obj_data,
+                    "rotated_90":                bool(st["rotated_90"]),
+                    "rotated_180":               bool(st["rotated_180"]),
+                    "rotated_270":               bool(st["rotated_270"]),
+                    "flipped_vert":              bool(st["flipped_vert"]),
+                    "flipped_horiz":             bool(st["flipped_horiz"]),
+                    "flipped_vert_90":           bool(st["flipped_vert_90"]),
+                    "flipped_horiz_90":          bool(st["flipped_horiz_90"]),
+                    "zoom_x":                    st["zoom_x"],
+                    "zoom_y":                    st["zoom_y"]
+                }
+                all_conds.append(fact)
+
+        # assemble one result per train
+        results = []
+        for trainId in TRAIN_INPUT_GRIDS:
+            results.append({
+                "trainId":            trainId,
+                "testId":             -1,
+                "conditionalObjects": all_conds
+            })
+        #print("ConditionalObjectFactToAction Test results:")
+        #print(results)
+        return results
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        """
+        Binds:
+          - input_grid
+          - conditionalObjects
+        Calls select_conditional_object(trainId,testId,candidates) to compute output_value.
+        """
+        trainId    = row["trainId"]
+        testId     = row["testId"]
+        conditionalObjects = row["conditionalObjects"]
+
+        # bind the actual input grid
+        input_grid = TRAIN_INPUT_GRIDS[trainId]
+
+        # select best object by criteria
+        output_grid = select_conditional_object(trainId, testId, conditionalObjects, self.current_rule.tables)
+        #print("select_conditional_object")
+        #print(grid_to_pretty_string(output_grid))
+
+        bindings = {
+            "trainId": ArgumentBinding(name="trainId", type="Integer", binding=BindingStatus.CONTEXT, value=trainId),
+            "testId": ArgumentBinding(name="testId", type="Integer", binding=BindingStatus.CONTEXT, value=testId),
+            "tables": ArgumentBinding(
+                name="tables",
+                type="Table",
+                binding=BindingStatus.CONSTANT,
+                value=self.current_rule.tables
+            ),
+            "conditionalObjects": ArgumentBinding(
+                name="conditionalObjects",
+                type="Table",
+                binding=BindingStatus.CONSTANT,
+                value=conditionalObjects
+            )
+        }
+
+        return ActionInstance(
+            id=f"conditional_objects_{trainId}#{getUniqueId()}",
+            action=registry.get_by_id(self.action_id),
+            bindings=bindings,
+            output_var="result_object",
+            output_value=output_grid,
+            output_type="Grid",
+            scenarioId=row.get("scenarioId"),
+            ruleId=row.get("ruleId"),
+            trainId=trainId,
+            testId=testId,
+            isTrain=True,
+            isToOutput=True,
+            END=False
+        )
 
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
@@ -2772,4 +2904,5 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     FixSymmetryFactToAction(),
     LightCycleFactToAction(),
     CellularAutomatonFactToAction(),
+    ConditionalObjectFactToAction(),
 ]

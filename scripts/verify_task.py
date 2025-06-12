@@ -585,11 +585,11 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
     #DEFAULT_TASK_ID = "28bf18c6" # repeated object x2 horizontal
     #DEFAULT_TASK_ID = "3af2c5a8_simple" # repeated object x4 with flip horizontal + vertical
-    DEFAULT_TASK_ID = "3af2c5a8" # repeated object x4 with flip horizontal + vertical
+    #DEFAULT_TASK_ID = "3af2c5a8" # repeated object x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "44f52bb0" # pixel blue if symmetry else pixel orange !
     #DEFAULT_TASK_ID = "62c24649" # repeated sprite x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "67e8384a" # repeated sprite x4 with flip horizontal + vertical
-    #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
+     #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
     #DEFAULT_TASK_ID = "662c240a" # select sprite not in cumulated disqualified sprite's shapes !!!
     #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
     #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !

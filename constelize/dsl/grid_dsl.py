@@ -941,6 +941,79 @@ def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict]) -> List[List[int
     return result
 
 
+def select_conditional_object(
+    trainId: int,
+    testId:  int,
+    conditionalObjects: List[Dict[str, Any]],
+    tables:   Dict[str, Dict[int, Dict[str, Any]]]
+) -> List[List[int]]:
+    """
+    Given trainId/testId and a list of candidate dicts (with
+    'criteria_first_sight', 'criteria_sprite_grid', and 'object_data'),
+    use the in-memory tables from current_rule.tables to fetch the
+    corresponding first_sight_analysis and sprite_analysis rows,
+    then score and return the best-matching object_data grid.
+    """
+    # pull the in-memory tables
+    fsa_table = tables["first_sight_analysis"]
+    sa_table  = tables["sprite_analysis"]
+
+    # 1) find the single FSA row for this train/test
+    fsa_row = next(
+        row for row in fsa_table.values()
+        if row.get("trainId")==trainId and row.get("testId")==testId
+    )
+
+    # 2) find the single SA row (input-grid only) for this train/test
+    sa_row = next(
+        row for row in sa_table.values()
+        if row.get("trainId")==trainId
+           and row.get("testId")==testId
+           and row.get("isInsideInput")==1
+           and row.get("isGrid")==1
+    )
+
+    # 3) score each candidate
+    best_score  = -1
+    best_object = None
+    for cand in conditionalObjects:
+        score = 0
+        for col, val in cand["criteria_first_sight"]:
+            if fsa_row.get(col) == val:
+                score += 1
+        for col, val in cand["criteria_sprite_grid"]:
+            if sa_row.get(col) == val:
+                score += 1
+        if score > best_score:
+            best_score  = score
+            best_object = cand
+
+    # fallback
+    if best_object is None:
+        best_object = conditionalObjects[0]
+
+    # 3) compute bounding box of the object’s pixels
+    obj_pixels = best_object["object_data"]  # list of [x,y]
+    xs = [x for x, y in obj_pixels]
+    ys = [y for x, y in obj_pixels]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    width = max_x - min_x + 1
+    height = max_y - min_y + 1
+
+    # 4) render a new grid of that size
+    color = best_object["color"]
+    result = [[-1 for _ in range(width)] for _ in range(height)]
+    for x, y in obj_pixels:
+        if 0 <= x < width and 0 <= y < height:
+            result[y][x] = color
+
+    # todo : apply rotation / flip
+
+    return result
+
+
+
 if __name__ == '__main__':
     print(grid_to_pretty_string(to_concrete_grid(
         [[0, [1, 9]], [4, [0, 11]], [2, [1, 3]], [4, [1, 0]], [4, [1, 6]], [0, [0, 2]], [2, [1, 2]], [0, [1, 4]],
