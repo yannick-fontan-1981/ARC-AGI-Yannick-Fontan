@@ -125,10 +125,9 @@ class FactToActionMapping:
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
         query = f"""
         SELECT DISTINCT
+            sa.id AS sprite_analysis_id,
+            sa.isGrid,
             st.sprite_unique_id,
-            st.sprite_produce_id,
-            so.isInsideInput,
-            so.isInsideOutput,
             so.trainId,
             so.testId,
             source.data AS source_data,
@@ -140,11 +139,32 @@ class FactToActionMapping:
         INNER JOIN sprite_occurrence AS po ON po.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS produced ON produced.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
+        INNER JOIN sprite_analysis AS sa ON sa.id = source.sprite_id
         WHERE st.{self.column_name} = 1
-        AND COALESCE(st.zoom_x, 1) = 1
-        AND COALESCE(st.zoom_y, 1) = 1
-        AND (st.recolored IS NULL OR st.recolored = '[]')
-        AND so.sprite_id IS NOT NULL
+          AND COALESCE(st.zoom_x, 1) = 1
+          AND COALESCE(st.zoom_y, 1) = 1
+          AND (st.recolored IS NULL OR st.recolored = '[]')
+          AND so.sprite_id IS NOT NULL
+          AND sa.isInsideInput = 1
+        
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sprite_occurrence AS so2
+            JOIN sprite_unique AS su2 ON su2.id = so2.sprite_unique_id
+            JOIN sprite_analysis AS sa2 ON sa2.id = su2.sprite_id
+            WHERE so2.trainId = so.trainId
+              AND so2.testId = so.testId
+              AND sa2.isInsideInput = 1
+              AND su2.id != source.id
+              AND (
+                SELECT COUNT(*) FROM json_each(su2.data)
+              ) > (
+                SELECT COUNT(*) FROM json_each(source.data)
+              )
+              -- optional spatial inclusion approximation:
+              AND sa2.minX <= sa.minX AND sa2.minY <= sa.minY
+              AND sa2.maxX >= sa.maxX AND sa2.maxY >= sa.maxY
+          );
         """
         cursor = conn.execute(query)
         columns = [desc[0] for desc in cursor.description]
@@ -169,17 +189,27 @@ class FactToActionMapping:
            #print("output_grid")
            #print(grid_to_pretty_string(output_grid))
 
+        grid_binding = ArgumentBinding(
+            name="grid",
+            type="Grid",
+            binding=BindingStatus.UNRESOLVED,
+            value=input_grid
+        )
+        isGrid = row["isGrid"]
+        if isGrid:
+            grid_binding.binding = BindingStatus.INPUT_GRID
+        else:
+            sprite_analysis_id = row.get("sprite_analysis_id")
+            if sprite_analysis_id is not None:
+                grid_binding.suggested_action = "selectSpriteGridAction"
+                grid_binding.suggested_sprite_id =  sprite_analysis_id
+
         trainId = row["trainId"]
         return ActionInstance(
             id=f"{self.action_id}_instance_{row['sprite_unique_id']}#{getUniqueId()}",
             action=self.action,
             bindings={
-                "grid": ArgumentBinding(
-                    name="grid",
-                    type="Grid",
-                    binding=BindingStatus.VARIABLE,
-                    value=input_grid
-                )
+                "grid": grid_binding
             },
             output_var=f"{self.action_id}_grid",
             output_value=output_grid,
@@ -189,7 +219,6 @@ class FactToActionMapping:
             trainId=trainId,
             testId=row["testId"],
             isTrain=trainId != -1,
-            isToOutput=row["isInsideOutput"],
             toRepaint=True,
             repaintMinX=row["minX"],
             repaintMinY=row["minY"],

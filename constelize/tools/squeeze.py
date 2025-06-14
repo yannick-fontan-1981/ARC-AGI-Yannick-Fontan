@@ -224,7 +224,14 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
 
     branches: List[Dict[str, ActionInstance]] = [{}]
     action_counters: Dict[str, int] = defaultdict(int)
+    end_by_generic: Dict[str, Set[int]] = defaultdict(set)
     train_to_generic_id: Dict[str, str] = {}
+    all_train_ids: Set[int] = set(
+        step.trainId
+        for proc in train_procs
+        for step in proc.steps.values()
+        if step.trainId is not None
+    )
 
     def _const_signature(step):
         return tuple(
@@ -389,6 +396,12 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
                             print(f"🔧 Rewired repaint# → bufferInstance {generic_buf_id}")
 
                     new_branches.append(branch)
+
+                    if step.END:
+                        #print("end_by_generic[found.id].add(step.trainId)")
+                        #print(f"end_by_generic[{found.id}].add({step.trainId}) for step.id: {step.id}")
+                        end_by_generic[found.id].add(step.trainId)
+
                     continue
 
                 # No match → create a new instance
@@ -428,6 +441,11 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
                 branch2[copied.id] = copied
                 new_branches.append(branch2)
 
+                if step.END:
+                    #print("end_by_generic[copied.id].add(step.trainId)")
+                    #print(f"end_by_generic[{copied.id}].add({step.trainId}) for step.id: {step.id}")
+                    end_by_generic[copied.id].add(step.trainId)
+
             branches = new_branches
 
     # Final pass
@@ -443,16 +461,31 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
         for s in branch.values():
             if s.used_by:
                 s.used_by = [uid for uid in s.used_by if uid in step_ids]
+        for gen_step in branch.values():
+            if not gen_step.END:
+                if gen_step.IN_SEPARATE_RULE:
+                    gen_step.END = True
+                else:
+                    ended_ids = end_by_generic.get(gen_step.id, set())
+                    gen_step.END = all_train_ids <= ended_ids
+                #print(f"gen_step.id: {gen_step.id} ")
+                #print(f"ended_ids: {ended_ids}, all_train_ids: {all_train_ids} gen_step.END: {gen_step.END}, ")
+                #print(end_by_generic)
 
-        final_output_ids = {s.id for s in branch.values() if s.END or s.isToOutput}
+        # On recompute la liste des IDs à conserver impérativement
+        final_output_ids = {s.id for s in branch.values() if s.END}
+
+        # On identifie les étapes inutilisées
         to_remove = [
             sid for sid in branch
             if not is_step_still_used(sid, branch) and sid not in final_output_ids
         ]
         for sid in to_remove:
-            if branch[sid].action.id in ("get_start_input", "initialize_buffer", "repaint"):
+            action_id = branch[sid].action.id
+            if action_id in ("get_start_input", "initialize_buffer", "repaint"):
+                print(f"[DEBUG] On conserve {sid} (action {action_id} protégée)")
                 continue
-            print(f"🧹 Removing unused step: {sid}")
+            print(f"🧹 Removing unused step: {sid} (action {action_id})")
             branch.pop(sid)
 
         proc = Procedure(id=f"generic_proc_{idx+1}", steps=branch, scenarioId=scenarioId, ruleId=ruleId)

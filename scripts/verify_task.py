@@ -183,7 +183,13 @@ def split_action_instances_in_scenarios(action_instances, current_scenario):
             proc_train = Procedure(id=f"proc_pre_{action_id}_train_{inst.trainId}", steps=steps, scenarioId=scenarioId, ruleId=rulePreId)
             all_proc_train.append(proc_train)
         generic_procs = squeeze_with_unresolved(all_proc_train, scenarioId, rulePreId)
+        if not generic_procs:
+            print(f"⚠️ split_action_instances: pas de procédures générées pour '{action_id}', on skip")
+            continue
         generic_proc = generic_procs[0]
+        if not generic_proc.steps:
+            print(f"⚠️ split_action_instances: generic_proc sans steps pour '{action_id}', on skip")
+            continue
         generic_action = next(iter(generic_proc.steps.values()))
         generic_proc.action_producing_output = generic_action
         rule_by_separate_action.procedures = generic_procs
@@ -589,7 +595,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "44f52bb0" # pixel blue if symmetry else pixel orange !
     #DEFAULT_TASK_ID = "62c24649" # repeated sprite x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "67e8384a" # repeated sprite x4 with flip horizontal + vertical
-     #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
+    #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
     #DEFAULT_TASK_ID = "662c240a" # select sprite not in cumulated disqualified sprite's shapes !!!
     #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
     #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
@@ -610,7 +616,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
     #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
 
-    trainings_number = 4
+    trainings_number = 3
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))

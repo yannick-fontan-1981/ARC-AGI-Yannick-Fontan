@@ -954,6 +954,9 @@ def select_conditional_object(
     corresponding first_sight_analysis and sprite_analysis rows,
     then score and return the best-matching object_data grid.
     """
+    if len(conditionalObjects) == 0:
+        return None
+
     # pull the in-memory tables
     fsa_table = tables["first_sight_analysis"]
     sa_table  = tables["sprite_analysis"]
