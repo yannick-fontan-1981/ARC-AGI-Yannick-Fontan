@@ -65,7 +65,7 @@ def extract_common_object_grid_action(
         return None
 
     # 5) Filter for discriminative criteria among input objects only
-    discriminative: List[Tuple[str, Any]] = []
+    discriminative: List[Tuple[str, Any, int]] = []
     target_set = set(target_ids)
     for col, val in common:
         matching_ids = {
@@ -76,7 +76,7 @@ def extract_common_object_grid_action(
         }
         #print(f"    – Testing ({col!r} == {val!r}) on input objects: matches IDs {sorted(matching_ids)!r}")
         if matching_ids == target_set:
-            discriminative.append((col, val))
+            discriminative.append((col, val, 1))
             #print(f"      ✓ {col!r} is discriminative among inputs")
         #else:
             #print(f"      ✗ {col!r} not discriminative (matches {sorted(matching_ids)!r}, target {sorted(target_set)!r})")
@@ -158,7 +158,7 @@ def extract_common_sprite_grid_action(
         return None
 
     # 5) Filter for discriminative criteria among input sprites only
-    discriminative: List[Tuple[str, Any]] = []
+    discriminative: List[Tuple[str, Any, int]] = []
     target_set = set(target_ids)
     for col, val in common:
         # only consider sprites where isInsideInput == 1  AND  testId == -1
@@ -171,7 +171,7 @@ def extract_common_sprite_grid_action(
         }
         print(f"    – Testing ({col!r} == {val!r}) on input sprites: matches IDs {sorted(matching_ids)!r}")
         if matching_ids == target_set:
-            discriminative.append((col, val))
+            discriminative.append((col, val ,1))
             print(f"      ✓ {col!r} is discriminative among inputs")
         else:
             print(
@@ -364,6 +364,7 @@ def extract_common_attribute_action(
     for group in groups_obj:
         if any(sid is None for sid in group):
             continue
+        print("1) find_minimal_selection_criteria_for_table")
         crit = find_minimal_selection_criteria_for_table(
             group, all_objects, tables, table_key="object_analysis"
         )
@@ -421,6 +422,7 @@ def compute_select_sprite_and_attribute_action(all_sprites, common_columns, grou
         if any(sid is None for sid in group):
             #print(f"    🔹 Skipping incomplete group {group}")
             continue
+        print("2) find_minimal_selection_criteria_for_table")
         crit = find_minimal_selection_criteria_for_table(group, all_sprites, tables, table_key="sprite_analysis")
         #print(f"    Group {group} → criteria: {crit}")
         if crit:
@@ -707,12 +709,74 @@ def find_minimal_selection_criteria_for_table(
     all_ids: List[int],
     tables: Dict[str, Dict[int, Dict[str, Any]]],
     table_key: str
-) -> List[Tuple[str, Any]]:
+) -> List[Tuple[str, Any, int]]:
+    """
+    Retourne une liste de (colonne, valeur, poids), en commençant par
+    les critères stricts (poids=3), puis les lâches (poids=1).
+    - strict : inclut tous les positifs et exclut *tous* les négatifs
+    - lâche  : inclut tous les positifs et exclut *au moins* un négatif
+    """
+    # 1) filtrage des lignes d'entraînement (isInsideInput ou testId==-1)
+    raw = tables.get(table_key, {})
+    if table_key == "first_sight_analysis":
+        tbl = {sid: row for sid, row in raw.items() if row.get("testId") == -1}
+    else:
+        tbl = {sid: row for sid, row in raw.items() if row.get("isInsideInput")}
+    if not tbl:
+        return []
+
+    positives = set(group) & set(tbl.keys())
+    negatives = set(all_ids) - positives
+    # s'il n'y a pas de positifs ou pas de négatifs, on ne peut rien distinguer
+    if not positives or not negatives:
+        return []
+
+    sample = next(iter(tbl.values()))
+    cols = list(sample.keys())
+
+    strict = []
+    loose  = []
+
+    # 2) parcourir toutes les colonnes
+    for col in cols:
+        # 2a) est-elle constante sur tous les positifs ?
+        pos_vals = {tbl[sid][col] for sid in positives}
+        if len(pos_vals) != 1:
+            continue
+        val = pos_vals.pop()
+
+        # 2b) stricte : *tous* les négatifs doivent être ≠
+        if all(tbl[n][col] != val for n in negatives):
+            strict.append((col, val, 10))
+        # 2c) lâche : au moins un négatif est ≠
+        elif any(tbl[n][col] != val for n in negatives):
+            loose.append((col, val, 1))
+
+    # 3) concatène strict + (loose sans doublons de colonne)
+    strict_cols = {col for col, _, _ in strict}
+    merged = strict + [(c, v, w) for (c, v, w) in loose if c not in strict_cols]
+    return merged
+
+def find_minimal_selection_criteria_for_table_old(
+    group: Tuple[int, ...],
+    all_ids: List[int],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    table_key: str
+) -> List[Tuple[str, Any, int]]:
     """
     Find a minimal set of (column,value) tests that include all group IDs (positives)
     and exclude all other IDs (negatives), but only over rows where isInsideInput==True.
     If all positives have isFromSplit==1, ensure ('isFromSplit', 1) is always returned.
     """
+    strict = find_minimal_selection_criteria_for_table_strict(
+        group,
+        all_ids,
+        tables,
+        table_key
+    )
+    if strict:
+        return strict
+
     # 1) pull the raw table and filter to input‐side rows only
     raw = tables.get(table_key, {})
     tbl = {sid: row for sid, row in raw.items() if row.get("isInsideInput")}
@@ -740,7 +804,7 @@ def find_minimal_selection_criteria_for_table(
     for col in constant_cols:
         val = tbl[next(iter(positives))][col]
         if any(tbl[n][col] != val for n in negatives):
-            discriminating.append((col, val))
+            discriminating.append((col, val, 1))
 
     return discriminating
 
@@ -749,61 +813,61 @@ def find_minimal_selection_criteria_for_table_strict(
     all_ids: List[int],
     tables: Dict[str, Dict[int, Dict[str, Any]]],
     table_key: str
-) -> List[Tuple[str, Any]]:
+) -> List[Tuple[str, Any, int]]:
     """
     Verbose version of minimal selection criteria finder.
     Finds a minimal set of (column, value) pairs that include all group IDs and exclude negatives.
     Always prints internal state at each step.
     """
-    #print("\n=== find_minimal_selection_criteria_for_table_verbose ===")
-    #print(f"Table key: {table_key}")
-    #print(f"Group IDs: {group}")
-    #print(f"All IDs: {all_ids}")
+    print("\n=== find_minimal_selection_criteria_for_table_verbose ===")
+    print(f"Table key: {table_key}")
+    print(f"Group IDs: {group}")
+    print(f"All IDs: {all_ids}")
 
     # 1) pull the raw table and filter to input‑side rows only
     raw = tables.get(table_key, {})
-    #print(f"Loaded raw rows count: {len(raw)}")
+    print(f"Loaded raw rows count: {len(raw)}")
     if table_key == "first_sight_analysis":
         tbl = {sid: row for sid, row in raw.items() if row.get("testId") == -1}
     else:
         tbl = {sid: row for sid, row in raw.items() if row.get("isInsideInput") }
-    #print(f"Filtered to isInsideInput rows: {len(tbl)} rows")
+    print(f"Filtered to isInsideInput rows: {len(tbl)} rows")
     if not tbl:
-        #print("No input‑side rows found; returning []")
+        print("No input‑side rows found; returning []")
         return []
 
     ids = set(all_ids) #set(tbl.keys())
-    #print(f"Candidate row IDs after filtering: {ids}")
+    print(f"Candidate row IDs after filtering: {ids}")
     filtered_ids = set(tbl.keys())
-    #print(f"Rows present in tbl: {filtered_ids}")
+    print(f"Rows present in tbl: {filtered_ids}")
 
     # 2) split into positives and negatives within input‑side
     positives = {sid for sid in group if sid in ids}
     negatives = ids - positives
-    #print(f"Positives: {positives}")
-    #print(f"Negatives: {negatives}")
+    print(f"Positives: {positives}")
+    print(f"Negatives: {negatives}")
 
     if not positives:
-        #print("No positives; returning []")
+        print("No positives; returning []")
         return []
     if not negatives:
-        #print("No negatives; returning []")
+        print("No negatives; returning []")
         return []
 
     # 3) find columns constant across the positives
     sample = next(iter(tbl.values()))
     all_cols = list(sample.keys())
-    #print(f"All columns: {all_cols}")
+    print(f"All columns: {all_cols}")
     constant_cols = []
     for col in all_cols:
         values = {tbl[s][col] for s in positives}
         if len(values) == 1:
             constant_cols.append(col)
-        #print(f"Column '{col}' values in positives: {values}")
-    #print(f"Constant columns across positives: {constant_cols}")
+        print(f"Column '{col}' values in positives: {values}")
+    print(f"Constant columns across positives: {constant_cols}")
 
     # 4) keep only those that discriminate (all negatives differ)
-    discriminating: List[Tuple[str, Any]] = []
+    discriminating: List[Tuple[str, Any, int]] = []
     for col in constant_cols:
         # get the single positive value
         val = tbl[next(iter(positives))][col]
@@ -811,15 +875,15 @@ def find_minimal_selection_criteria_for_table_strict(
         neg_vals = [tbl[n][col] for n in negatives]
         # check that none of the negatives match the positive
         all_differ = all(v != val for v in neg_vals)
-        #print(f"Checking column '{col}': positive value = {val}, negative values = {neg_vals}")
+        print(f"Checking column '{col}': positive value = {val}, negative values = {neg_vals}")
         if all_differ:
-            discriminating.append((col, val))
-            #print(f"  → Column '{col}' discriminates all negatives; keeping ({col}, {val})")
-        #else:
-        #    print(f"  → Column '{col}' does not discriminate all negatives; skipping")
+            discriminating.append((col, val, 10))
+            print(f"  → Column '{col}' discriminates all negatives; keeping ({col}, {val})")
+        else:
+            print(f"  → Column '{col}' does not discriminate all negatives; skipping")
 
-    #print(f"Discriminating criteria: {discriminating}")
-    #print("=== end ===\n")
+    print(f"Discriminating criteria: {discriminating}")
+    print("=== end ===\n")
     return discriminating
 
 

@@ -128,59 +128,48 @@ class FactToActionMapping:
             sa.id AS sprite_analysis_id,
             sa.isGrid,
             st.sprite_unique_id,
-            so.trainId,
-            so.testId,
+            sa.trainId,
+            sa.testId,
             source.data AS source_data,
-            produced.data AS produced_data,
-            po.minX,
-            po.minY
+			sa_po.minX,
+			sa_po.minY
         FROM sprite_transformation AS st
-        INNER JOIN sprite_occurrence AS so ON st.id = so.sprite_transformation_id
-        INNER JOIN sprite_occurrence AS po ON po.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS produced ON produced.id = st.sprite_produce_id
         INNER JOIN sprite_unique AS source ON source.id = st.sprite_unique_id
         INNER JOIN sprite_analysis AS sa ON sa.id = source.sprite_id
+        LEFT JOIN sprite_analysis AS sa_po ON sa_po.id = produced.sprite_id
         WHERE st.{self.column_name} = 1
           AND COALESCE(st.zoom_x, 1) = 1
           AND COALESCE(st.zoom_y, 1) = 1
           AND (st.recolored IS NULL OR st.recolored = '[]')
-          AND so.sprite_id IS NOT NULL
           AND sa.isInsideInput = 1
-        
-          AND NOT EXISTS (
-            SELECT 1
-            FROM sprite_occurrence AS so2
-            JOIN sprite_unique AS su2 ON su2.id = so2.sprite_unique_id
-            JOIN sprite_analysis AS sa2 ON sa2.id = su2.sprite_id
-            WHERE so2.trainId = so.trainId
-              AND so2.testId = so.testId
-              AND sa2.isInsideInput = 1
-              AND su2.id != source.id
-              AND (
-                SELECT COUNT(*) FROM json_each(su2.data)
-              ) > (
-                SELECT COUNT(*) FROM json_each(source.data)
-              )
-              -- optional spatial inclusion approximation:
-              AND sa2.minX <= sa.minX AND sa2.minY <= sa.minY
-              AND sa2.maxX >= sa.maxX AND sa2.maxY >= sa.maxY
-          );
         """
         cursor = conn.execute(query)
-        columns = [desc[0] for desc in cursor.description]
+        cols = [d[0] for d in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-        #if self.column_name == "rotated_180":
-        #    print("[ test rotated_180 ]")
-        #    print([dict(zip(columns, row)) for row in cursor.fetchall()])
+        # 2) Pour chaque (trainId, testId), ne garder que la ligne dont
+        #    'source_data' est la plus volumineuse (le plus grand nombre d'éléments JSON).
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for r in rows:
+            key = (r['trainId'], r['testId'])
+            grouped[key].append(r)
 
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        filtered = []
+        for key, candidates in grouped.items():
+            # trouver la longueur JSON la plus grande
+            best = max(
+                candidates,
+                key=lambda r: len(json.loads(r['source_data']))
+            )
+            filtered.append(best)
+
+        return filtered
 
     def _build_function(self, row: dict) -> ActionInstance:
         source_raw_data = json.loads(row["source_data"])
         input_grid = to_concrete_grid(source_raw_data)
-
-        produced_raw_data = json.loads(row["produced_data"])
-        output_grid = to_concrete_grid(produced_raw_data)
 
         #if self.column_name == "rotated_180":
            #print("[ rotated_180 ]")
@@ -205,6 +194,16 @@ class FactToActionMapping:
                 grid_binding.suggested_sprite_id =  sprite_analysis_id
 
         trainId = row["trainId"]
+
+        output_grid = self.action.function(input_grid)
+
+        #isEnd = grids_equal(output_grid, END_OUTPUTS_BY_TRAINID.get(trainId))
+        #print(f"trainId: {trainId}, Rot/Flip END:")
+        #print(isEnd)
+        #print(grid_to_pretty_string(output_grid))
+        #print(grid_to_pretty_string(END_OUTPUTS_BY_TRAINID.get(trainId)))
+
+
         return ActionInstance(
             id=f"{self.action_id}_instance_{row['sprite_unique_id']}#{getUniqueId()}",
             action=self.action,
@@ -947,7 +946,7 @@ def build_select_sprite_and_attribute_instance(
     testId: int,
     binding_type: str,
     output_value: Any,
-    criteria: List[Tuple[str, Any]],
+    criteria: List[Tuple[str, Any, int]],
     attribute_name: str,
     scenarioId: str,
     ruleId: str
@@ -990,7 +989,7 @@ def build_select_object_and_attribute_instance(
     testId: int,
     binding_type: str,
     output_value: Any,
-    criteria: List[Tuple[str, Any]],
+    criteria: List[Tuple[str, Any, int]],
     attribute_name: str,
     scenarioId: str,
     ruleId: str
@@ -1032,7 +1031,7 @@ def build_select_sprite_grid_instance(
     trainId: int,
     testId: int,
     output_grid: Grid,
-    criteria: List[Tuple[str, Any]],
+    criteria: List[Tuple[str, Any, int]],
     scenarioId: str,
     ruleId: str,
     transform: Optional[Dict[str,Any]] = None
@@ -1102,7 +1101,7 @@ def build_select_sprite_grid_instance(
 def build_select_object_grid_instance(
     trainId:    int,
     testId:     int,
-    criteria:   List[Tuple[str, Any]],
+    criteria:   List[Tuple[str, Any, int]],
     output_grid: Grid,
     scenarioId: str,
     ruleId:     str
@@ -1571,7 +1570,7 @@ class SpriteComputationFactToAction:
 
           -- linkage back to unique & original
           su.id            AS sprite_unique_id,
-          su.sprite_id     AS sprite_origin_id,
+          sc.sprite_origin_id     AS sprite_origin_id,
           sa_orig.bgColor  AS sprite_origin_bg,
 
           -- transformation details
@@ -1602,7 +1601,7 @@ class SpriteComputationFactToAction:
           ON su_st.id = st.sprite_unique_id
         
         -- ensure that the unique’s original sprite was inside the input
-        JOIN sprite_analysis AS sa_orig
+        LEFT JOIN sprite_analysis AS sa_orig
           ON sa_orig.id = su_st.sprite_id
          AND sa_orig.isInsideInput = 1
  

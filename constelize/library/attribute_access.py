@@ -63,21 +63,21 @@ def get_attribute_fn(scenarioId: str, ruleId: str, binding_type: str, trainId: i
 def select_sprite_and_attribute_fn(
     scenarioId: str,
     ruleId: str,
-    criteria: List[Tuple[str, int]],
+    criteria: List[Tuple[str, Any, int]],  # (colonne, valeur_attendue, strict_weight)
     attribute_name: str,
     trainId: int | None = None,
     testId: int | None = None
 ) -> int | None:
     """
-    Return the attribute value of the sprite whose row best matches your criteria.
-    We now weight each match:
-      – +5 if attr == 'sizeOrder' or attr == 'isColorUnique'
-      – +2 if attr.startswith('isTouching')
-      – +1 otherwise
+    Pour chaque critère (col, val, strict_w), on calcule:
+      score += weight(col) * strict_w
+
+    On renvoie l'attribut du sprite qui maximise ce score.
     """
+
     sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
 
-    # helper to assign a weight per attribute
+    # fonction de poids statique
     def weight(attr: str) -> int:
         if attr in ("isFromSplit", "isFromGlued"):
             return 20
@@ -87,8 +87,8 @@ def select_sprite_and_attribute_fn(
             return 5
         return 1
 
-    # precompute maximum possible score for debug
-    total_possible = sum(weight(attr) for attr, _ in criteria)
+    # score maximal possible (pour debug)
+    total_possible = sum(weight(col) * strict_w for col, _, strict_w in criteria)
 
     best_sid = None
     best_score = -1
@@ -96,54 +96,65 @@ def select_sprite_and_attribute_fn(
     for sid, row in sprite_tbl.items():
         if trainId is not None and row.get("trainId") != trainId:
             continue
-        if testId is not None and row.get("testId") != testId:
+        if testId  is not None and row.get("testId")  != testId:
             continue
         if not row.get("isInsideInput", False):
             continue
 
-        # compute weighted score
-        score = sum(
-            weight(attr)
-            for attr, val in criteria
-            if row.get(attr) == val
-        )
+        # calcul du score en combinant weight() et strict_w
+        score = 0
+        for col, expected_val, strict_w in criteria:
+            if row.get(col) == expected_val:
+                score += weight(col) * strict_w
 
         if score > best_score:
             best_score = score
-            best_sid = sid
+            best_sid   = sid
 
     if best_sid is None or best_score <= 0:
         return None
 
-    # debug info
+    # debug
     print(
-        f"[BEST MATCH] sprite {best_sid} matched {best_score}/{total_possible} points "
+        f"[BEST MATCH] sprite={best_sid} score={best_score}/{total_possible} "
         f"→ {attribute_name} = {sprite_tbl[best_sid].get(attribute_name)}"
     )
+
     return sprite_tbl[best_sid].get(attribute_name)
 
 def select_object_and_attribute_fn(
     scenarioId: str,
     ruleId: str,
-    criteria: List[Tuple[str, Any]],
+    criteria: List[Tuple[str, Any, int]],  # (colonne, valeur_attendue, strict_weight)
     attribute_name: str,
     trainId:    int | None = None,
     testId:     int | None = None
 ) -> Optional[int]:
     """
-    Return the attribute value of the object whose row best matches your criteria,
-    giving a big bonus to matching sizeOrder.
+    Pour chaque critère (col, val, strict_w), on calcule:
+      score += weight(col) * strict_w
+
+    Puis on choisit l'objet dont le score est maximal.
     """
     object_tbl = GLOBAL.load_object_analysis_table(scenarioId, ruleId)
 
-    print(f"select_object_and_attribute_fn trainId={trainId} testId={testId}")
+    # même logique de poids que pour les sprites
+    def weight(attr: str) -> int:
+        if attr in ("isFromSplit", "isFromGlued"):
+            return 20
+        if attr in ("sizeOrder", "nbColors", "isColorUnique", "colorUniqueOrder", "hasBorder", "width", "height"):
+            return 10
+        if attr.startswith("isTouching") or attr.startswith("distance"):
+            return 5
+        return 1
 
-    best_row: dict[str, Any] | None = None
+    best_row = None
     best_score = -1
+    # pour debug
+    total_possible = sum(weight(col) * strict_w for col, _, strict_w in criteria)
 
-    # 1) Scan every object_analysis row
     for row in object_tbl.values():
-        # 2) Filter by train/test
+        # filtrer selon train/test et présence en entrée
         if trainId is not None and row.get("trainId") != trainId:
             continue
         if testId  is not None and row.get("testId")  != testId:
@@ -151,29 +162,25 @@ def select_object_and_attribute_fn(
         if not row.get("isInsideInput", False):
             continue
 
-        # 3) Score it by how many criteria it matches,
-        #    but give +10 points for sizeOrder matches
+        # calcul du score
         score = 0
-        for attr, val in criteria:
-            if row.get(attr) == val:
-                if attr == "sizeOrder" or attr == "isColorUnique" or attr == "colorUniqueOrder":
-                    score += 10
-                else:
-                    score += 1
+        for col, expected_val, strict_w in criteria:
+            if row.get(col) == expected_val:
+                score += weight(col) * strict_w
 
         if score > best_score:
             best_score = score
             best_row   = row
 
-    # 4) If nothing matched, bail out
     if best_row is None or best_score <= 0:
-        print("  ⚠️ No object passes any criterion → returning None")
+        print("  ⚠️ Aucun objet ne satisfait les critères → None")
         return None
 
-    # 5) Otherwise return the desired attribute
     result = best_row.get(attribute_name)
-    print(f"[BEST MATCH] score={best_score} (of max {10 if any(a=='sizeOrder' for a,_ in criteria) else len(criteria)}) → "
-          f"{attribute_name} = {result}")
+    print(
+        f"[BEST MATCH] object_id={best_row.get('id')} "
+        f"score={best_score}/{total_possible} → {attribute_name} = {result}"
+    )
     return result
 
 def apply_transform_to_grid(
@@ -213,27 +220,48 @@ def apply_transform_to_grid(
         grid = recolor_sprite(grid, recolor_pairs)
 
     return grid
-
 def select_sprite_grid_fn(
     scenarioId: str,
     ruleId:     str,
-    criteria:   List[Tuple[str, int]],
+    criteria:   List[Tuple[str, int, int]],  # (colonne, valeur_attendue, strict_w)
     trainId:    int | None = None,
     testId:     int | None = None,
     transform:  dict | None = None
 ) -> Grid | None:
     """
-    Find the sprite whose row maximizes the number of (attr==val) hits in `criteria`,
-    then load its raw pixel-list and convert it to a concrete Grid.
+    On parcourt les lignes de sprite_analysis, on calcule pour chacune :
+      score += weight(col) * strict_w
+    et on choisit le sprite à score max.
     """
+    print("trainId")
+    print(trainId)
+    print("testId")
+    print(testId)
+    print("transform")
+    print(transform)
+    print("criteria")
+    print(criteria)
     sprite_tbl = GLOBAL.load_sprite_analysis_table(scenarioId, ruleId)
+
+    # barème fixe
+    def weight(attr: str) -> int:
+        if attr in ("isFromSplit", "isFromGlued", "isGrid", "hasBorder"):
+            return 20
+        if attr in ("nbColors", "colorUniqueOrder"):
+            return 10
+        if attr in ("sizeOrder", "isColorUnique"):
+            return 5
+        if attr.startswith("isTouching"):
+            return 2
+        return 1
 
     best_sid   = None
     best_score = -1
-    full_score = len(criteria)
+    # utile pour debug
+    total_possible = sum(weight(col) * strict_w for col, _, strict_w in criteria)
 
     for sid, row in sprite_tbl.items():
-        # filter to the right example
+        # filtrage par train/test
         if trainId is not None and row.get("trainId") != trainId:
             continue
         if testId  is not None and row.get("testId")  != testId:
@@ -241,84 +269,87 @@ def select_sprite_grid_fn(
         if not row.get("isInsideInput", False):
             continue
 
-        # count how many criteria this row satisfies
+        # calcul du score
         score = 0
-        for attr, val in criteria:
-            if row.get(attr) == val:
-                if attr == "isFromSplit" or attr == "isGrid" or attr == "hasBorder":
-                    score += 20
-                if attr == "nbColors" or attr == "colorUniqueOrder":
-                    score += 10
-                if attr == "sizeOrder" or attr == "isColorUnique":
-                    score += 5
-                else:
-                    score += 1
+        for col, expected_val, strict_w in criteria:
+            if row.get(col) == expected_val:
+                score += weight(col) * strict_w
 
-        # keep the highest‐scoring sprite
         if score > best_score:
             best_score, best_sid = score, sid
-            # if we hit a perfect match, we can stop early
-            if score == full_score:
+            # early-exit s’il atteint le maximum théorique
+            if best_score == total_possible:
                 break
 
     if best_sid is None or best_score <= 0:
         return None
 
+    # reconstruire la grille
     raw = json.loads(sprite_tbl[best_sid]["data"])
     grid = to_concrete_grid(raw)
 
-    # apply transform if any
+    # appliquer la transformation suggérée
     if transform:
         grid = apply_transform_to_grid(grid, transform)
 
-    return grid
+    # debug
+    print(f"[BEST MATCH] sprite_id={best_sid} score={best_score}/{total_possible}")
 
+    return grid
 
 def select_object_grid_fn(
     scenarioId: str,
     ruleId:     str,
-    criteria:   List[Tuple[str, Any]],
+    criteria:   List[Tuple[str, Any, int]],  # (colonne, valeur_attendue, strict_w)
     trainId:    int | None = None,
     testId:     int | None = None
 ) -> Optional[Grid]:
     """
-    Return the minimal object patch grid for the object_analysis entry that
-    best matches the given criteria (highest weighted count of attr==val),
-    filtered by trainId/testId. If no row matches at least one criterion,
-    return None.
+    Retourne la grille du patch d’objet qui maximise le score pondéré :
+      score = Σ weight(col) * strict_w   pour chaque critère vérifié.
     """
     obj_tbl = GLOBAL.load_object_analysis_table(scenarioId, ruleId)
 
-    best_oid = None
-    best_score = -1
+    # barème identique à celui des sprites
+    def weight(attr: str) -> int:
+        if attr in ("isFromSplit", "isFromGlued"):
+            return 20
+        if attr in ("sizeOrder", "nbColors", "isColorUnique", "colorUniqueOrder", "hasBorder"):
+            return 10
+        if attr.startswith("isTouching"):
+            return 5
+        return 1
 
-    # pick the object with highest weighted match count
+    best_oid   = None
+    best_score = -1
+    # (pour debug) score maximal possible
+    total_possible = sum(weight(col) * strict_w for col, _, strict_w in criteria)
+
     for oid, row in obj_tbl.items():
+        # filtrage par train/test
         if trainId is not None and row.get("trainId") != trainId:
             continue
-        if testId is not None and row.get("testId") != testId:
+        if testId  is not None and row.get("testId")  != testId:
             continue
         if not row.get("isInsideInput", False):
             continue
 
-        # weighted count: sizeOrder matches count for 10, everything else counts for 1
+        # calcul du score pondéré
         score = 0
-        for attr, val in criteria:
-            if row.get(attr) == val:
-                if attr == "sizeOrder" or attr == "isColorUnique" or attr == "colorUniqueOrder":
-                    score += 10
-                else:
-                    score += 1
+        for col, expected_val, strict_w in criteria:
+            if row.get(col) == expected_val:
+                score += weight(col) * strict_w
 
         if score > best_score:
-            best_score = score
-            best_oid = oid
+            best_score, best_oid = score, oid
+            if best_score == total_possible:
+                break
 
-    # require at least one (weighted) match
+    # s’il n’y a pas au moins une correspondance
     if best_oid is None or best_score <= 0:
         return None
 
-    # build the patch grid from the chosen row
+    # construction du patch minimal
     row = obj_tbl[best_oid]
     coords_abs = json.loads(row.get("data", "[]"))
     if not coords_abs:
@@ -328,16 +359,18 @@ def select_object_grid_fn(
     cols = [c for _, c in coords_abs]
     min_r, max_r = min(rows), max(rows)
     min_c, max_c = min(cols), max(cols)
-    height = max_r - min_r + 1
-    width  = max_c - min_c + 1
+    h = max_r - min_r + 1
+    w = max_c - min_c + 1
     color = int(row.get("color", 0))
 
-    patch = [[-1 for _ in range(width)] for __ in range(height)]
+    patch = [[-1 for _ in range(w)] for __ in range(h)]
     for r, c in coords_abs:
-        lr, lc = r - min_r, c - min_c
-        patch[lr][lc] = color
+        patch[r - min_r][c - min_c] = color
 
-    return tuple(tuple(row) for row in patch)
+    # debug
+    print(f"[BEST MATCH OBJECT] oid={best_oid} score={best_score}/{total_possible}")
+
+    return tuple(tuple(r) for r in patch)
 
 ACTIONS = [
     Action(

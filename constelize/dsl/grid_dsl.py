@@ -981,12 +981,12 @@ def select_conditional_object(
     best_object = None
     for cand in conditionalObjects:
         score = 0
-        for col, val in cand["criteria_first_sight"]:
+        for col, val, w in cand["criteria_first_sight"]:
             if fsa_row.get(col) == val:
-                score += 1
-        for col, val in cand["criteria_sprite_grid"]:
+                score += w
+        for col, val, w in cand["criteria_sprite_grid"]:
             if sa_row.get(col) == val:
-                score += 1
+                score += w
         if score > best_score:
             best_score  = score
             best_object = cand

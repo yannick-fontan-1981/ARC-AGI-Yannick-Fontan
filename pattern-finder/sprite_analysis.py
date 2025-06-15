@@ -350,6 +350,11 @@ def store_in_sprite_unique_and_occurrence(attr_dict, sprite_grid, global_data):
             if zx <= 0 or zy <= 0:
                 continue
 
+            #h0, w0 = len(sprite_grid), len(sprite_grid[0])
+            #h1, w1 = len(transformed), len(transformed[0])
+            #if zx == 1 and zy ==1 and r90 is False and r270 is False and fv90 is False and fh90 is False and (h1, w1) != (h0, w0):
+            #    continue
+
             try:
                 zoomed = (
                     [
@@ -3046,6 +3051,7 @@ def detect_and_store_sprite_computation(conn, data=None):
 
     # 4) SECOND PASS: record computations using chosen_flags
     computation_results = []
+    comp_id = 0
 
     for trainId, sprite_list in sprites_by_train.items():
         mains = [s for s in sprite_list if s["isInsideOutput"]]
@@ -3079,7 +3085,6 @@ def detect_and_store_sprite_computation(conn, data=None):
                         masks.append(new_mask)
                         mask_maps.append([sub])
 
-            comp_id = 1
             for mask, subs in zip(masks, mask_maps):
                 if not is_fully_filled(mask):
                     #print(f"  MAIN#{mid} fill#{comp_id} incomplete, skipping")
@@ -3110,12 +3115,12 @@ def detect_and_store_sprite_computation(conn, data=None):
                               occ.id                   AS sprite_occurrence_id,
                               occ.sprite_unique_id,
                               occ.sprite_transformation_id,
-                              su.sprite_id             AS sprite_origin_id
+                              sa.id             AS sprite_origin_id
                             FROM sprite_occurrence AS occ
                             JOIN sprite_transformation AS st
                               ON occ.sprite_transformation_id = st.id
                             JOIN sprite_unique      AS su
-                              ON st.sprite_unique_id = su.id
+                              ON occ.sprite_unique_id = su.id
                             JOIN sprite_analysis    AS sa
                               ON su.sprite_id = sa.id
                               AND sa.isInsideInput = 1

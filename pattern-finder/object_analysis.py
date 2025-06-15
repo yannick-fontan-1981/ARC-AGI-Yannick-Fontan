@@ -916,7 +916,8 @@ def detect_and_persist_conditional_shapes(conn):
             group_fsa.append(fsa_id)
             #print(f"Train {tid} → first_sight_analysis ID {fsa_id}")
 
-        crit_fsa = find_minimal_selection_criteria_for_table_strict(
+        #crit_fsa = find_minimal_selection_criteria_for_table_strict(
+        crit_fsa = find_minimal_selection_criteria_for_table(
             group=tuple(group_fsa),
             all_ids=all_fsa_ids,
             tables=tables,
@@ -930,7 +931,8 @@ def detect_and_persist_conditional_shapes(conn):
             sid = find_sa_id(tid)
             group_sa.append(sid)
         #print(f"    SA group for minimal selection: {group_sa}")
-        crit_sprite = find_minimal_selection_criteria_for_table_strict(
+        #crit_sprite = find_minimal_selection_criteria_for_table_strict(
+        crit_sprite = find_minimal_selection_criteria_for_table(
             group=tuple(group_sa),
             all_ids=all_sa_ids,
             tables=tables,

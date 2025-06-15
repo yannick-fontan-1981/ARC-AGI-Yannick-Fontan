@@ -596,8 +596,8 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "62c24649" # repeated sprite x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "67e8384a" # repeated sprite x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
-    #DEFAULT_TASK_ID = "662c240a" # select sprite not in cumulated disqualified sprite's shapes !!!
-    #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
+    #DEFAULT_TASK_ID = "662c240a" # select sprite not having diagonal symetry
+    DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
     #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
     #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
     #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
@@ -616,7 +616,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
     #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
 
-    trainings_number = 3
+    trainings_number = 4
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))

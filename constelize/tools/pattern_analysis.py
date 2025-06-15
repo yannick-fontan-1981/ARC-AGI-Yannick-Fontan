@@ -274,7 +274,7 @@ def generate_draft_procedure(action_instances, json_data: dict, scenarioId: str,
                 if bind.binding == BindingStatus.UNRESOLVED:
                     print(f"    • Missing: {path} → UNRESOLVED")
 
-    action_instances = [inst for inst in action_instances if not has_unresolved_binding(inst)]
+    #action_instances = [inst for inst in action_instances if not has_unresolved_binding(inst)]
     after = len(action_instances)
     print(f"✅ Filtered unresolved actions: {before - after} removed, {after} remaining.")
 
@@ -816,7 +816,7 @@ def create_suggested_action_instances(
                 stack.extend(subs.values() if isinstance(subs, dict) else subs)
 
     suggestions_by_action: Dict[
-        str, Dict[Tuple[Any, Tuple, Any], Dict[int, ...]]
+        str, Dict[Tuple[Tuple, Any], Dict[int, ...]]
     ] = defaultdict(lambda: defaultdict(dict))
 
     for inst in action_instances:
@@ -837,10 +837,10 @@ def create_suggested_action_instances(
 
             if action in {"selectObjectGridAction", "selectObjectAndAttributeAction"}:
                 thing_id = bind.suggested_object_id
-                key = (None, transform_key, bind.suggested_attribute)
+                key = (transform_key, bind.suggested_attribute)
             else:
                 thing_id = bind.suggested_sprite_id
-                key = (thing_id, transform_key, bind.suggested_attribute)
+                key = (transform_key, bind.suggested_attribute)
 
             suggestions_by_action[action][key][tid] = (
                 inst_, bind, inst_.testId, thing_id, transform
@@ -850,16 +850,17 @@ def create_suggested_action_instances(
     new_instances: List[ActionInstance] = []
 
     for action, groups in suggestions_by_action.items():
-        for (thing_id, transform_key, attribute_name), per_train in groups.items():
+        for (transform_key, attribute_name), per_train in groups.items():
             train_ids = sorted(per_train.keys())
-            print(f"\n  • Processing {action!r} (thing_id={thing_id}, transform={transform_key}) for trains {train_ids}")
+            print(f"\n  • Processing {action!r} (transform={transform_key}) for trains {train_ids}")
 
             if action == "selectSpriteGridAction":
-                group = tuple(per_train[tid][3] for tid in train_ids)
+                group = tuple(info[3] for info in per_train.values())
                 all_input_sids = [sid for sid, row in tables["sprite_analysis"].items() if row.get("isInsideInput") == 1]
+                print("3) find_minimal_selection_criteria_for_table")
                 criteria = find_minimal_selection_criteria_for_table(group=group, all_ids=all_input_sids, tables=tables, table_key="sprite_analysis")
                 exclude = {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest"}
-                criteria = [(c, v) for c, v in criteria if c not in exclude]
+                criteria = [(c, v, w) for c, v, w in criteria if c not in exclude]
                 print(f"    ▶️ Criteria: {criteria!r}")
                 if not criteria:
                     print("    ⚠️ No criteria → skipping")
@@ -878,7 +879,7 @@ def create_suggested_action_instances(
                             if (
                                 other_bind.binding == BindingStatus.UNRESOLVED and
                                 getattr(other_bind, "suggested_action", None) == action and
-                                getattr(other_bind, "suggested_sprite_id", None) == thing_id and
+                                getattr(other_bind, "suggested_sprite_id", None) == sid and
                                 freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
                                 getattr(other_bind, "suggested_attribute", None) == attribute_name
                             ):
@@ -886,15 +887,18 @@ def create_suggested_action_instances(
                                 other_bind.source_procedure_id = sel.id
 
             elif action == "selectSpriteAndAttributeAction":
-                group = tuple(per_train[tid][3] for tid in train_ids)
+                group = tuple(info[3] for info in per_train.values())
+                print("per_train")
+                print(per_train)
                 all_input_sids = [sid for sid, row in tables["sprite_analysis"].items() if row.get("isInsideInput") == 1]
+                print("4) find_minimal_selection_criteria_for_table")
                 criteria = find_minimal_selection_criteria_for_table(
                     group=group,
                     all_ids=all_input_sids,
                     tables=tables,
                     table_key="sprite_analysis"
                 )
-                criteria = [(c, v) for c, v in criteria if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest"}]
+                criteria = [(c, v, w) for c, v, w in criteria if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest"}]
                 if not criteria:
                     print("    ⚠️ no attribute criteria → skipping")
                     continue
@@ -928,7 +932,7 @@ def create_suggested_action_instances(
                             if (
                                 other_bind.binding == BindingStatus.UNRESOLVED and
                                 getattr(other_bind, "suggested_action", None) == action and
-                                getattr(other_bind, "suggested_sprite_id", None) == thing_id and
+                                getattr(other_bind, "suggested_sprite_id", None) == sid and
                                 freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
                                 getattr(other_bind, "suggested_attribute", None) == attribute_name
                             ):
@@ -936,15 +940,16 @@ def create_suggested_action_instances(
                                 other_bind.source_procedure_id = sel.id
 
             elif action == "selectObjectGridAction":
-                group = tuple(per_train[tid][3] for tid in train_ids)
+                group = tuple(info[3] for info in per_train.values())
                 all_input_oids = [oid for oid, row in tables["object_analysis"].items() if row.get("isInsideInput") == 1]
+                print("5) find_minimal_selection_criteria_for_table")
                 criteria = find_minimal_selection_criteria_for_table(
                     group=group,
                     all_ids=all_input_oids,
                     tables=tables,
                     table_key="object_analysis"
                 )
-                criteria = [(c, v) for c, v in criteria if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest"}]
+                criteria = [(c, v, w) for c, v, w in criteria if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput", "isInsideTrain", "isInsideTest"}]
                 if not criteria:
                     print("    ⚠️ no object-grid criteria → skipping")
                     continue
@@ -975,7 +980,7 @@ def create_suggested_action_instances(
                             if (
                                 other_bind.binding == BindingStatus.UNRESOLVED and
                                 getattr(other_bind, "suggested_action", None) == action and
-                                getattr(other_bind, "suggested_object_id", None) == thing_id and
+                                getattr(other_bind, "suggested_object_id", None) == oid and
                                 freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
                                 getattr(other_bind, "suggested_attribute", None) == attribute_name
                             ):
@@ -983,18 +988,19 @@ def create_suggested_action_instances(
                                 other_bind.source_procedure_id = sel.id
 
             elif action == "selectObjectAndAttributeAction":
-                group = tuple(per_train[tid][3] for tid in train_ids)
+                group = tuple(info[3] for info in per_train.values())
                 all_input_oids = [
                     oid for oid, row in tables["object_analysis"].items()
                     if row.get("isInsideInput") == 1
                 ]
+                print("6) find_minimal_selection_criteria_for_table")
                 criteria = find_minimal_selection_criteria_for_table(
                     group=group,
                     all_ids=all_input_oids,
                     tables=tables,
                     table_key="object_analysis"
                 )
-                criteria = [(c, v) for c, v in criteria
+                criteria = [(c, v, w) for c, v, w in criteria
                             if c not in {"trainId", "testId", "isInsideInput", "isInsideOutput",
                                          "isInsideTrain", "isInsideTest"}]
                 if not criteria:
@@ -1030,7 +1036,7 @@ def create_suggested_action_instances(
                             if (
                                 other_bind.binding == BindingStatus.UNRESOLVED and
                                 getattr(other_bind, "suggested_action", None) == action and
-                                getattr(other_bind, "suggested_object_id", None) == thing_id and
+                                getattr(other_bind, "suggested_object_id", None) == oid and
                                 freeze(getattr(other_bind, "suggested_transform", {})) == transform_key and
                                 getattr(other_bind, "suggested_attribute", None) == attribute_name
                             ):
