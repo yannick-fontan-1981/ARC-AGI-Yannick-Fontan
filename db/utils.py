@@ -922,7 +922,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             input_color  INTEGER NOT NULL,
             output_color INTEGER NOT NULL,
             neighbor_count INTEGER NOT NULL DEFAULT 0,
-            cumulative_color INTEGER NOT NULL DEFAULT 0
+            wildcard_colors TEXT,         -- serialized list of colors
+            centric BOOLEAN
         );
         """)
     conn.commit()
@@ -933,7 +934,8 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             rule_id       INTEGER NOT NULL,
             posRelX       INTEGER NOT NULL,
             posRelY       INTEGER NOT NULL,
-            color         INTEGER NOT NULL,
+            color         INTEGER,
+            output         INTEGER,
             FOREIGN KEY(rule_id) REFERENCES cellular_automaton(id)
         );
         """)

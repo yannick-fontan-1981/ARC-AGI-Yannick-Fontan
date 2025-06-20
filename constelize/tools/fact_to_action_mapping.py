@@ -2728,17 +2728,18 @@ class CellularAutomatonFactToAction(FactToActionMapping):
         self.build_function = self._build_function
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
-        cur = conn.execute("SELECT id, input_color, output_color, cumulative_color FROM cellular_automaton")
+        cur = conn.execute("SELECT id, input_color, output_color, wildcard_colors, centric FROM cellular_automaton")
         rules_raw = [dict(zip([d[0] for d in cur.description], row)) for row in cur.fetchall()]
         ca_rules: List[Dict] = []
         for rw in rules_raw:
             rid = rw['id']
-            cur = conn.execute("SELECT posRelX, posRelY, color FROM cellular_automaton_cells WHERE rule_id=?",(rid,))
-            neighbors = [(dx, dy, color) for dx, dy, color in cur.fetchall()]
+            cur = conn.execute("SELECT posRelX, posRelY, color, output FROM cellular_automaton_cells WHERE rule_id=?",(rid,))
+            neighbors = [(dx, dy, color, output) for dx, dy, color, output in cur.fetchall()]
             ca_rules.append({
                 'input_color': rw['input_color'],
                 'output_color': rw['output_color'],
-                'cumulative_color': rw['cumulative_color'],
+                'wildcard_colors': rw['wildcard_colors'],
+                'centric': rw['centric'],
                 'neighbors': neighbors
             })
         results: List[dict] = []
@@ -2752,6 +2753,10 @@ class CellularAutomatonFactToAction(FactToActionMapping):
         ca_rules = row.get('ca_rules', [])
         input_grid = TRAIN_INPUT_GRIDS[train_id]
         output_grid = apply_ca(input_grid, ca_rules)
+
+        print("fact apply_ca")
+        print(grid_to_pretty_string(output_grid))
+
         action = registry.get_by_id(self.action_id)
         bindings = {
             'input_grid': ArgumentBinding('input_grid','Grid',BindingStatus.INPUT_GRID,input_grid),
@@ -2910,27 +2915,27 @@ class ConditionalObjectFactToAction(FactToActionMapping):
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
-    FactToActionMapping("rotated_90", "rotate_90"),
-    FactToActionMapping("rotated_180", "rotate_180"),
-    FactToActionMapping("rotated_270", "rotate_270"),
-    FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
-    FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
-    FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
-    FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
-    ZoomFactToAction(),
-    RepeatedSpriteFactToAction(),
-    CanvasByRatioFactToAction(),
-    CanvasByObjectSizeFactToAction(),
-    RecolorSpriteFactToAction(),
-    SpriteComputationFactToAction(),
-    DenoiseFactToAction(),
-    ZoomOutFactToAction(),
-    CreateObjectFactToAction(),
-    MoveObjectFactToAction(),
-    MoveSpriteFactToAction(),
-    CropSpriteFactToAction(),
-    FixSymmetryFactToAction(),
-    LightCycleFactToAction(),
+    #FactToActionMapping("rotated_90", "rotate_90"),
+    #FactToActionMapping("rotated_180", "rotate_180"),
+    #FactToActionMapping("rotated_270", "rotate_270"),
+    #FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
+    #FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
+    #FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
+    #FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
+    #ZoomFactToAction(),
+    #RepeatedSpriteFactToAction(),
+    #CanvasByRatioFactToAction(),
+    #CanvasByObjectSizeFactToAction(),
+    #RecolorSpriteFactToAction(),
+    #SpriteComputationFactToAction(),
+    #DenoiseFactToAction(),
+    #ZoomOutFactToAction(),
+    #CreateObjectFactToAction(),
+    #MoveObjectFactToAction(),
+    #MoveSpriteFactToAction(),
+    #CropSpriteFactToAction(),
+    #FixSymmetryFactToAction(),
+    #LightCycleFactToAction(),
     CellularAutomatonFactToAction(),
-    ConditionalObjectFactToAction(),
+    #ConditionalObjectFactToAction(),
 ]

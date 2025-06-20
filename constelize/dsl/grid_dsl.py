@@ -880,13 +880,8 @@ def apply_all_cycles(input_grid: List[List[int]], light_cycles: List[Dict[str, A
     #    print(" ", row)
     return input_grid
 
-def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict]) -> List[List[int]]:
+def apply_ca_old(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> List[List[int]]:
     def get_neighborhood(grid, x, y, bg=0):
-        """
-        Return the 3×3 neighborhood around (x,y) as a length-9 tuple in row-major order:
-          (nw, n, ne, w, center, e, sw, s, se).
-        Out-of-bounds cells are filled with `bg`.
-        """
         H, W = len(grid), len(grid[0])
         nbr = []
         for dy in (-1, 0, +1):
@@ -895,17 +890,113 @@ def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict]) -> List[List[int
                 nbr.append(grid[ny][nx] if 0 <= ny < H and 0 <= nx < W else bg)
         return tuple(nbr)
 
+    def rotate90(nbr):
+        mapping = [6,3,0,7,4,1,8,5,2]
+        return tuple(nbr[i] for i in mapping)
+
+    def all_rotations(nbr):
+        r0 = nbr
+        r1 = rotate90(r0)
+        r2 = rotate90(r1)
+        r3 = rotate90(r2)
+        return [r0, r1, r2, r3]
+
     def canonical(nbr):
-        """
-        If orientation_invariant, pick the lexicographically smallest of
-        all 8 dihedral variants (4 rotations + 4 horizontal flips).
-        """
+        # all four rotations + their horizontal flips, pick lexicographically minimal
         rots = all_rotations(nbr)
-        flips = [tuple(r[i] for i in [2, 1, 0, 5, 4, 3, 8, 7, 6]) for r in rots]
+        flips = [tuple(r[i] for i in [2,1,0,5,4,3,8,7,6]) for r in rots]
         return min(rots + flips)
 
+    def matches(rule_key: Tuple[int, ...], actual: Tuple[int, ...], bg: int) -> bool:
+        # negative entries are wildcards matching *any* non-bg
+        for rk, av in zip(rule_key, actual):
+            if rk < 0:
+                if av == bg:
+                    return False
+            elif rk != av:
+                return False
+        return True
+
+    # ── 1) Separate normal vs centric rules ────────────────────────────────
+    normal_rules = []
+    centric_rules = []
+    for rule in ca_rules:
+        if rule.get("centric", False):
+            centric_rules.append(rule)
+        else:
+            normal_rules.append(rule)
+
+    # ── 2) Build normal‐CA dict from normal_rules ─────────────────────────
+    rule_dict: Dict[Tuple[int, ...], int] = {}
+    for rule in normal_rules:
+        nbr = [0]*9
+        nbr[4] = rule["input_color"]
+        for dx, dy, color, output in rule["neighbors"]:
+            idx = (dy+1)*3 + (dx+1)
+            nbr[idx] = color
+        key = tuple(nbr)
+        rule_dict[key] = rule["output_color"]
+
+    # ── 3) Precompute centric map: center_color → { (dx,dy): new_color, … }
+    centric_map: Dict[int, Dict[Tuple[int,int],int]] = {}
+    for rule in centric_rules:
+        center = rule["input_color"]
+        # rule["neighbors"] must now carry the *new* neighbor‐colors for centric rules
+        centric_map[center] = { (dx,dy): output for dx,dy,color,output in rule["neighbors"] }
+
+    # ── 4) Run the *normal* CA ────────────────────────────────────────────
+    H, W = len(input_grid), len(input_grid[0])
+    result = [[0]*W for _ in range(H)]
+    for y in range(H):
+        for x in range(W):
+            nbr   = get_neighborhood(input_grid, x, y, bg)
+            # can_n = canonical(nbr)  # if you want orientation invariant
+            can_n = nbr
+            # pick all matching normal rules
+            cands = [k for k in rule_dict if matches(k, can_n, bg)]
+            if not cands:
+                result[y][x] = input_grid[y][x]
+                continue
+            # pick the most specific (fewest wildcards)
+            best = min(cands, key=lambda k: sum(1 for v in k if v<0))
+            out_ph = rule_dict[best]
+            if out_ph < 0:
+                # wildcard‐output → echo the neighbor's actual color
+                idx = next(i for i,v in enumerate(best) if v == out_ph)
+                result[y][x] = can_n[idx]
+            else:
+                result[y][x] = out_ph
+
+    # ── 5) Now apply all centric rules *on top* of the normal CA ─────────
+    for y in range(H):
+        for x in range(W):
+            c = input_grid[y][x]
+            neigh_changes = centric_map.get(c)
+            if not neigh_changes:
+                continue
+            # for each offset where a neighbor must change:
+            for (dx, dy), new_col in neigh_changes.items():
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < H and 0 <= nx < W:
+                    result[ny][nx] = new_col
+
+    return result
+
+def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> List[List[int]]:
+    """
+    Apply a standard CA (no wildcard matching) and then overlay centric rules.
+    """
+    # ── 1) Extract helper functions ─────────────────────────────────────
+    def get_neighborhood(grid, x, y, bg=0):
+        H, W = len(grid), len(grid[0])
+        nbr = []  # 3×3 in row-major order
+        for dy in (-1, 0, +1):
+            for dx in (-1, 0, +1):
+                ny, nx = y + dy, x + dx
+                nbr.append(grid[ny][nx] if 0 <= ny < H and 0 <= nx < W else bg)
+        return tuple(nbr)
+
     def rotate90(nbr):
-        """Rotate a flattened 3×3 neighborhood 90° clockwise."""
         mapping = [6, 3, 0, 7, 4, 1, 8, 5, 2]
         return tuple(nbr[i] for i in mapping)
 
@@ -916,30 +1007,64 @@ def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict]) -> List[List[int
         r3 = rotate90(r2)
         return [r0, r1, r2, r3]
 
-    # Reconstruct rule_dict
-    rule_dict: Dict[Tuple[int,...], int] = {}
+    def canonical(nbr):
+        rots = all_rotations(nbr)
+        flips = [tuple(r[i] for i in [2,1,0,5,4,3,8,7,6]) for r in rots]
+        return min(rots + flips)
+
+    # ── 2) Separate normal vs centric rules ─────────────────────────────
+    normal_rules = []
+    centric_rules = []
     for rule in ca_rules:
-        center = rule['input_color']
-        out_col = rule['output_color']
-        # build neighborhood tuple
-        nbr = [0]*9
-        nbr[4] = center
-        for dx, dy, color in rule['neighbors']:
-            idx = (dy+1)*3 + (dx+1)
+        if rule.get("centric", False):
+            centric_rules.append(rule)
+        else:
+            normal_rules.append(rule)
+
+    # ── 3) Build exact-match rule_dict from normal_rules ───────────────
+    rule_dict: Dict[Tuple[int, ...], int] = {}
+    for rule in normal_rules:
+        nbr = [0] * 9
+        nbr[4] = rule["input_color"]
+        for dx, dy, color, output in rule["neighbors"]:
+            idx = (dy + 1) * 3 + (dx + 1)
             nbr[idx] = color
-        # canonical form
-        key = canonical(tuple(nbr))
-        rule_dict[key] = out_col
-    # apply
+        key = tuple(nbr)
+        rule_dict[key] = rule["output_color"]
+
+    # ── 4) Precompute centric map ───────────────────────────────────────
+    centric_map: Dict[int, Dict[Tuple[int,int], int]] = {}
+    for rule in centric_rules:
+        center = rule["input_color"]
+        centric_map[center] = {
+            (dx, dy): output
+            for dx, dy, color, output in rule["neighbors"]
+        }
+
+    # ── 5) Apply the normal CA (exact matches only) ────────────────────
     H, W = len(input_grid), len(input_grid[0])
-    result = [[0]*W for _ in range(H)]
+    result = [[0] * W for _ in range(H)]
     for y in range(H):
         for x in range(W):
-            nbr = get_neighborhood(input_grid, x, y, bg=0)
-            key = canonical(nbr)
-            result[y][x] = rule_dict.get(key, input_grid[y][x])
-    return result
+            nbr = get_neighborhood(input_grid, x, y, bg)
+            # Use canonical(nbr) here if orientation_invariant is desired
+            can_n = nbr
+            out_col = rule_dict.get(can_n)
+            result[y][x] = out_col if out_col is not None else input_grid[y][x]
 
+    # ── 6) Overlay centric rules ────────────────────────────────────────
+    for y in range(H):
+        for x in range(W):
+            center = input_grid[y][x]
+            changes = centric_map.get(center)
+            if not changes:
+                continue
+            for (dx, dy), new_col in changes.items():
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < H and 0 <= nx < W:
+                    result[ny][nx] = new_col
+
+    return result
 
 def select_conditional_object(
     trainId: int,

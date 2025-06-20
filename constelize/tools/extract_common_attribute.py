@@ -645,7 +645,15 @@ def group_similar_sprites_by_attributes(
     # 3) vecteurs de features pour chaque train
     feats = {}
     for k, lst in lists.items():
-        feats[k] = {sid: [sprite_tbl[sid][col] for col in valid_cols] for sid in lst}
+        feats[k] = {}
+        for sid in lst:
+            row = sprite_tbl.get(sid)
+            if row is None:
+                continue
+            values = [row.get(col) for col in valid_cols]
+            if any(v is None for v in values):
+                continue
+            feats[k][sid] = values
 
     used = {k: set() for k in train_keys}
     groups: List[Tuple[int, ...]] = []
@@ -669,7 +677,7 @@ def group_similar_sprites_by_attributes(
 
         for k in other_keys:
             # candidats non encore utilisés
-            cands = [sid for sid in lists[k] if sid not in used[k]]
+            cands = [sid for sid in lists[k] if sid not in used[k] and sid in feats[k]]
             if not cands:
                 grp.append(None)
                 continue

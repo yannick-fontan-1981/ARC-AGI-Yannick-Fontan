@@ -412,6 +412,9 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
         #print(f"current_scenario.to_launch_next: {current_scenario.to_launch_next}")
         for scenario in current_scenario.to_launch_next:
             print(f"scenario to launch next: {scenario.id}")
+            if scenario.id == "scenario_denoise_3":
+                print(f"scenario aborted: {scenario.id}")
+                continue
             pre_rule = scenario.rule_to_launch_before
             generic_proc = pre_rule.proc_producing_output
             action_inst = generic_proc.action_producing_output
@@ -585,7 +588,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Un-Repeat sprite ?
-    #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
+    DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 
     # Training 4
     #DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
@@ -597,18 +600,19 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "67e8384a" # repeated sprite x4 with flip horizontal + vertical
     #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
     #DEFAULT_TASK_ID = "662c240a" # select sprite not having diagonal symetry
-    DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
-    #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
+    #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
+     #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
     #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
     #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
-    #DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
+    #DEFAULT_TASK_ID = "46f33fce_simple" # cellular automation with no orientation_invariant
+     #DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
     #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
     #DEFAULT_TASK_ID = "a79310a0" # move + recolor
     #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!
     #DEFAULT_TASK_ID = "ae4f1146" # select sprite with most blue ! Color#Order: 1#1 ? Or 9 cols: BlueOrder...
-    #DEFAULT_TASK_ID = "b27ca6d3" # cellular automation
-    #DEFAULT_TASK_ID = "ce22a75a" # cellular automation
-    #DEFAULT_TASK_ID = "dc1df850" # cellular automation
+     #DEFAULT_TASK_ID = "b27ca6d3" # cellular automation
+     #DEFAULT_TASK_ID = "ce22a75a" # cellular automation
+     #DEFAULT_TASK_ID = "dc1df850" # cellular automation
     #DEFAULT_TASK_ID = "f25fbde4" # crop + zoom OR zoom + shrink-canvas
     #DEFAULT_TASK_ID = "44d8ac46" # fill square with red !
     #DEFAULT_TASK_ID = "1e0a9b12" # gravity down !
@@ -616,7 +620,23 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
     #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
 
-    trainings_number = 4
+    # Training 5
+    #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
+    #DEFAULT_TASK_ID = "445eab21" # create 2x2 object with same color as greater rect
+    #DEFAULT_TASK_ID = "6f8cd79b" # color border, cellular automation or lightCycle ?
+    #DEFAULT_TASK_ID = "2013d3e2" # crop 3x3 with right-bottom at center of sprite
+    #DEFAULT_TASK_ID = "41e4d17e" # pink lightCycle, ground teal, cloud blue
+    #DEFAULT_TASK_ID = "9565186b" # repaint greater object with gray background
+    #DEFAULT_TASK_ID = "aedd82e4" # cellular automation
+    #DEFAULT_TASK_ID = "bb43febb" # fill with red gray block but keep gray border
+    #DEFAULT_TASK_ID = "e98196ab" # gray split line + Superposition with black bg
+    #DEFAULT_TASK_ID = "f76d97a5" # recolor gray in black + invert color
+    #DEFAULT_TASK_ID = "ce9e57f2" # lightCycle step by step with red first
+    #DEFAULT_TASK_ID = "22eb0ac0" # lightCycle between same color
+    #DEFAULT_TASK_ID = "9f236235" # unzoom without split grid + flip horizontal
+    #DEFAULT_TASK_ID = "a699fb00" # cellular automation
+
+    trainings_number = 3
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -644,27 +664,11 @@ if __name__ == "__main__":
         success = False
 
 
-    # Training 5
-    #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
-    #DEFAULT_TASK_ID = "445eab21" # create 2x2 object with same color as greater rect
-    #DEFAULT_TASK_ID = "6f8cd79b" # color border, cellular automation or lightCycle ?
-    #DEFAULT_TASK_ID = "2013d3e2" # crop 3x3 with right-bottom at center of sprite
-    #DEFAULT_TASK_ID = "41e4d17e" # pink lightCycle, ground teal, cloud blue
-    #DEFAULT_TASK_ID = "9565186b" # repaint greater object with gray background
-    #DEFAULT_TASK_ID = "aedd82e4" # cellular automation
-    #DEFAULT_TASK_ID = "bb43febb" # fill with red gray block but keep gray border
-    #DEFAULT_TASK_ID = "e98196ab" # gray split line + Superposition with black bg
-    #DEFAULT_TASK_ID = "f76d97a5" # recolor gray in black + invert color
-    #DEFAULT_TASK_ID = "ce9e57f2" # lightCycle step by step with red first
-    #DEFAULT_TASK_ID = "22eb0ac0" # lightCycle between same color
-    #DEFAULT_TASK_ID = "9f236235" # unzoom without split grid + flip horizontal
-    #DEFAULT_TASK_ID = "a699fb00" # cellular automation
-
     # Training 6
     #DEFAULT_TASK_ID = "46442a0e" # sprite composition
     #DEFAULT_TASK_ID = "7fe24cdd" # sprite composition
     #DEFAULT_TASK_ID = "0ca9ddb6" # cellular automation
-    #DEFAULT_TASK_ID = "543a7ed5" # fill hole with yellow and draw a border, cellular automation ?
+    #DEFAULT_TASK_ID = "543a7ed5" # fill hole with yellow and draw a border
     #DEFAULT_TASK_ID = "0520fde7" # gray splitter line + superposition: 2 blue = red
     #DEFAULT_TASK_ID = "dae9d2b5" # superposition: 2 black = black else pink
     #DEFAULT_TASK_ID = "8d5021e8" # sprite composition
