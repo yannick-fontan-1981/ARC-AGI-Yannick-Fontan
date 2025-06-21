@@ -12,7 +12,8 @@ from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
-    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal, apply_ca, select_conditional_object
+    shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal, apply_ca, select_conditional_object, \
+    apply_cellular_automaton
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
 from constelize.library.spatial_transformation import zoom as zoom_function, canvas_by_ratio_fn, repaint, \
@@ -2752,7 +2753,7 @@ class CellularAutomatonFactToAction(FactToActionMapping):
         test_id = row.get('testId', -1)
         ca_rules = row.get('ca_rules', [])
         input_grid = TRAIN_INPUT_GRIDS[train_id]
-        output_grid = apply_ca(input_grid, ca_rules)
+        output_grid = apply_cellular_automaton(input_grid, ca_rules)
 
         print("fact apply_ca")
         print(grid_to_pretty_string(output_grid))
@@ -2915,27 +2916,27 @@ class ConditionalObjectFactToAction(FactToActionMapping):
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
-    #FactToActionMapping("rotated_90", "rotate_90"),
-    #FactToActionMapping("rotated_180", "rotate_180"),
-    #FactToActionMapping("rotated_270", "rotate_270"),
-    #FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
-    #FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
-    #FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
-    #FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
-    #ZoomFactToAction(),
-    #RepeatedSpriteFactToAction(),
-    #CanvasByRatioFactToAction(),
-    #CanvasByObjectSizeFactToAction(),
-    #RecolorSpriteFactToAction(),
-    #SpriteComputationFactToAction(),
-    #DenoiseFactToAction(),
-    #ZoomOutFactToAction(),
-    #CreateObjectFactToAction(),
-    #MoveObjectFactToAction(),
-    #MoveSpriteFactToAction(),
-    #CropSpriteFactToAction(),
-    #FixSymmetryFactToAction(),
-    #LightCycleFactToAction(),
+    FactToActionMapping("rotated_90", "rotate_90"),
+    FactToActionMapping("rotated_180", "rotate_180"),
+    FactToActionMapping("rotated_270", "rotate_270"),
+    FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
+    FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
+    FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
+    FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
+    ZoomFactToAction(),
+    RepeatedSpriteFactToAction(),
+    CanvasByRatioFactToAction(),
+    CanvasByObjectSizeFactToAction(),
+    RecolorSpriteFactToAction(),
+    SpriteComputationFactToAction(),
+    DenoiseFactToAction(),
+    ZoomOutFactToAction(),
+    CreateObjectFactToAction(),
+    MoveObjectFactToAction(),
+    MoveSpriteFactToAction(),
+    CropSpriteFactToAction(),
+    FixSymmetryFactToAction(),
+    LightCycleFactToAction(),
     CellularAutomatonFactToAction(),
-    #ConditionalObjectFactToAction(),
+    ConditionalObjectFactToAction(),
 ]

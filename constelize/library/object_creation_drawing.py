@@ -1,7 +1,8 @@
 from constelize.core.action import Action
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.core.categories import ActionCategory
-from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles, apply_ca, select_conditional_object
+from constelize.dsl.grid_dsl import fill_grid, apply_all_cycles, apply_ca, select_conditional_object, \
+    apply_cellular_automaton
 
 
 def canvas(value: int, dimensions: tuple) -> tuple:
@@ -100,7 +101,7 @@ ACTIONS = [
             ArgumentBinding(name="ca_rules",   type="List", binding=BindingStatus.CONSTANT)
         ],
         output_type="Grid",
-        function=apply_ca
+        function=apply_cellular_automaton
     ),
     Action(
         id="conditional_objects",

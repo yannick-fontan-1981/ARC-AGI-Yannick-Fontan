@@ -4,661 +4,1001 @@ import json
 import os
 import sqlite3
 from collections import defaultdict
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Optional, Any
 
 from constelize.dsl.grid_dsl import apply_ca
 
+index_map = [6,3,0,7,4,1,8,5,2]
 
-# ─── 1) Neighborhood utilities ───────────────────────────────────────────────
+flatten_order = [(dx, dy)
+                 for dy in (-1, 0, 1)
+                 for dx in (-1, 0, 1)]
 
-def get_neighborhood(grid, x, y, bg=0):
-    """
-    Return the 3×3 neighborhood around (x,y) as a length-9 tuple in row-major order:
-      (nw, n, ne, w, center, e, sw, s, se).
-    Out-of-bounds cells are filled with `bg`.
-    """
-    H, W = len(grid), len(grid[0])
-    nbr = []
-    for dy in (-1, 0, +1):
-        for dx in (-1, 0, +1):
-            ny, nx = y + dy, x + dx
-            nbr.append(grid[ny][nx] if 0 <= ny < H and 0 <= nx < W else bg)
-    return tuple(nbr)
-
-
-def rotate90(nbr):
-    """Rotate a flattened 3×3 neighborhood 90° clockwise."""
-    mapping = [6, 3, 0, 7, 4, 1, 8, 5, 2]
-    return tuple(nbr[i] for i in mapping)
-
-
-def all_rotations(nbr):
-    r0 = nbr
-    r1 = rotate90(r0)
-    r2 = rotate90(r1)
-    r3 = rotate90(r2)
-    return [r0, r1, r2, r3]
-
-
-def canonical(nbr):
-    """
-    If orientation_invariant, pick the lexicographically smallest of
-    all 8 dihedral variants (4 rotations + 4 horizontal flips).
-    """
-    rots = all_rotations(nbr)
-    flips = [tuple(r[i] for i in [2,1,0,5,4,3,8,7,6]) for r in rots]
-    return min(rots + flips)
-
-def structure_based_anonymization(rule_dicts, base_placeholder=-70, bg=0):
-    """
-    rule_dicts: List[Dict[Tuple[int,...], int]]  # one dict per train
-    bg: the background color (default=0)
-    Returns a new list of dicts, one per train, where:
-      - positions that vary across trains are “wildcarded” to negative placeholders
-      - the output color is always mapped to base_placeholder
-      - among the wildcard positions, those that always carried the out‐color get base_placeholder,
-        the others get base_placeholder-1, base_placeholder-2, etc.
-    """
-    from collections import defaultdict
-
-    num_trains = len(rule_dicts)
-
-    # 1) bucket by structural mask of which cells ≠ bg
-    buckets = defaultdict(lambda: [None]*num_trains)
-    for t, rd in enumerate(rule_dicts):
-        for nbr, out in rd.items():
-            mask = tuple(1 if nbr[i] != bg else 0 for i in range(9))
-            buckets[mask][t] = (nbr, out)
-
-    # 2) keep only masks seen in every train
-    valid = {m: ex for m, ex in buckets.items() if None not in ex}
-
-    # 3) prepare empty results
-    result = [dict() for _ in range(num_trains)]
-    wildcard_map: Dict[Tuple[int, ...], List[int]] = {}
-
-    # 4) for each mask, build its own placeholder maps
-    for mask, examples in valid.items():
-        # examples[t] = (nbr, out) for train t
-
-        # 4a) which neighbor positions actually vary?
-        vals_per_pos = [set() for _ in range(9)]
-        for nbr, _ in examples:
-            for i, v in enumerate(nbr):
-                vals_per_pos[i].add(v)
-        wildcard_positions = [i for i,s in enumerate(vals_per_pos) if len(s) > 1]
-
-        # 4b) identify the “primary” wildcard positions:
-        #     those where nbr[pos] == out for every train
-        primary = []
-        for pos in wildcard_positions:
-            if all(examples[t][0][pos] == examples[t][1] for t in range(num_trains)):
-                primary.append(pos)
-
-        # 4c) build placeholder_map for THIS rule
-        placeholder_map = {}
-        #  first assign base_placeholder to all primary positions
-        for pos in primary:
-            placeholder_map[pos] = base_placeholder
-        #  then assign base_placeholder-1, -2, … to the other wildcard positions
-        ph = base_placeholder - 1
-        for pos in wildcard_positions:
-            if pos not in placeholder_map:
-                placeholder_map[pos] = ph
-                ph -= 1
-
-        # 4d) output is always anonymized to base_placeholder
-        out_ph = base_placeholder
-
-        # before we write them out, record _which_ colors got wildcarded here:
-        orig_colors = set()
-        for pos in wildcard_positions:
-            for t in range(num_trains):
-                orig_colors.add(examples[t][0][pos])
-
-        # 4e) rewrite each train’s (nbr,out) → (new_nbr, out_ph)
-        for t in range(num_trains):
-            nbr, _ = examples[t]
-            new_nbr = tuple(placeholder_map.get(i, nbr[i]) for i in range(9))
-            result[t][new_nbr] = out_ph
-
-            wildcard_map[new_nbr] = sorted(orig_colors)
-
-    return result, wildcard_map
-
-# ─── 2) Cellular Automaton detection and extraction ─────────────────────────
-
-def detect_ca(input_grid, output_grid, orientation_invariant=False, bg=0):
-    print("🔍 Detecting CA rules between input and output grid...")
-    rule = {}
-    H, W = len(input_grid), len(input_grid[0])
-    for y in range(H):
-        for x in range(W):
-            nbr = get_neighborhood(input_grid, x, y, bg=bg)
-            key = canonical(nbr) if orientation_invariant else nbr
-
-            if not (0 <= y < len(output_grid) and 0 <= x < len(output_grid[0])):
-                print(f"⚠️ Skipping out-of-bounds output at ({x}, {y})")
-                continue
-
-            new_col = output_grid[y][x]
-            if key in rule and rule[key] != new_col:
-                print(f"❌ Conflict for neighborhood {key}: {rule[key]} vs {new_col}")
-                return None
-            if key[4] == new_col:
-                continue
-            rule[key] = new_col
-    print(f"✅ Detected {len(rule)} rules.")
-    return rule
-
-def detect_ca_on_trains(
-    trains,
-    tests,
-    orientation_invariant=False,
-    bg=0
-):
-    # 1) collect per‐train rule‐dicts
-    rule_dicts = []
-    for I, O in trains:
-        rd = detect_ca(I, O, orientation_invariant, bg) or {}
-        rule_dicts.append(rd)
-
-    # 2) raw intersection: keep only nbr‐keys present & equal in all trains
-    first = rule_dicts[0]
-    raw = {
-        k: first[k]
-        for k in first
-        if all(k in rd and rd[k] == first[k] for rd in rule_dicts[1:])
-    }
-
-    # 3) now build the output‐dict:
-    #    key = neighborhood tuple,
-    #    payload = {output_color, wildcard_colors=[]}
-    rules = {
-        nbr: {"output_color": out, "wildcard_colors": []}
-        for nbr, out in raw.items()
-    }
-
-    # 4) collect train‐vs‐test colors
-    train_colors = {
-        c
-        for (I, _), _ in zip(trains, trains)
-        for row in I
-        for c in row
-    }
-    test_colors = {
-        c
-        for grid in tests
-        for row in grid
-        for c in row
-    }
-    test_only = test_colors - train_colors
-
-    if test_only:
-        # group by “structure” = which positions ≠ bg
-        mask_to_nbrs = defaultdict(list)
-        for nbr in raw:
-            mask = tuple(1 if nbr[i] != bg else 0 for i in range(9))
-            mask_to_nbrs[mask].append(nbr)
-
-        # for any mask seen ≥2 times, clone one example nbr→each new color
-        for mask, nbr_list in mask_to_nbrs.items():
-            if len(nbr_list) >= 2:
-                example = nbr_list[0]
-                for new_c in test_only:
-                    # build a clone: same neighbors, center = new_c
-                    clone = list(example)
-                    clone[4] = new_c
-                    clone = tuple(clone)
-                    if clone not in rules:
-                        rules[clone] = {
-                            "output_color": new_c,
-                            "wildcard_colors": []
-                        }
-
-    return rules
-
-def detect_ca_on_trains_old(trains, orientation_invariant=False, bg=0):
-    """
-    runs detect_ca on each (I,O) with the given orientation_invariant & bg,
-    computes the exact intersection, then wildcard‐anonymizes those same keys,
-    and finally merges raw+anon (anon wins on overlap) into a single dict.
-    """
-    # 1) collect per‐train rule‐dicts
-    rule_dicts = []
-    for I, O in trains:
-        rd = detect_ca(I, O, orientation_invariant, bg)
-        rule_dicts.append(rd or {})
-
-    # 2) raw intersection: keep only nbr‐keys present & equal in all trains
-    first = rule_dicts[0]
-    raw = {
-        k: first[k]
-        for k in first
-        if all(k in rd and rd[k] == first[k] for rd in rule_dicts[1:])
-    }
-
-    # 3) anonymous version: wildcard the same per‐train dicts
-    #    we use base_placeholder = –70 inside
-    anon_lists, wildcard_map = structure_based_anonymization(rule_dicts,
-                                               base_placeholder=-70,
-                                               bg=bg)
-    #    now every key in anon_lists[0] gets output = –70
-    anon = { k: -70 for k in anon_lists[0].keys() }
-
-    # 4) merge them (anon overrides raw on any shared keys)
-    merged = raw.copy()
-    merged.update(anon)
-
-    # 5) package into one dict that carries both the output _and_ its wildcard_colors
-    rules: Dict[Tuple[int,...], Dict] = {}
-    for nbr, out_col in merged.items():
-        rules[nbr] = {
-            "output_color": out_col,
-            "wildcard_colors": wildcard_map.get(nbr, [])
-        }
-    return rules
-
-
-# ─── 3) Apply CA to an input grid ────────────────────────────────────────────
-
-def print_grid(grid):
-    for row in grid:
-        print(row)
-    print()
-
-# ─── 4) Insert rules into database ──────────────────────────────────────────
-
-def insert_rules(conn, rule_dict, orientation_invariant=True):
-    """
-    conn:        sqlite3.Connection
-    rule_dict:   Dict[Tuple[int,...], int]   # your canonical rules
-    orientation_invariant: bool
-      if True → we expand each rule into all 4 rotations so the CA engine
-      will match under any orientation
-      if False → we insert exactly the neighborhood as given (no rotations)
-    """
-    print(f"\n💾 Inserting {len(rule_dict)} rules into the database (orientation_invariant={orientation_invariant})…")
-    cur = conn.cursor()
-    seen = set()
-    # relative positions (w/o the center)
-    positions = [(-1,-1),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1)]
-    count = 0
-
-    for nbr, payload in rule_dict.items():
-        out_col = payload["output_color"]
-        wildcard_list = payload["wildcard_colors"]
-        in_col = nbr[4]
-        # skip “no‐op” rules
-        if in_col == out_col:
-            continue
-
-        # if invariant, generate all rotations; otherwise just use the raw neighborhood
-        variants = all_rotations(nbr) if orientation_invariant else [nbr]
-
-        for variant in variants:
-            key = (variant, out_col)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            # build the list of neighbor‐colors (excluding center)
-            neighbor_vals = [variant[i] for i in range(9) if i != 4]
-
-            # insert the “center → out_col” rule
-            cur.execute(
-                "INSERT INTO cellular_automaton "
-                "(input_color, output_color, wildcard_colors, tick) "
-                "VALUES (?,?,?,?);",
-                (
-                    variant[4],
-                    out_col,
-                    json.dumps(wildcard_list),
-                    0
-                )
-            )
-            rule_id = cur.lastrowid
-
-            # now insert each neighbor cell
-            for (dx, dy), val in zip(positions, neighbor_vals):
-                cur.execute(
-                    "INSERT INTO cellular_automaton_cells (rule_id, posRelX, posRelY, color, output) VALUES (?,?,?,?,NULL);",
-                    (rule_id, dx, dy, val)
-                )
-
-            count += 1
-
-    conn.commit()
-    print(f"✅ Inserted {count} unique rule variants.")
-
-def detect_centric_ca_on_trains(
+def compute_color_sets(
     trains: List[Tuple[List[List[int]], List[List[int]]]],
-    tests:  List[List[List[int]]],
+    tests: List[List[List[int]]],
+    facts_by_train: Dict[int, List[Dict[str, Tuple[Tuple[int,...], Tuple[int,...]]]]],
     bg: int = 0
-) -> Dict[int, Dict[Tuple[int,int], int]]:
+) -> Dict[str, Any]:
     """
-    Detect centric‐CA rules on `trains`, then *synthesize* additional rules
-    for any color that appears only in `tests` if that rule‐structure occurs
-    at least twice among the true centric rules.
+    Calcule :
+      - mêmes ensembles de couleurs qu'avant (sur trains + tests)
+      - centerFactColorsByTrain : { train_idx: [couleurs centrales…], … }
+      - centerFactColorsSameByTrain : bool, si toutes les listes sont identiques
+    """
+    # --- couleurs des grilles ---
+    train_inputs   = [{c for row in inp for c in row} for inp, _ in trains]
+    train_outputs  = [{c for row in out for c in row} for _, out in trains]
+    test_input_sets= [{c for row in inp for c in row} for inp in tests]
 
-    Returns:
-      { center_color: { (dx,dy): new_neighbor_color, … }, … }
+    # intersections
+    all_train_in   = set.intersection(*train_inputs)   if train_inputs   else set()
+    all_train_out  = set.intersection(*train_outputs)  if train_outputs  else set()
+    all_test_in    = set.intersection(*test_input_sets) if test_input_sets else set()
+
+    same_input     = all_train_in  & all_test_in
+    same_output    = all_train_out
+    same_colors    = same_input    & same_output
+
+    # unions
+    union_train_in = set.union(*train_inputs)   if train_inputs   else set()
+    union_train_out= set.union(*train_outputs)  if train_outputs  else set()
+    union_test_in  = set.union(*test_input_sets) if test_input_sets else set()
+    union_all      = union_train_in | union_train_out | union_test_in
+
+    diff_colors    = union_all - same_colors
+    diff_input     = union_train_in - same_input
+    diff_output    = union_train_out - same_output
+
+    common_train_test = union_train_in & union_test_in
+    new_by_test       = union_test_in - union_train_in
+    new_by_train      = union_train_in - union_test_in
+
+    # --- NOUVEAU : calcul des couleurs centrales par train ---
+    # facts_by_train : { train_idx: [ {'nbr_in':…, 'nbr_out':…}, … ], … }
+    centerFactColorsByTrain: Dict[int, List[int]] = {}
+    for t_idx in range(1, len(trains) + 1):
+        facts = facts_by_train.get(t_idx, [])
+        # extraire la couleur du centre de chaque fait et dédupliquer
+        colors = { fact['nbr_in'][4] for fact in facts }
+        centerFactColorsByTrain[t_idx] = sorted(colors)
+
+    # vérifier si toutes les listes sont identiques
+    unique_color_sets = { tuple(lst) for lst in centerFactColorsByTrain.values() }
+    centerFactColorsSameByTrain = (len(unique_color_sets) == 1)
+
+    # --- retour final ---
+    return {
+        'sameColorsForAll': same_colors,
+        'sameInputColorsForAll': same_input,
+        'sameOutputColorsForAll': same_output,
+        'differentColorsForAll': diff_colors,
+        'differentInputColorsForAll': diff_input,
+        'differentOutputColorsForAll': diff_output,
+        'commonColorsInTrainAndTest': common_train_test,
+        'newColorsByTest': new_by_test,
+        'newColorsByTrain': new_by_train,
+        'centerFactColorsByTrain': centerFactColorsByTrain,
+        'centerFactColorsSameByTrain': centerFactColorsSameByTrain,
+    }
+
+
+def gather_facts(
+    trains: List[Tuple[List[List[int]], List[List[int]]]],
+    bg: int = 0
+) -> Tuple[    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],    Dict[int, List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]]]]:
     """
-    neighbor_offsets = [
-        (-1, -1), (0, -1), (1, -1),
-        (-1,  0),          (1,  0),
-        (-1,  1), (0,  1), (1,  1),
+    Returns:
+      1) facts_5_nbrs_ticked: 5-neighbor mask facts + center-variant
+      2) facts_without_orphan
+      3) facts_without_border
+      4) facts_without_outside
+      5) final_facts
+      6) facts_by_train
+    """
+    # 3×3 offsets
+    offs = [(-1,-1),(0,-1),(1,-1),
+            (-1, 0),(0, 0),(1, 0),
+            (-1, 1),(0, 1),(1, 1)]
+    # eight 5-neighbor masks
+    masks = [
+      [[1,1,1],[1,1,1],[0,0,0]],
+      [[1,1,1],[0,1,1],[0,0,1]],
+      [[0,1,1],[0,1,1],[0,1,1]],
+      [[0,0,1],[0,1,1],[1,1,1]],
+      [[0,0,0],[1,1,1],[1,1,1]],
+      [[1,0,0],[1,1,0],[1,1,1]],
+      [[1,1,0],[1,1,0],[1,1,0]],
+      [[1,1,1],[1,1,0],[1,0,0]],
     ]
 
-    print(f"🔍 Starting centric‐CA detection over {len(trains)} train(s), bg={bg}")
+    facts_5_nbrs_ticked: List[Dict[str, Tuple]] = []
 
-    # ── 1) build per-train centric maps ────────────────────────────────────────
-    per_train: List[Dict[int, Dict[Tuple[int,int], int]]] = []
-    for ti, (inp, out) in enumerate(trains):
+    # --- build facts_5_nbrs_ticked ---
+    for t_idx, (inp, out) in enumerate(trains, start=1):
         H, W = len(inp), len(inp[0])
-        print(f"\n▶️ Train #{ti} (size {W}×{H})")
-        cmap: Dict[int, Dict[Tuple[int,int],int]] = {}
-
         for y in range(H):
             for x in range(W):
-                center = inp[y][x]
-                if center == bg:
+                if inp[y][x] == out[y][x]:
                     continue
-                # gather all neighbor‐changes
-                changes: Dict[Tuple[int,int],int] = {}
-                for dx, dy in neighbor_offsets:
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < H and 0 <= nx < W:
-                        before, after = inp[ny][nx], out[ny][nx]
-                        if after != before:
-                            changes[(dx,dy)] = after
-                if not changes:
-                    continue
+                for mask in masks:
+                    # 1) mask-only
+                    nin, nout = [], []
+                    for (dx, dy), mrow in zip(offs, [mask[dy+1][dx+1] for dx,dy in offs]):
+                        if mrow == 1:
+                            if 0 <= y+dy < H and 0 <= x+dx < W:
+                                nin.append(inp[y+dy][x+dx])
+                                nout.append(out[y+dy][x+dx])
+                            else:
+                                nin.append(-2); nout.append(-2)
+                        else:
+                            nin.append(None); nout.append(None)
+                    facts_5_nbrs_ticked.append({'nbr_in':tuple(nin),'nbr_out':tuple(nout)})
 
-                print(f"   ● Found changes around center {center} @({x},{y}): {changes}")
-                if center not in cmap:
-                    cmap[center] = changes.copy()
-                    print(f"     ↳ initial pattern for {center}")
+                    # 2) all→out except center
+                    nin2, nout2 = [], []
+                    for i, ((dx, dy), mrow) in enumerate(zip(offs, [mask[dy+1][dx+1] for dx,dy in offs])):
+                        if mrow == 1:
+                            if i==4:
+                                # center stays old input
+                                nin2.append(inp[y][x])
+                            else:
+                                if 0 <= y+dy < H and 0 <= x+dx < W:
+                                    nin2.append(out[y+dy][x+dx])
+                                else:
+                                    nin2.append(-2)
+                            # always output
+                            if 0 <= y+dy < H and 0 <= x+dx < W:
+                                nout2.append(out[y+dy][x+dx])
+                            else:
+                                nout2.append(-2)
+                        else:
+                            nin2.append(None); nout2.append(None)
+                    facts_5_nbrs_ticked.append({'nbr_in':tuple(nin2),'nbr_out':tuple(nout2)})
+
+    # --- now original gather_facts pipeline ---
+
+    # 1) collect raw_facts with -2 padding
+    raw_facts = []
+    for t_idx, (inp, out) in enumerate(trains, start=1):
+        H, W = len(inp), len(inp[0])
+        def extract(cx: int, cy: int):
+            in_vals, out_vals = [], []
+            for dx, dy in offs:
+                x2, y2 = cx + dx, cy + dy
+                if 0 <= y2 < H and 0 <= x2 < W:
+                    in_vals.append(inp[y2][x2])
+                    out_vals.append(out[y2][x2])
                 else:
-                    prev = cmap[center]
-                    # intersect offsets & require same target color
-                    common = {}
-                    for off in prev.keys() & changes.keys():
-                        if prev[off] == changes[off]:
-                            common[off] = prev[off]
-                    cmap[center] = common
-                    print(f"     ↳ merged → now for {center}: {common}")
+                    in_vals.append(-2)
+                    out_vals.append(-2)
+            return tuple(in_vals), tuple(out_vals)
 
-        print(f"🏁 Train #{ti} map: {cmap}")
-        per_train.append(cmap)
+    for t_idx, (inp, out) in enumerate(trains, start=1):
+        H, W = len(inp), len(inp[0])
+        for y in range(H):
+            for x in range(W):
+                nin, nout = extract(x, y)
+                if nin != nout and not (inp[y][x] == bg and out[y][x] == bg):
+                    raw_facts.append({
+                        'train_idx': t_idx,
+                        'center': (x, y),
+                        'nbr_in': nin,
+                        'nbr_out': nout
+                    })
+                for dx, dy in offs:
+                    if dx == 0 and dy == 0:
+                        continue
+                    nx, ny = x + dx, y + dy
+                    if not (0 <= nx < W and 0 <= ny < H):
+                        continue
+                    if inp[ny][nx] == bg:
+                        continue
+                    nin2, nout2 = extract(nx, ny)
+                    if nin2 != nout2:
+                        raw_facts.append({
+                            'train_idx': t_idx,
+                            'center': (nx, ny),
+                            'nbr_in': nin2,
+                            'nbr_out': nout2
+                        })
 
-    if not per_train:
-        print("⚠️ No training data → returning empty")
-        return {}
+    # 2) group by (nbr_in, nbr_out)
+    raw_by_fact = defaultdict(list)
+    for f in raw_facts:
+        key = (f['nbr_in'], f['nbr_out'])
+        raw_by_fact[key].append(f)
 
-    # ── 2) intersect center‐colors across all trains ──────────────────────────
-    common_centers = set(per_train[0].keys())
-    for ti, cmap in enumerate(per_train[1:], start=1):
-        print(f"   intersect with train #{ti} centers {set(cmap.keys())}")
-        common_centers &= set(cmap.keys())
-        print(f"   → now common_centers = {common_centers}")
+    # 3) filter unique facts (your existing logic)
+    final_facts = []
+    for (nin, nout), instances in raw_by_fact.items():
+        center_color = nin[4]
+        if center_color == bg:
+            final_facts.append({'nbr_in': nin, 'nbr_out': nout})
+            continue
 
-    # ── 3) for each common center, intersect its neighbor‐maps ───────────────
-    result: Dict[int, Dict[Tuple[int,int],int]] = {}
-    for c in sorted(common_centers):
-        print(f"\n🔎 Processing center‐color {c}")
-        base = per_train[0][c]
-        print(f"  base pattern: {base}")
-        offs = set(base.keys())
-        # intersect offsets across all trains
-        for ti in range(1, len(per_train)):
-            offs &= set(per_train[ti][c].keys())
-        print(f"  common offsets: {offs}")
+        keep = False
+        for inst in instances:
+            cx, cy = inst['center']
+            union_other = set()
+            for (on, _), others in raw_by_fact.items():
+                if on[4] in (center_color, bg):
+                    continue
+                for other in others:
+                    ox, oy = other['center']
+                    if abs(ox - cx) <= 1 and abs(oy - cy) <= 1:
+                        continue
+                    for i, (dx, dy) in enumerate(offs):
+                        if other['nbr_in'][i] != other['nbr_out'][i]:
+                            union_other.add((ox + dx, oy + dy))
 
-        final_map: Dict[Tuple[int,int],int] = {}
-        for off in offs:
-            tgt = base[off]
-            if all(per_train[ti][c][off] == tgt for ti in range(1, len(per_train))):
-                final_map[off] = tgt
-            else:
-                print(f"   ⚠️ Mismatch at offset {off}, dropping")
+            changed = [
+                (cx + offs[i][0], cy + offs[i][1])
+                for i in range(9) if nin[i] != nout[i]
+            ]
+            if any(pos not in union_other for pos in changed):
+                keep = True
+                break
 
-        if final_map:
-            print(f"  ✅ Keeping centric rule for {c}: {final_map}")
-            result[c] = final_map
-        else:
-            print(f"  ❌ No stable neighbor‐changes for center {c}, dropping")
+        if keep:
+            final_facts.append({'nbr_in': nin, 'nbr_out': nout})
 
-    # ── 4) find colors only in tests, not in trains ─────────────────────────
-    train_colors = {cell for inp,_ in trains for row in inp for cell in row}
-    test_colors  = {cell for inp  in tests   for row in inp for cell in row}
-    test_only_colors = test_colors - train_colors
-    print(f"\n🎯 Test‐only colors: {test_only_colors}")
+    # 4) build facts_by_train
+    facts_by_train: Dict[int, List[Dict]] = {i: [] for i in range(1, len(trains) + 1)}
+    for fact in final_facts:
+        key = (fact['nbr_in'], fact['nbr_out'])
+        for inst in raw_by_fact[key]:
+            facts_by_train[inst['train_idx']].append(fact)
 
-    # ── 5) group existing rules by their “structure” ────────────────────────────
-    struct_to_centers: Dict[frozenset, List[int]] = defaultdict(list)
+    # 5) facts_without_orphan: patterns with >1 raw occurrence
+    facts_without_orphan = [
+        fact for fact in final_facts
+        if len(raw_by_fact[(fact['nbr_in'], fact['nbr_out'])]) > 1
+    ]
 
-    print("\n🔖 Grouping centric rules by their neighbor‐offset structure (ignoring replacement colors):")
-    for center, mapping in result.items():
-        offsets_only = frozenset(mapping.keys())
-        print(f"   • Center {center} → offsets {set(offsets_only)}")
-        struct_to_centers[offsets_only].append(center)
+    # 6) facts_without_border
+    facts_without_border = []
+    for fact in final_facts:
+        instances = raw_by_fact[(fact['nbr_in'], fact['nbr_out'])]
+        interior = True
+        for inst in instances:
+            x, y = inst['center']
+            inp, _ = trains[inst['train_idx'] - 1]
+            H, W = len(inp), len(inp[0])
+            if x == 0 or y == 0 or x == W - 1 or y == H - 1:
+                interior = False
+                break
+        if interior:
+            facts_without_border.append(fact)
+    facts_without_border = [
+        fact for fact in facts_without_border
+        if len(raw_by_fact[(fact['nbr_in'], fact['nbr_out'])]) > 1
+    ]
 
-    print("\n📦 Structures detected:")
-    for offsets, centers in struct_to_centers.items():
-        print(f"   → Offsets {set(offsets)} shared by centers {centers}")
+    # 7) facts_without_outside
+    facts_without_outside = [
+        {
+            'nbr_in':  tuple(bg if v == -2 else v for v in fact['nbr_in']),
+            'nbr_out': tuple(bg if v == -2 else v for v in fact['nbr_out'])
+        }
+        for fact in final_facts
+    ]
 
-    # ── 6) clone for any test‐only colors when a structure is “common” ─────────
-    print("\n🎯 Now cloning structures shared by ≥ 2 centers for test‐only colors:")
-    for offsets, centers in struct_to_centers.items():
-        if len(centers) >= 2:
-            print(f"   • Structure {set(offsets)} is common to centers {centers}")
-            for c_test in test_only_colors:
-                # only add if not already in result:
-                if c_test not in result:
-                    new_map = {off: c_test for off in offsets}
-                    result[c_test] = new_map
-                    print(f"     ➕ Added centric rule for test‐only center {c_test}: {new_map}")
+    # 8) dedupe helper
+    def dedupe(facts: List[Dict]) -> List[Dict]:
+        seen = set()
+        unique = []
+        for f in facts:
+            key = (f['nbr_in'], f['nbr_out'])
+            if key not in seen:
+                seen.add(key)
+                unique.append(f)
+        return unique
 
-    print(f"\n✅ Final centric‐CA rules ({len(result)} total):")
-    for c, mapping in result.items():
-        print(f"   • Center {c}: {mapping}")
-
-    return result
-
-def insert_centric_rules(conn: sqlite3.Connection,
-                         centric_rules: Dict[int, Dict[Tuple[int, int], int]]):
-    """
-    conn:          an open sqlite3.Connection
-    centric_rules: { center_color: { (dx,dy): new_neighbor_color, … }, … }
-
-    For each center_color we:
-      • INSERT a row into cellular_automaton with centric=1
-      • INSERT one cellular_automaton_cells row per neighbor‐offset, writing only .output
-    """
-    cur = conn.cursor()
-    count = 0
-
-    for center_col, nbr_changes in centric_rules.items():
-        # 1) insert the parent rule
-        #    input_color & output_color both = center_col (center pixel doesn’t move)
-        #    neighbor_count = number of changed neighbors
-        cur.execute("""
-        INSERT INTO cellular_automaton
-          (input_color, output_color, neighbor_count, wildcard_colors, centric)
-        VALUES (?,           ?,            ?,              NULL,            1);
-        """, (center_col, center_col, len(nbr_changes)))
-        rule_id = cur.lastrowid
-
-        # 2) insert each neighbor‐change row
-        #    leave the old `color` NULL, write the new color into the new `output` column
-        for (dx, dy), new_col in nbr_changes.items():
-            cur.execute("""
-            INSERT INTO cellular_automaton_cells
-              (rule_id, posRelX, posRelY, color, output)
-            VALUES (?,       ?,       ?,        NULL,   ?);
-            """, (rule_id, dx, dy, new_col))
-            count += 1
-
-    conn.commit()
-    print(f"✅ Inserted {len(centric_rules)} centric rules, {count} neighbor‐cells total.")
+    return (
+        dedupe(facts_5_nbrs_ticked),
+        dedupe(facts_without_orphan),
+        dedupe(facts_without_border),
+        dedupe(facts_without_outside),
+        dedupe(final_facts),
+        facts_by_train
+    )
 
 
-def detect_and_insert_unified_ca(
+def detect_and_insert_ca_pipeline(
     conn: sqlite3.Connection,
     trains: List[Tuple[List[List[int]], List[List[int]]]],
     tests: List[List[List[int]]],
-    orientation_invariant: bool = True,
-    bg: int = 0
+    bg: int = 0,
+    tick: int = 0,
+    prev_post: Optional[List[Tuple[int,int,int,Tuple[int,...],Dict[str,Tuple],bool]]] = None
 ) -> bool:
     """
-    Verbose unified CA detection & insertion, without any DELETE calls.
-    - Detects both center-color changes and neighbor changes
-    - Intersects across training examples
-    - Clones for test-only colors
-    - Filters out trivial identity rules
-    - Inserts into `cellular_automaton` and `cellular_automaton_cells`
-    Returns True if at least one nontrivial rule was inserted.
+    Pipeline with robust rotational alignment based on neighbor‐color positions.
+
+    Arguments:
+      conn            -- SQLite connection
+      trains          -- list of (input_grid, expected_output) pairs
+      tests           -- list of test grids
+      bg              -- background color ID
+      tick            -- recursion depth / rule version
+      prev_post       -- previously inserted/merged rules (to accumulate)
+
+    Returns:
+      True if at least one rule was inserted; False otherwise
     """
-    print(f"🔍 Starting unified‐CA detection over {len(trains)} train(s), {len(tests)} test(s), bg={bg}, orientation_invariant={orientation_invariant}")
+    # ── 1) Gather 3×3 facts from the current trains
+    facts_5_nbrs_ticked, facts_without_orphan, facts_without_border, facts_without_outside, final_facts, facts_by_train = gather_facts(trains, bg)
 
-    # ── Helpers ──────────────────────────────────────────────────────────
-    def get_nbr(grid, x, y):
-        H, W = len(grid), len(grid[0])
-        nbr = []
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                ny, nx = y + dy, x + dx
-                nbr.append(grid[ny][nx] if 0 <= ny < H and 0 <= nx < W else bg)
-        return tuple(nbr)
+    #print("5-Nbrs-Ticked Facts (nbr_in -> nbr_out):")
+    #for idx, fact in enumerate(facts_5_nbrs_ticked, start=1):
+    #    in_vals = fact['nbr_in']
+    #    out_vals = fact['nbr_out']
+    #    print(f" Fact #{idx:>3}:")
+    #    print(f"   nbr_in : {in_vals}")
+    #    print(f"   nbr_out: {out_vals}")
 
-    def rot90(n):
-        mapping = [6,3,0,7,4,1,8,5,2]
-        return tuple(n[i] for i in mapping)
+    # ── 2) Compute color sets for duplication logic
+    color_sets = compute_color_sets(trains, tests, facts_by_train, bg)
 
-    def all_rots(n):
-        r0 = n
-        r1 = rot90(r0)
-        r2 = rot90(r1)
-        r3 = rot90(r2)
-        return [r0, r1, r2, r3]
+    # ── 3) Generate candidate rule‐sets
+    post_5_nbrs_ticked   = generate_rules_simple(bg, facts_5_nbrs_ticked, tick)
+    post_forced_rot  = generate_rules_to_insert(bg, facts_without_orphan, tick, 1)
+    post_wo_border   = generate_rules_to_insert(bg, facts_without_border, tick)
+    post_wo_outside  = generate_rules_to_insert(bg, facts_without_outside, tick)
+    post_final       = generate_rules_to_insert(bg, final_facts, tick)
 
-    def canonical(n):
-        rots = all_rots(n)
-        flips = [tuple(r[i] for i in [2,1,0,5,4,3,8,7,6]) for r in rots]
-        return min(rots + flips)
+    # ── 4) Test each set on all trains
+    post_5_nbrs_ticked   = test_each_rule_one_by_one(post_5_nbrs_ticked,   trains, bg)
+    post_forced_rot  = test_each_rule_one_by_one(post_forced_rot,  trains, bg)
+    post_wo_border   = test_each_rule_one_by_one(post_wo_border,   trains, bg)
+    post_wo_outside  = test_each_rule_one_by_one(post_wo_outside,  trains, bg)
+    post_final       = test_each_rule_one_by_one(post_final,       trains, bg)
 
-    neighbor_offsets = [(-1,-1),(0,-1),(1,-1),(-1,0),(0,0),(1,0),(-1,1),(0,1),(1,1)]
-    per_train: List[Dict[Tuple[int,int], set]] = []
+    ## ── Nicely print the filtered 5-nbrs-ticked rules ─────────────────────
+    #print("\nPost 5-Nbrs-Ticked Rules to Insert:")
+    #for idx, (c0, c1, col, sk, fact, is_rot) in enumerate(post_5_nbrs_ticked, start=1):
+    #    tag = "rotational" if is_rot else "non-rotational"
+    #    print(f" Rule #{idx:>3}: Center {c0}→{c1} | neighbor {col} | {tag}")
+    #    print(f"    struct : {sk}")
+    #    print(f"    nbr_in : {fact['nbr_in']}")
+    #    print(f"    nbr_out: {fact['nbr_out']}")
 
-    # ── 1) Build per-train transition → neighbor-pattern sets ────────────
-    for ti, (inp, out) in enumerate(trains):
-        H, W = len(inp), len(inp[0])
-        print(f"\n▶️ Train #{ti} (size {W}×{H})")
-        cmap: Dict[Tuple[int,int], set] = defaultdict(set)
-        for y in range(H):
-            for x in range(W):
-                c0, c1 = inp[y][x], out[y][x]
-                if c0 == c1 == bg:
-                    continue
-                if c0 != c1:
-                    print(f"   ● Change of center @({x},{y}): {c0}→{c1}")
-                nb0 = get_nbr(inp, x, y)
-                if orientation_invariant:
-                    nb0 = canonical(nb0)
-                cmap[(c0, c1)].add(nb0)
-        print(f"🏁 Train #{ti} transitions: {{ {', '.join(f'{k}: {len(v)}' for k,v in cmap.items())} }}")
-        per_train.append(cmap)
+    # ── 5) Pick the best rule‐set via try_differents_set_of_rules
+    new_post, info = try_differents_set_of_rules(bg, post_wo_border,  trains, tick)
+    if not new_post:
+        new_post, info = try_differents_set_of_rules(bg, post_wo_outside, trains, tick)
+    if not new_post:
+        new_post, info = try_differents_set_of_rules(bg, post_forced_rot, trains, tick)
+    if not new_post:
+        new_post, info = try_differents_set_of_rules(bg, post_final,      trains, tick)
 
-    # ── 2) Intersect transitions across all trains ───────────────────────
-    common_keys = set(per_train[0].keys())
-    for cmap in per_train[1:]:
-        common_keys &= set(cmap.keys())
-    print(f"\n🔎 Common center-transitions: {common_keys}")
+    #tick = 1
+    #all = post_final + post_5_nbrs_ticked
+    #new_post, info = try_differents_set_of_rules(bg, post_final, trains, tick)
 
-    # ── 3) For each common transition, intersect neighbor-pattern sets ────
-    unified: Dict[Tuple[int,int], set] = {}
-    for key in sorted(common_keys):
-        patterns = per_train[0][key].copy()
-        for cmap in per_train[1:]:
-            patterns &= cmap[key]
-        if patterns:
-            unified[key] = patterns
-            print(f"   ✅ Kept {key}: {len(patterns)} patterns")
-        else:
-            print(f"   ❌ Dropped {key}: no stable patterns")
+    #exit(0)
 
-    if not unified:
-        print("\n⚠️ No nontrivial rules → aborting.")
+    #new_post, info = try_differents_set_of_rules(bg, post_forced_rot, trains, tick)
+
+    # use the found new_post or fall back to post_final
+    post = new_post or post_final
+
+    # ── 5a) Attach current tick to each rule entry
+    post = [
+        (c0, c1, col, sk, fact, is_rot, tick)
+        for (c0, c1, col, sk, fact, is_rot, ptick) in post
+    ]
+
+    # ── 6) Merge with any previous posts to accumulate
+    if prev_post:
+        merged = []
+        seen = set()
+        for entry in prev_post + post:
+            key = (
+                entry[0], entry[1], entry[2], entry[3],
+                entry[4]['nbr_in'], entry[4]['nbr_out'], entry[5], entry[6]
+            )
+            if key not in seen:
+                seen.add(key)
+                merged.append(entry)
+        post = merged
+
+    # ── 7) If no new rules but we got train_results, recurse with updated inputs
+    if not new_post and info.get('train_results') is not None and tick < 10 and len(info.get('colors_unexpected')) == 0:
+        new_inputs = info['train_results']
+        orig_inputs = [inp for inp, _ in trains]
+        if new_inputs == orig_inputs:
+            print("↻ No change in CA outputs; stopping recursion.")
+            return False
+
+        new_trains = [(new_inputs[i], trains[i][1]) for i in range(len(trains))]
+        print(f"↻ Recursing to tick {tick+1} with updated train inputs…")
+        return detect_and_insert_ca_pipeline(
+            conn,
+            new_trains,
+            tests,
+            bg,
+            tick + 1,
+            prev_post=post
+        )
+
+    # ── 8) If still no new_post, abort
+    if not new_post:
+        print("✗ No CA rule‐set perfectly covers all trains; aborting.")
         return False
 
-    # ── 4) Clone for test-only colors if ≥2 rules exist ────────────────
-    train_colors = {k[0] for cmap in per_train for k in cmap.keys()}
-    test_colors  = {c for grid in tests for row in grid for c in row}
-    clones = 0
-    if len(unified) >= 2:
-        for tc in sorted(test_colors - train_colors):
-            pattern = canonical((tc,)*9) if orientation_invariant else (tc,)*9
-            unified[(tc, tc)] = {pattern}
-            print(f"   ➕ Cloned center-only {tc}→{tc}")
-            clones += 1
-    print(f"    Total clones: {clones}")
+    if tick > 0:
+        post_5_nbrs_ticked = [
+            (c0, c1, col, sk, fact, is_rot, tick+1)
+            for (c0, c1, col, sk, fact, is_rot, ptick) in post_5_nbrs_ticked
+        ]
+        post = post + post_5_nbrs_ticked
 
-    # ── 5) Filter out identity-only rules ───────────────────────────────
-    final: Dict[Tuple[int,int], set] = {}
-    for (c0, c1), pats in unified.items():
-        # identity-only: no center change and single uniform pattern
-        if c0 == c1 and all(pat == ((c0,)*9) for pat in pats):
-            print(f"   ⚠️ Removing identity rule {c0}→{c1}")
-        else:
-            final[(c0, c1)] = pats
-    if not final:
-        print("\n⚠️ Only identity rules remain → aborting.")
-        return False
+    # ── 9) Duplicate rules for missing colors if needed
+    diff_cols = color_sets.get('differentColorsForAll', set())
+    newColorsByTest = color_sets.get('newColorsByTest', {})
+    sameByTrain = color_sets.get('centerFactColorsSameByTrain', False)
+    if newColorsByTest and not sameByTrain:
+        print("[ newColorsByTest and not sameByTrain ]")
+        present = {c0 for c0, *_ in post} | {c1 for _, c1, *_ in post}
+        missing = diff_cols - present
+        new_entries = []
+        for new_col in missing:
+            for c0, c1, col, sk, fact, is_rot, ptick in post:
+                if c0 in diff_cols or c1 in diff_cols:
+                    nc0 = new_col if c0 in diff_cols else c0
+                    nc1 = new_col if c1 in diff_cols else c1
+                    nin = tuple(new_col if v in diff_cols else v for v in fact['nbr_in'])
+                    nout = tuple(new_col if v in diff_cols else v for v in fact['nbr_out'])
+                    new_entries.append((nc0, nc1, col, sk, {'nbr_in': nin, 'nbr_out': nout}, is_rot, ptick))
+        print(f"Added {len(new_entries)} rules for missing colors")
+        post.extend(new_entries)
+#
+    # ── 10) Final deduplication
+    unique_post = []
+    seen_keys = set()
+    for e in post:
+        key = (e[0], e[1], e[2], e[3], tuple(e[4]['nbr_in']), tuple(e[4]['nbr_out']), e[5])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_post.append(e)
+    post = unique_post
+    print(f"After duplication/dedupe: {len(post)} rules remain")
 
-    print(f"\n✅ Final rules to insert: {list(final.keys())}")
-
-    # ── 6) Insert into database (no DELETEs) ──────────────────────────
+    # ── 11) Insert into DB
+    flatten_order = [(-1,-1),(0,-1),(1,-1),(-1,0),(0,0),(1,0),(-1,1),(0,1),(1,1)]
     cur = conn.cursor()
-    inserted = 0
-    seen = set()
-    for (c0, c1), patterns in final.items():
-        for pat in patterns:
-            key = (c0, c1, pat)
-            if key in seen:
-                continue
-            seen.add(key)
-            print(f"   • Inserting {c0}→{c1}, neighborhood={pat}")
-            # parent rule
+    for entry in post:
+        c0, c1, col, sk, fact, is_rot, ptick = entry
+        cur.execute(
+            """
+            INSERT INTO cellular_automaton
+              (input_color, output_color, neighbor_count, wildcard_colors, tick)
+            VALUES (?,?,?,?,?);
+            """,
+            (c0, c1, len(sk), json.dumps([]), ptick)
+        )
+        rid = cur.lastrowid
+        for idx, inp_col in enumerate(fact['nbr_in']):
+            dx, dy = flatten_order[idx]
+            out_col = fact['nbr_out'][idx]
             cur.execute(
                 """
-                INSERT INTO cellular_automaton
-                  (input_color, output_color, neighbor_count, wildcard_colors, centric)
+                INSERT INTO cellular_automaton_cells
+                  (rule_id, posRelX, posRelY, color, output)
                 VALUES (?,?,?,?,?);
                 """,
-                (c0, c1, len(pat), json.dumps([]), True)
+                (rid, dx, dy, inp_col, out_col)
             )
-            rid = cur.lastrowid
-            # individual neighbor cells
-            for idx, val in enumerate(pat):
-                dx = (idx % 3) - 1
-                dy = (idx // 3) - 1
-                cur.execute(
-                    """
-                    INSERT INTO cellular_automaton_cells
-                      (rule_id, posRelX, posRelY, color, output)
-                    VALUES (?,?,?,?,?);
-                    """,
-                    (rid, dx, dy, val, val)
-                )
-            inserted += 1
     conn.commit()
-    print(f"💾 Inserted {inserted} rule variants.")
-    return True
+    return bool(post)
 
+def generate_rules_simple(bg, facts, tick):
+    """
+    Generate one non-rotational rule per raw fact without modifying neighborhoods.
 
+    Args:
+        bg: background color
+        facts: list of dicts with 'nbr_in' and 'nbr_out' tuples
 
-# ─── 5) Main ───────────────────────────────────────────────────────────────
+    Returns:
+        List of rules (c0, c1, col, struct_key, fact, is_rot=False)
+    """
+    post = []
+    for fact in facts:
+        nin = fact['nbr_in']
+        nout = fact['nbr_out']
+        c0 = nin[4]
+        c1 = nout[4]
+        # skip trivial background transitions
+        if c0 == c1 == bg:
+            continue
+        # struct_key: all positions where nbr_in is not None (excluding center)
+        struct_key = tuple(i for i in range(9) if i != 4 and nin[i] is not None)
+        # emit rule for each neighbor color in struct_key
+        for col in sorted({nin[i] for i in struct_key}):
+            post.append((
+                c0,
+                c1,
+                col,
+                struct_key,
+                {'nbr_in': nin, 'nbr_out': nout},
+                False,  # non-rotational
+                tick
+            ))
+    return post
+
+def group_facts_by_center(
+    facts: List[Dict[str, Tuple[Tuple[int,...], Tuple[int,...]]]]
+) -> Dict[Tuple[int,int], List[Dict]]:
+    """
+    Group facts by center color transform (nbr_in[4]→nbr_out[4]).
+    """
+    groups: Dict[Tuple[int,int], List[Dict]] = defaultdict(list)
+    for f in facts:
+        c0, c1 = f['nbr_in'][4], f['nbr_out'][4]
+        groups[(c0, c1)].append(f)
+    return groups
+
+def extract_structure_subgroups(
+    facts: List[Dict],
+    col: int
+) -> Dict[Tuple[int,...], List[Dict]]:
+    """
+    Group facts by the set of neighbor-offset indices where nbr_in equals col.
+    Returns a map: structure_key -> list of facts.
+    """
+    struct_map: Dict[Tuple[int,...], List[Dict]] = {}
+    for f in facts:
+        offs = tuple(sorted(
+            i for i in range(9)
+            if i != 4 and f['nbr_in'][i] == col
+        ))
+        struct_map.setdefault(offs, []).append(f)
+    return struct_map
+
+def rotate90_nosort_struct(struct):
+    return tuple(index_map[i] for i in struct)
+
+def rotate90(nbr):
+    return tuple(nbr[i] for i in index_map)
+
+def all_struct_rotations_sorted(sk):
+    rots = set()
+    cur = sk
+    for _ in range(4):
+        rots.add(cur)
+        # rotate then sort
+        nosort = rotate90_nosort_struct(cur)
+        cur = tuple(sorted(nosort))
+    return rots
+
+def align_fact_to_positions(nbr_in, nbr_out, target_color, base_positions):
+    """
+    Rotate nbr_in/nbr_out in 90° steps until the set of indices in base_positions
+    where nbr_in == target_color exactly matches base_positions. Returns aligned pair.
+    """
+    for _ in range(4):
+        # only consider positions within the original base_positions
+        positions = [i for i in base_positions if nbr_in[i] == target_color]
+        if set(positions) == set(base_positions):
+            return nbr_in, nbr_out
+        nbr_in = rotate90(nbr_in)
+        nbr_out = rotate90(nbr_out)
+    # fallback: return last rotation
+    return nbr_in, nbr_out
+
+def generate_rules_to_insert(bg, facts, tick, rotation_threshold=3):
+    """
+    bg: background color
+    facts: list of {'nbr_in': tuple, 'nbr_out': tuple, ...}
+    rotation_threshold: minimum distinct facts needed to emit 4 rotations
+    """
+    print("[ generate_rules_to_insert ]")
+
+    # 1) Group by center color transition
+    center_groups = group_facts_by_center(facts)
+    center_groups.pop((bg, bg), None)
+
+    # 2) Build initial “pre” list by neighbor color & structure
+    pre = []
+    for (c0, c1), grp in center_groups.items():
+        neigh_cols = sorted({f['nbr_in'][i] for f in grp for i in range(9) if i != 4 and f['nbr_in'][i] is not None})
+        if len(neigh_cols) == 2 and bg in neigh_cols:
+            neigh_cols.remove(bg)
+        for col in neigh_cols:
+            struct_map = extract_structure_subgroups(grp, col)
+            for sk, flist in struct_map.items():
+                print(f"Pre Center {c0}->{c1} | neighbor {col} | struct {sk} | facts={len(flist)}")
+                pre.append((c0, c1, col, sk, flist))
+
+    # 3) Regroup into rotational families
+    grouped_pre = []
+    for c0, c1, col, sk, flist in pre:
+        placed = False
+        for rep_sk, entries in grouped_pre:
+            if sk in all_struct_rotations_sorted(rep_sk):
+                entries.append((c0, c1, col, sk, flist))
+                placed = True
+                break
+        if not placed:
+            grouped_pre.append((sk, [(c0, c1, col, sk, flist)]))
+
+    # 4) Deduplicate each subgroup’s flist
+    for rep_sk, entries in grouped_pre:
+        for idx, (c0, c1, col, sk, flist) in enumerate(entries):
+            seen = set()
+            unique = []
+            for f in flist:
+                key = (f['nbr_in'], f['nbr_out'])
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(f)
+            entries[idx] = (c0, c1, col, sk, unique)
+
+    # 5) Merge only truly-observed 3+ rotations
+    new_pre = []
+    for rep_sk, entries in grouped_pre:
+        if len(entries) < 3:
+            print(f"Skipping struct {rep_sk}: only {len(entries)} observed variants (need ≥3)")
+            continue
+        c0, c1, col = entries[0][0], entries[0][1], entries[0][2]
+        if col == bg or not rep_sk:
+            continue
+
+        merged = [f for *_, fl in entries for f in fl]
+        counts = [len(fl) for *_, fl in entries]
+        print(f"Merging struct {rep_sk}: {len(entries)} rotations → {len(merged)} facts ({'+'.join(map(str,counts))})")
+        new_pre.append((c0, c1, col, rep_sk, merged))
+
+    if new_pre:
+        pre.extend(new_pre)
+        print(f"  → Added {len(new_pre)} merged entries (pre now {len(pre)})")
+    else:
+        print("  → No 3-way rotational groups merged; pre unchanged")
+
+    # 6) Collapse & emit rules, using the single rotation_threshold
+    post = []
+    for c0, c1, col, struct_key, flist in pre:
+        # a) dedupe again for distinct facts
+        seen = set()
+        unique_facts = []
+        for f in flist:
+            key = (f['nbr_in'], f['nbr_out'])
+            if key not in seen:
+                seen.add(key)
+                unique_facts.append(f)
+        print(f"Center {c0}->{c1}, struct {struct_key}: {len(flist)} raw, {len(unique_facts)} unique")
+
+        # b) align & collapse
+        base = unique_facts[0]['nbr_in']
+        base_pos = [i for i in struct_key if base[i] == col]
+        aligned = []
+        for f in unique_facts:
+            ain, aout = align_fact_to_positions(f['nbr_in'], f['nbr_out'], col, base_pos)
+            aligned.append({'nbr_in': ain, 'nbr_out': aout})
+
+        out_i = [i for i in range(9) if len({f['nbr_out'][i] for f in aligned}) == 1]
+        in_i  = [i for i in range(9) if len({f['nbr_in'][i]  for f in aligned}) == 1]
+
+        rep = aligned[0]
+        in_vals  = list(rep['nbr_in'])
+        out_vals = list(rep['nbr_out'])
+
+        for i in range(9):
+            if i != 4:
+                if i not in in_i:
+                    in_vals[i] = None
+                if i not in out_i:
+                    out_vals[i] = None
+
+        # wildcard bg-only neighbors
+        neigh = {in_vals[i] for i in range(9) if i != 4}
+        if len(neigh) == 2 and bg in neigh:
+            for i in range(9):
+                if i != 4 and in_vals[i] == bg:
+                    in_vals[i] = None
+                    if out_vals[i] == bg:
+                        out_vals[i] = None
+
+        # wildcard no-change
+        for i in range(9):
+            if i != 4 and in_vals[i] is not None and in_vals[i] == out_vals[i]:
+                out_vals[i] = None
+
+        collapsed = {'nbr_in': tuple(in_vals), 'nbr_out': tuple(out_vals)}
+        print(f"Collapsed fact: nbr_in={collapsed['nbr_in']} nbr_out={collapsed['nbr_out']}")
+
+        # c) emit rotations or single rule based on rotation_threshold
+        if len(unique_facts) >= rotation_threshold:
+            print(f"Emitting 4 rotation variants for struct {struct_key}")
+            nin, nout = collapsed['nbr_in'], collapsed['nbr_out']
+            sk = tuple(sorted(out_i))
+            for _ in range(4):
+                post.append((c0, c1, col, sk, {'nbr_in': nin, 'nbr_out': nout}, True, tick))
+                nin  = rotate90(nin)
+                nout = rotate90(nout)
+                sk    = tuple(sorted(index_map[i] for i in sk))
+        else:
+            print(f"Emitting single non-rotational rule ({len(unique_facts)} < {rotation_threshold})")
+            post.append((c0, c1, col, struct_key, collapsed, False, tick))
+
+    # 7) Final dedupe of all generated rules
+    unique, seen = [], set()
+    for entry in post:
+        key = (
+            entry[0], entry[1], entry[2], entry[3],
+            entry[4]['nbr_in'], entry[4]['nbr_out'], entry[5]
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(entry)
+
+    return unique
+
+def build_ca_rule(
+        c0: int,
+        c1: int,
+        fact: Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]
+) -> Dict:
+    """
+    Build a single-CA-rule dict from your collapsed 3×3 fact.
+    - c0 is the center input color
+    - c1 is the center output color
+    - fact['nbr_in'] and fact['nbr_out'] are length-9 tuples (or None)
+    """
+    nbr_in, nbr_out = fact['nbr_in'], fact['nbr_out']
+
+    # 1) Center
+    rule = {
+        "input_color": c0,
+        # only specify an output_color if it really changes
+        "output_color": (c1 if c1 != c0 else None),
+        "neighbors": []
+    }
+
+    # 2) Every neighbor (and wildcard) at positions ≠ center
+    for idx, (dx, dy) in enumerate(flatten_order):
+        if idx == 4:
+            continue
+        in_col = nbr_in[idx]
+        out_col = nbr_out[idx]
+        # record the input (even if None) and the output (even if None)
+        rule["neighbors"].append((dx, dy, in_col, out_col))
+
+    return rule
+
+def test_each_rule_one_by_one(post, trains, bg):
+    # ── X) Filter out any rule that, when applied alone, makes changes
+    #        not present in the original train outputs ───────────────────────
+    print("🔍 Testing each candidate rule on the train examples…")
+    # reproduce the exact flatten order you used to build your 3×3 keys:
+    flatten_order = [(dx, dy)
+                     for dy in (-1, 0, 1)
+                     for dx in (-1, 0, 1)]
+
+    def rule_preserves_ground_truth(ca_rule):
+        """Return False as soon as the rule makes any unexpected change."""
+        for inp_grid, expected_out in trains:
+            # apply _only_ this single rule:
+            result = apply_ca(inp_grid, [ca_rule], bg)
+            H, W = len(inp_grid), len(inp_grid[0])
+            for y in range(H):
+                for x in range(W):
+                    # if the CA changed this cell...
+                    if result[y][x] != inp_grid[y][x]:
+                        # ...it must exactly match the expected output
+                        if result[y][x] != expected_out[y][x]:
+                            return False
+        return True
+
+    filtered = []
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
+        ca_rule = build_ca_rule(c0, c1, fact)
+        print("--- (c0, c1, col, sk, fact, is_rot) ---")
+        print((c0, c1, col, sk, fact, is_rot, ptick))
+        print("--- ca_rule 4->4 ---")
+        print(ca_rule)
+        if rule_preserves_ground_truth(ca_rule):
+            filtered.append((c0, c1, col, sk, fact, is_rot, ptick))
+        else:
+            print(f"  ❌ Dropping rule Center {c0}->{c1}, struct {sk}: "
+                  "it makes unexpected changes on the trains.")
+    post = filtered
+    print(f"✅ {len(post)} rules remain after ground-truth filtering.\n")
+    return post
+
+def try_differents_set_of_rules(bg, post, trains, tick):
+    #ok, info = test_all_rules_on_all_trains(post, trains, bg, tick)
+    #if ok:
+    #    print(f"✅ post rules cover every train transformation—using them. {tick}")
+    #    return post, info
+    #else:
+    #    print(f"❌ post rules are not sufficient: {tick}")
+    #    print("  Missing transformations per train:", info['train_failures'])
+    #    print("  Colors missing overall:", info['colors_missing'])
+    #    print("  Colors unexpected overall:", info['colors_unexpected'])
+    #    print("  Count unicolor_extras:", len(post))
+    #return None, info
+
+    # ── 1) Test “orthogonal-only” rules ────────────────────────────────────
+    orthogonal_rules = []
+    # diagonal indices in a 3×3 patch
+    diagonals = (0, 2, 6, 8)
+
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
+        # copy the 3×3 neighborhood
+        nin = list(fact['nbr_in'])
+        nout = list(fact['nbr_out'])
+        # wildcard all diagonals
+        for idx in diagonals:
+            nin[idx] = None
+            nout[idx] = None
+        new_fact = {'nbr_in': tuple(nin), 'nbr_out': tuple(nout)}
+        orthogonal_rules.append((c0, c1, col, sk, new_fact, is_rot, ptick))
+
+    ok, info = test_all_rules_on_all_trains(orthogonal_rules, trains, bg, tick)
+    if ok:
+        print(f"✅ Orthogonal-only rules cover every train transformation—using them. tick {tick}")
+        return orthogonal_rules, info
+    else:
+        print(f"❌ Orthogonal-only rules are not sufficient: {tick}")
+        print("  Missing transformations per train:", info['train_failures'])
+        print("  Colors missing overall:", info['colors_missing'])
+        print("  Colors unexpected overall:", info['colors_unexpected'])
+        print("  Count orthogonal_rules:", len(orthogonal_rules))
+
+    # ── 6a) Expand “unicolor” rules ────────────────────────────────────
+    unicolor_extras = []
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
+        if c0 == c1:
+            # build a wildcarded copy of the 3×3 fact
+            nin = list(fact['nbr_in'])
+            nout = list(fact['nbr_out'])
+            for idx in range(9):
+                if idx == 4:
+                    continue  # keep center
+                # if the neighbor isn’t the center color, wildcard it
+                if nin[idx] != c0:
+                    nin[idx] = None
+                if nout[idx] != c0:
+                    nout[idx] = None
+            new_fact = {'nbr_in': tuple(nin), 'nbr_out': tuple(nout)}
+            # duplicate the rule (keep same c0,c1,sk,is_rot)
+            print("duplicate unicolor rule")
+            print((c0, c1, col, sk, new_fact, is_rot, ptick))
+            unicolor_extras.append((c0, c1, col, sk, new_fact, is_rot, ptick))
+    ok, info = test_all_rules_on_all_trains(unicolor_extras, trains, bg, tick)
+    if ok:
+        print(f"✅ Unicolor rules alone cover every train transformation—using them. {tick}")
+        return unicolor_extras, info
+    else:
+        print(f"❌ Unicolor rules are not sufficient: {tick}")
+        print("  Missing transformations per train:", info['train_failures'])
+        print("  Colors missing overall:", info['colors_missing'])
+        print("  Colors unexpected overall:", info['colors_unexpected'])
+        print("  Count unicolor_extras:", len(unicolor_extras))
+        print(unicolor_extras)
+
+    fixed_center = []
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
+        if c0 == c1:
+            fixed_center.append((c0, c1, col, sk, fact, is_rot, ptick))
+    ok, info = test_all_rules_on_all_trains(fixed_center, trains, bg, tick)
+    if ok:
+        print(f"✅ fixed_center rules alone cover every train transformation—using them. {tick}")
+        return fixed_center, info
+    else:
+        print(f"❌ fixed_center rules are not sufficient: {tick}")
+        print("  Missing transformations per train:", info['train_failures'])
+        print("  Colors missing overall:", info['colors_missing'])
+        print("  Colors unexpected overall:", info['colors_unexpected'])
+        print("  Count unicolor_extras:", len(fixed_center))
+        print(fixed_center)
+
+    all = post + unicolor_extras
+    ok, info = test_all_rules_on_all_trains(all, trains, bg, tick)
+    if ok:
+        print(f"✅ all (post + unicolor_extras) rules cover every train transformation—using them. {tick}")
+        return all, info
+    else:
+        print(f"❌ all (post + unicolor_extras) rules are not sufficient: {tick}")
+        print("  Missing transformations per train:", info['train_failures'])
+        print("  Colors missing overall:", info['colors_missing'])
+        print("  Colors unexpected overall:", info['colors_unexpected'])
+        print("  Count unicolor_extras:", len(all))
+
+    ok, info = test_all_rules_on_all_trains(post, trains, bg, tick)
+    if ok:
+        print(f"✅ post rules cover every train transformation—using them. {tick}")
+        return post, info
+    else:
+        print(f"❌ post rules are not sufficient: {tick}")
+        print("  Missing transformations per train:", info['train_failures'])
+        print("  Colors missing overall:", info['colors_missing'])
+        print("  Colors unexpected overall:", info['colors_unexpected'])
+        print("  Count unicolor_extras:", len(post))
+
+    return None, info
+
+def test_all_rules_on_all_trains(
+    post: List[Tuple[int,int,int,Tuple[int,...],Dict[str,Tuple],bool,int]],
+    trains: List[Tuple[List[List[int]], List[List[int]]]],
+    bg: int,
+    tick: int = 0
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Apply the ENTIRE set of rules (post) to each train input:
+      - if tick == 0: exactly one pass of apply_ca;
+      - if tick  > 0: keep applying until stable (no further change).
+    Compare final result to expected_out. Return (True, {}) if perfect;
+    otherwise (False, info) where info includes train_results, failures, etc.
+    """
+    # build CA-rule objects
+    ca_rules = [
+        build_ca_rule(c0, c1, fact)
+        for (c0, c1, col, sk, fact, is_rot, ptick) in post
+    ]
+
+    failures = []
+    all_missing = set()
+    all_unexpected = set()
+    all_results = []
+
+    for t_idx, (inp_grid, expected_out) in enumerate(trains):
+        # decide how to iterate
+        if tick > 0:
+            prev = inp_grid
+            indice = 0
+            while True:
+                indice = indice + 1
+                curr = apply_ca(prev, ca_rules, bg)
+                if curr == prev:
+                    #print(ca_rules)
+                    print(f"curr = apply_ca(prev, ca_rules, bg) indice: {indice}, tick: {tick}")
+                    break
+                prev = curr
+            result = curr
+        else:
+            # single pass
+            result = apply_ca(inp_grid, ca_rules, bg)
+
+        all_results.append(result)
+
+        H, W = len(result), len(result[0])
+        missing = []
+        unexpected = []
+
+        for y in range(H):
+            for x in range(W):
+                orig = inp_grid[y][x]
+                res  = result[y][x]
+                exp  = expected_out[y][x]
+                if res != exp:
+                    if res == orig:
+                        missing.append((x, y, exp))
+                        all_missing.add(exp)
+                    else:
+                        unexpected.append((x, y, res))
+                        all_unexpected.add(res)
+
+        if missing or unexpected:
+            failures.append({
+                'train_index': t_idx,
+                'missing':     missing,
+                'unexpected':  unexpected
+            })
+
+    if failures:
+        return False, {
+            'train_failures':    failures,
+            'colors_missing':    all_missing,
+            'colors_unexpected': all_unexpected,
+            'train_results':     all_results
+        }
+
+    return True, {}
 
 def main(json_source: str, inline: bool = False, name: str | None = None):
     print("🚀 Starting CA rule extractor")
@@ -678,33 +1018,6 @@ def main(json_source: str, inline: bool = False, name: str | None = None):
     tests = [(t["input"]) for t in test]
     print(f"🧪 Training examples: {len(trains)}, Testing examples: {len(tests)}")
 
-
-
-    # ── Include any new color seen in the TEST inputs but never in TRAIN inputs ──
-    # collect all colors present in train‐inputs
-    train_colors = set(
-        c
-        for grid,_ in trains
-        for row in grid
-        for c in row
-    )
-    # collect all colors present in test‐inputs
-    test_colors = set(
-        c
-        for grid in tests
-        for row in grid
-        for c in row
-    )
-    # any truly “new” colors?
-    #new_colors = test_colors - train_colors
-    #if new_colors:
-    #    for payload in rules.values():
-    #        if not payload["wildcard_colors"]:
-    #            continue
-    #        for c in new_colors:
-    #            if c not in payload["wildcard_colors"]:
-    #                payload["wildcard_colors"].append(c)
-
     db = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "db", "database.db"))
     print(f"📦 Using database at: {db}")
     conn = sqlite3.connect(db)
@@ -714,32 +1027,10 @@ def main(json_source: str, inline: bool = False, name: str | None = None):
     conn.commit()
     print("🧹 Cleared existing CA rules from database")
 
-    invariant = True
-    found = detect_and_insert_unified_ca(conn, trains, tests, orientation_invariant=invariant, bg=0)
-
-    # fallback if empty
-    if not found:
-        invariant = False
-        detect_and_insert_unified_ca(conn, trains, tests, orientation_invariant=invariant, bg=0)
-
-    #insert_rules(conn, rules, invariant)
-
-    #centric_rules = detect_centric_ca_on_trains(trains, tests, bg=0)
-    #insert_centric_rules(conn, centric_rules)
+    success = detect_and_insert_ca_pipeline(conn, trains, tests, bg=0)
+    print("Pipeline success?", success)
 
     conn.close()
-
-    #print(f"\n✅ Done! Stored {len(rules)} canonical CA rules for task: {fname}")
-
-    # Optionally test application
-    # for idx, (inp, exp) in enumerate(tests):
-    #     print(f"--- Test {idx} ---")
-    #     pred = apply_ca(inp, rules)
-    #     print("Predicted:")
-    #     print_grid(pred)
-    #     print("Expected:")
-    #     print_grid(exp)
-    #     print("Match?", pred == exp)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Detect & store cellular automaton rules.")
@@ -748,116 +1039,3 @@ if __name__ == "__main__":
     p.add_argument("--name", type=str, help="Override filename/task_id")
     args = p.parse_args()
     main(args.json_input, inline=args.inline, name=args.name)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def main_test(train_pairs, db_path="ca_rules.db", orientation_invariant=False, bg=0):
-    rules = detect_ca_on_trains(train_pairs, orientation_invariant, bg)
-    if not rules:
-        print("No consistent CA rules found across all trains.")
-        return
-    conn = sqlite3.connect(db_path)
-    insert_rules(conn, rules)
-    conn.close()
-    print(f"Stored {len(rules)} CA rules (with rotations) into '{db_path}'")
-
-if __name__ == "__main_test__":
-    # Real train/test from ARC-like JSON
-    data = {
-        "train": [
-            {"input": [
-                [0,0,0,0,0,0,0],
-                [0,8,0,0,0,0,0],
-                [0,8,8,0,0,0,0],
-                [0,0,0,0,8,8,0],
-                [0,0,0,0,0,8,0],
-                [0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0]
-            ], "output": [
-                [0,0,0,0,0,0,0],
-                [0,8,1,0,0,0,0],
-                [0,8,8,0,0,0,0],
-                [0,0,0,0,8,8,0],
-                [0,0,0,0,1,8,0],
-                [0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0]
-            ]},
-            {"input": [
-                [0,0,0,0,8,8,0],
-                [0,0,0,0,0,8,0],
-                [0,0,8,0,0,0,0],
-                [0,0,8,8,0,0,0],
-                [0,0,0,0,0,0,0],
-                [0,0,0,0,8,0,0],
-                [0,0,0,8,8,0,0]
-            ], "output": [
-                [0,0,0,0,8,8,0],
-                [0,0,0,0,1,8,0],
-                [0,0,8,1,0,0,0],
-                [0,0,8,8,0,0,0],
-                [0,0,0,0,0,0,0],
-                [0,0,0,1,8,0,0],
-                [0,0,0,8,8,0,0]
-            ]}
-        ],
-        "test": [
-            {"input": [
-                [0,0,0,0,0,8,8],
-                [8,8,0,0,0,0,8],
-                [8,0,0,0,0,0,0],
-                [0,0,0,8,0,0,0],
-                [0,0,0,8,8,0,0],
-                [0,8,0,0,0,0,0],
-                [8,8,0,0,0,0,0]
-            ], "output": [
-                [0,0,0,0,0,8,8],
-                [8,8,0,0,0,1,8],
-                [8,1,0,0,0,0,0],
-                [0,0,0,8,1,0,0],
-                [0,0,0,8,8,0,0],
-                [1,8,0,0,0,0,0],
-                [8,8,0,0,0,0,0]
-            ]}
-        ]
-    }
-    train_pairs = [(item["input"], item["output"]) for item in data["train"]]
-    test_pairs = [(item["input"], item["output"]) for item in data["test"]]
-
-    # 5.1) Detect and store rules
-    rules = detect_ca_on_trains(train_pairs, orientation_invariant=True, bg=0)
-    db_path = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), "..", "db", "database.db"))
-    conn = sqlite3.connect(db_path)
-    insert_rules(conn, rules)
-    conn.close()
-    print(f"Stored {len(rules)} CA rules into '{db_path}'.")
-
-    # 5.2) Apply rules to test inputs and compare
-    for idx, (inp, expected) in enumerate(test_pairs):
-        print(f"--- Test {idx} ---")
-        pred = apply_ca(inp, rules, orientation_invariant=True, bg=0)
-        print("Predicted:")
-        print_grid(pred)
-        print("Expected:")
-        print_grid(expected)
-        match = pred == expected
-        print(f"Match? {match}\n")

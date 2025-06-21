@@ -957,7 +957,190 @@ def apply_ca_old(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0)
 
     return result
 
-def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> List[List[int]]:
+def apply_cellular_automaton(
+    input_grid: List[List[int]],
+    ca_rules: List[Dict[str, Any]],
+    bg: int = 0,
+    initial_tick: int = 0
+) -> List[List[int]]:
+    """
+    Applies a staged cellular automaton to `input_grid` using `ca_rules`.
+    Each rule in ca_rules must have a 'tick' field indicating its stage.
+
+    - Start at tick = initial_tick.
+    - At each tick, select only rules whose 'tick' == current_tick.
+    - For tick 0: perform exactly one apply_ca pass, then proceed to next tick.
+    - For tick > 0: repeatedly apply until no changes or an oscillation is detected.
+    - Then increment tick and repeat until no rules remain or tick > max_tick.
+
+    Returns the final grid.
+    """
+    # determine max tick available
+    all_ticks = [rule.get('tick', initial_tick) for rule in ca_rules]
+    max_tick = max(all_ticks) if all_ticks else initial_tick
+
+    # helper to convert grid to an immutable state
+    def to_state(grid: List[List[int]]) -> Tuple[Tuple[int, ...], ...]:
+        return tuple(tuple(row) for row in grid)
+
+    current = input_grid
+    current_tick = initial_tick
+
+    # stage through ticks
+    while True:
+        # select rules for this tick
+        rules_this_tick = [r for r in ca_rules if r.get('tick', -1) == current_tick]
+        if not rules_this_tick:
+            # no rules at this tick => stop
+            break
+
+        # for tick 0: single apply_ca pass
+        if current_tick == 0:
+            current = apply_ca(current, rules_this_tick, bg)
+            current_tick += 1
+            if current_tick > max_tick:
+                break
+            else:
+                continue
+
+        # for tick > 0: iterate until stable or oscillation
+        seen_states = set()
+        state = to_state(current)
+
+        while True:
+            next_grid = apply_ca(current, rules_this_tick, bg)
+            next_state = to_state(next_grid)
+
+            if next_state == state:
+                # stable
+                break
+            if next_state in seen_states:
+                # oscillation detected
+                break
+
+            seen_states.add(state)
+            state = next_state
+            current = next_grid
+
+        # advance to next tick
+        current_tick += 1
+        if current_tick > max_tick:
+            break
+
+    return current
+
+
+def apply_ca(
+    input_grid: List[List[int]],
+    ca_rules: List[Dict],
+    bg: int = 0
+) -> List[List[int]]:
+    import pprint
+    from typing import Tuple, Dict, List
+
+    idx_map = {
+        (-1, -1): 0, (0, -1): 1, (1, -1): 2,
+        (-1,  0): 3, (0,  0): 4, (1,  0): 5,
+        (-1,  1): 6, (0,  1): 7, (1,  1): 8,
+    }
+    offs = list(idx_map.keys())
+
+    H, W = len(input_grid), len(input_grid[0])
+    print(f"⚙️ Starting apply_ca on grid {H}×{W} with {len(ca_rules)} rules, bg={bg}")
+
+    # ── Detect if any rule actually uses -2 as a neighborhood value ──
+    use_border_marker = False
+    for rule in ca_rules:
+        if rule.get("input_color") == -2:
+            use_border_marker = True
+            break
+        for dx, dy, color, _ in rule["neighbors"]:
+            if color == -2:
+                use_border_marker = True
+                break
+        if use_border_marker:
+            break
+
+    pad_value = -2 if use_border_marker else bg
+    if use_border_marker:
+        print("Detected -2 in rules → padding out‐of‐bounds with -2")
+    else:
+        print("No -2 in rules → padding out‐of‐bounds with bg")
+
+    # 1) Build rule_map exactly as before (still using bg!)
+    rule_map: Dict[Tuple[int,...], List[Tuple[int,int,int]]] = {}
+    for idx, rule in enumerate(ca_rules):
+        nbr = [bg] * 9
+        nbr[4] = rule["input_color"]
+        for dx, dy, color, _ in rule["neighbors"]:
+            nbr[idx_map[(dx,dy)]] = color
+        key = tuple(nbr)
+
+        # collect outputs
+        outputs = []
+        oc = rule.get("output_color")
+        ic = rule["input_color"]
+        if oc is not None and oc != ic:
+            outputs.append((0, 0, oc))
+        for dx, dy, _, out in rule["neighbors"]:
+            if out is not None and not (dx == 0 and dy == 0):
+                outputs.append((dx, dy, out))
+
+        # dedupe
+        seen = set(); deduped = []
+        for dx, dy, c in outputs:
+            if (dx,dy,c) not in seen:
+                seen.add((dx,dy,c))
+                deduped.append((dx,dy,c))
+
+        rule_map[key] = deduped
+        #print(f"Rule #{idx}: key={key} -> outputs={deduped}")
+
+    # 2) Prepare result grid
+    result = [row.copy() for row in input_grid]
+    print("🔍 Rule map built. Beginning grid scan...")
+
+    # 3) extract uses pad_value
+    def extract(x: int, y: int) -> Tuple[int,...]:
+        vals = []
+        for dy in (-1,0,1):
+            for dx in (-1,0,1):
+                xi, yi = x + dx, y + dy
+                if 0 <= xi < W and 0 <= yi < H:
+                    vals.append(input_grid[yi][xi])
+                else:
+                    vals.append(pad_value)
+        return tuple(vals)
+
+    # 4) match & apply
+    def matches(rule_key: Tuple[int,...], block: Tuple[int,...]) -> bool:
+        for rk, bk in zip(rule_key, block):
+            if rk is None: continue
+            if rk != bk: return False
+        return True
+
+    for y in range(H):
+        for x in range(W):
+            block = extract(x, y)
+            for key, updates in rule_map.items():
+                if matches(key, block):
+                    #print(f"  Matched {key} at ({x},{y}), updates={updates}")
+                    for dx, dy, new in updates:
+                        tx, ty = x+dx, y+dy
+                        if 0 <= tx < W and 0 <= ty < H:
+                            old = result[ty][tx]
+                            result[ty][tx] = new
+                            #print(f"    ({tx},{ty}): {old}→{new}")
+                        else:
+                            print(f"    skip out‐of‐bounds update at ({tx},{ty})")
+                    break
+
+    print("✅ Finished apply_ca; final grid:")
+    for row in result:
+        print(row)
+    return result
+
+def apply_ca_old(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> List[List[int]]:
     """
     Apply a standard CA (no wildcard matching)
     """

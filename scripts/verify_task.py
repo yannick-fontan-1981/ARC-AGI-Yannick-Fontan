@@ -577,7 +577,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
     #DEFAULT_TASK_ID = "25ff71a9" # move object 1 pixel lower
     #DEFAULT_TASK_ID = "0b148d64"
-    #DEFAULT_TASK_ID = "1f85a75f" # crop
+    DEFAULT_TASK_ID = "1f85a75f" # crop
     #DEFAULT_TASK_ID = "23b5c85d"
     #DEFAULT_TASK_ID = "9ecd008a" # find missing sprite in symmetry
     #DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
@@ -588,7 +588,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "b91ae062" # zoom based on nb_colors-1
     #DEFAULT_TASK_ID = "3aa6fb7a" # cellular automation !
     #DEFAULT_TASK_ID = "7b7f7511" # crop if V or H ? Un-Repeat sprite ?
-    DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
+    #DEFAULT_TASK_ID = "4258a5f9" # cellular automation !
 
     # Training 4
     #DEFAULT_TASK_ID = "2dc579da" # sprite with nb hole 1 ?
@@ -724,11 +724,11 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "e50d258f" # sprite with more red pixels
     #DEFAULT_TASK_ID = "810b9b61" # recolored green for has-border
     #DEFAULT_TASK_ID = "54d82841" # Gun ?
-    #DEFAULT_TASK_ID = "60b61512" #
-    #DEFAULT_TASK_ID = "25d8a9c8" #
-    #DEFAULT_TASK_ID = "239be575" #
-    #DEFAULT_TASK_ID = "67a423a3" #
-    #DEFAULT_TASK_ID = "5c0a986e" #
+    #DEFAULT_TASK_ID = "60b61512" # Cellular automation || sprite recolor
+    #DEFAULT_TASK_ID = "25d8a9c8" # Redraw 3 pixel horizontal line in gray on bg black
+    #DEFAULT_TASK_ID = "239be575" # Same Teal object touching 2 red square = teal pixel, else black pixel
+    #DEFAULT_TASK_ID = "67a423a3" # Yellow 3x3 border at intersection of 2 lines
+    #DEFAULT_TASK_ID = "5c0a986e" # diagonal LightCycle
     #DEFAULT_TASK_ID = "6430c8c4" #
     #DEFAULT_TASK_ID = "94f9d214" #
     #DEFAULT_TASK_ID = "a1570a43" #

@@ -834,7 +834,7 @@ def detect_and_persist_conditional_shapes(conn):
     #print("Loading sprite_analysis into memory...")
     sa_raw = load_table_from_sqlite(conn, "sprite_analysis", "id")
     sa_table = {int(k): v for k, v in sa_raw.items()}
-    sa_cols = list(next(iter(sa_table.values())).keys())
+    #sa_cols = list(next(iter(sa_table.values())).keys())
     #print(f"  → Loaded {len(sa_table)} rows from sprite_analysis")
 
     # Prepare for minimal-criteria calls
