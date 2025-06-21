@@ -917,14 +917,9 @@ def apply_ca_old(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0)
                 return False
         return True
 
-    # ── 1) Separate normal vs centric rules ────────────────────────────────
     normal_rules = []
-    centric_rules = []
     for rule in ca_rules:
-        if rule.get("centric", False):
-            centric_rules.append(rule)
-        else:
-            normal_rules.append(rule)
+        normal_rules.append(rule)
 
     # ── 2) Build normal‐CA dict from normal_rules ─────────────────────────
     rule_dict: Dict[Tuple[int, ...], int] = {}
@@ -936,13 +931,6 @@ def apply_ca_old(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0)
             nbr[idx] = color
         key = tuple(nbr)
         rule_dict[key] = rule["output_color"]
-
-    # ── 3) Precompute centric map: center_color → { (dx,dy): new_color, … }
-    centric_map: Dict[int, Dict[Tuple[int,int],int]] = {}
-    for rule in centric_rules:
-        center = rule["input_color"]
-        # rule["neighbors"] must now carry the *new* neighbor‐colors for centric rules
-        centric_map[center] = { (dx,dy): output for dx,dy,color,output in rule["neighbors"] }
 
     # ── 4) Run the *normal* CA ────────────────────────────────────────────
     H, W = len(input_grid), len(input_grid[0])
@@ -967,24 +955,11 @@ def apply_ca_old(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0)
             else:
                 result[y][x] = out_ph
 
-    # ── 5) Now apply all centric rules *on top* of the normal CA ─────────
-    for y in range(H):
-        for x in range(W):
-            c = input_grid[y][x]
-            neigh_changes = centric_map.get(c)
-            if not neigh_changes:
-                continue
-            # for each offset where a neighbor must change:
-            for (dx, dy), new_col in neigh_changes.items():
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < H and 0 <= nx < W:
-                    result[ny][nx] = new_col
-
     return result
 
 def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> List[List[int]]:
     """
-    Apply a standard CA (no wildcard matching) and then overlay centric rules.
+    Apply a standard CA (no wildcard matching)
     """
     # ── 1) Extract helper functions ─────────────────────────────────────
     def get_neighborhood(grid, x, y, bg=0):
@@ -1012,14 +987,10 @@ def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> 
         flips = [tuple(r[i] for i in [2,1,0,5,4,3,8,7,6]) for r in rots]
         return min(rots + flips)
 
-    # ── 2) Separate normal vs centric rules ─────────────────────────────
+    # ── 2) Separate normal rules ─────────────────────────────
     normal_rules = []
-    centric_rules = []
     for rule in ca_rules:
-        if rule.get("centric", False):
-            centric_rules.append(rule)
-        else:
-            normal_rules.append(rule)
+        normal_rules.append(rule)
 
     # ── 3) Build exact-match rule_dict from normal_rules ───────────────
     rule_dict: Dict[Tuple[int, ...], int] = {}
@@ -1032,15 +1003,6 @@ def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> 
         key = tuple(nbr)
         rule_dict[key] = rule["output_color"]
 
-    # ── 4) Precompute centric map ───────────────────────────────────────
-    centric_map: Dict[int, Dict[Tuple[int,int], int]] = {}
-    for rule in centric_rules:
-        center = rule["input_color"]
-        centric_map[center] = {
-            (dx, dy): output
-            for dx, dy, color, output in rule["neighbors"]
-        }
-
     # ── 5) Apply the normal CA (exact matches only) ────────────────────
     H, W = len(input_grid), len(input_grid[0])
     result = [[0] * W for _ in range(H)]
@@ -1051,18 +1013,6 @@ def apply_ca(input_grid: List[List[int]], ca_rules: List[Dict], bg: int = 0) -> 
             can_n = nbr
             out_col = rule_dict.get(can_n)
             result[y][x] = out_col if out_col is not None else input_grid[y][x]
-
-    # ── 6) Overlay centric rules ────────────────────────────────────────
-    for y in range(H):
-        for x in range(W):
-            center = input_grid[y][x]
-            changes = centric_map.get(center)
-            if not changes:
-                continue
-            for (dx, dy), new_col in changes.items():
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < H and 0 <= nx < W:
-                    result[ny][nx] = new_col
 
     return result
 

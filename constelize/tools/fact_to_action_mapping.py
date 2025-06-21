@@ -2728,7 +2728,7 @@ class CellularAutomatonFactToAction(FactToActionMapping):
         self.build_function = self._build_function
 
     def _test_function(self, conn: sqlite3.Connection) -> List[dict]:
-        cur = conn.execute("SELECT id, input_color, output_color, wildcard_colors, centric FROM cellular_automaton")
+        cur = conn.execute("SELECT id, input_color, output_color, wildcard_colors, tick FROM cellular_automaton")
         rules_raw = [dict(zip([d[0] for d in cur.description], row)) for row in cur.fetchall()]
         ca_rules: List[Dict] = []
         for rw in rules_raw:
@@ -2739,7 +2739,7 @@ class CellularAutomatonFactToAction(FactToActionMapping):
                 'input_color': rw['input_color'],
                 'output_color': rw['output_color'],
                 'wildcard_colors': rw['wildcard_colors'],
-                'centric': rw['centric'],
+                'tick': rw['tick'],
                 'neighbors': neighbors
             })
         results: List[dict] = []

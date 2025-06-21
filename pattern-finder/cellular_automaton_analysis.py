@@ -308,13 +308,13 @@ def insert_rules(conn, rule_dict, orientation_invariant=True):
             # insert the “center → out_col” rule
             cur.execute(
                 "INSERT INTO cellular_automaton "
-                "(input_color, output_color, wildcard_colors, centric) "
+                "(input_color, output_color, wildcard_colors, tick) "
                 "VALUES (?,?,?,?);",
                 (
                     variant[4],
                     out_col,
                     json.dumps(wildcard_list),
-                    False
+                    0
                 )
             )
             rule_id = cur.lastrowid

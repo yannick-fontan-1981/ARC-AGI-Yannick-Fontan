@@ -923,7 +923,7 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
             output_color INTEGER NOT NULL,
             neighbor_count INTEGER NOT NULL DEFAULT 0,
             wildcard_colors TEXT,         -- serialized list of colors
-            centric BOOLEAN
+            tick INTEGER NOT NULL DEFAULT 0
         );
         """)
     conn.commit()

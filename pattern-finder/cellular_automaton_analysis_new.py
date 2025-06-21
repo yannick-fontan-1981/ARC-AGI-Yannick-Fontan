@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Tuple, Set, Callable, Any
+from typing import List, Dict, Tuple, Set, Callable, Any, Optional
 from collections import defaultdict, Counter, OrderedDict
 import json
 import sqlite3
@@ -82,27 +82,88 @@ def compute_color_sets(
         'centerFactColorsSameByTrain': centerFactColorsSameByTrain,
     }
 
+
 def gather_facts(
     trains: List[Tuple[List[List[int]], List[List[int]]]],
     bg: int = 0
 ) -> Tuple[
-    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],  # facts_without_orphan
-    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],  # facts_without_border
-    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],  # facts_without_outside
-    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],  # final_facts
-    Dict[int, List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]]]  # facts_by_train
+    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],
+    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],
+    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],
+    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],
+    List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]],
+    Dict[int, List[Dict[str, Tuple[Tuple[int, ...], Tuple[int, ...]]]]]
 ]:
     """
     Returns:
-      - facts_without_orphan: final_facts whose pattern occurred >1 time
-      - facts_without_border: final_facts whose center isn't on grid border
-      - facts_without_outside: final_facts with all -2 replaced by bg
-      - final_facts: the filtered facts, possibly containing -2 and border ones
-      - facts_by_train: mapping train_idx -> list of final_facts dicts
+      1) facts_5_nbrs_ticked: 5-neighbor mask facts + center-variant
+      2) facts_without_orphan
+      3) facts_without_border
+      4) facts_without_outside
+      5) final_facts
+      6) facts_by_train
     """
-    offs = [(-1, -1), (0, -1), (1, -1),
-            (-1,  0), (0,  0), (1,  0),
-            (-1,  1), (0,  1), (1,  1)]
+    # 3×3 offsets
+    offs = [(-1,-1),(0,-1),(1,-1),
+            (-1, 0),(0, 0),(1, 0),
+            (-1, 1),(0, 1),(1, 1)]
+    # eight 5-neighbor masks
+    masks = [
+      [[1,1,1],[1,1,1],[0,0,0]],
+      [[1,1,1],[0,1,1],[0,0,1]],
+      [[0,1,1],[0,1,1],[0,1,1]],
+      [[0,0,1],[0,1,1],[1,1,1]],
+      [[0,0,0],[1,1,1],[1,1,1]],
+      [[1,0,0],[1,1,0],[1,1,1]],
+      [[1,1,0],[1,1,0],[1,1,0]],
+      [[1,1,1],[1,1,0],[1,0,0]],
+    ]
+
+    facts_5_nbrs_ticked: List[Dict[str, Tuple]] = []
+
+    # --- build facts_5_nbrs_ticked ---
+    for t_idx, (inp, out) in enumerate(trains, start=1):
+        H, W = len(inp), len(inp[0])
+        for y in range(H):
+            for x in range(W):
+                if inp[y][x] == out[y][x]:
+                    continue
+                for mask in masks:
+                    # 1) mask-only
+                    nin, nout = [], []
+                    for (dx, dy), mrow in zip(offs, [mask[dy+1][dx+1] for dx,dy in offs]):
+                        if mrow == 1:
+                            if 0 <= y+dy < H and 0 <= x+dx < W:
+                                nin.append(inp[y+dy][x+dx])
+                                nout.append(out[y+dy][x+dx])
+                            else:
+                                nin.append(-2); nout.append(-2)
+                        else:
+                            nin.append(None); nout.append(None)
+                    facts_5_nbrs_ticked.append({'nbr_in':tuple(nin),'nbr_out':tuple(nout)})
+
+                    # 2) all→out except center
+                    nin2, nout2 = [], []
+                    for i, ((dx, dy), mrow) in enumerate(zip(offs, [mask[dy+1][dx+1] for dx,dy in offs])):
+                        if mrow == 1:
+                            if i==4:
+                                # center stays old input
+                                nin2.append(inp[y][x])
+                            else:
+                                if 0 <= y+dy < H and 0 <= x+dx < W:
+                                    nin2.append(out[y+dy][x+dx])
+                                else:
+                                    nin2.append(-2)
+                            # always output
+                            if 0 <= y+dy < H and 0 <= x+dx < W:
+                                nout2.append(out[y+dy][x+dx])
+                            else:
+                                nout2.append(-2)
+                        else:
+                            nin2.append(None); nout2.append(None)
+                    facts_5_nbrs_ticked.append({'nbr_in':tuple(nin2),'nbr_out':tuple(nout2)})
+
+    # --- now original gather_facts pipeline ---
 
     # 1) collect raw_facts with -2 padding
     raw_facts = []
@@ -120,6 +181,8 @@ def gather_facts(
                     out_vals.append(-2)
             return tuple(in_vals), tuple(out_vals)
 
+    for t_idx, (inp, out) in enumerate(trains, start=1):
+        H, W = len(inp), len(inp[0])
         for y in range(H):
             for x in range(W):
                 nin, nout = extract(x, y)
@@ -240,6 +303,7 @@ def gather_facts(
         return unique
 
     return (
+        dedupe(facts_5_nbrs_ticked),
         dedupe(facts_without_orphan),
         dedupe(facts_without_border),
         dedupe(facts_without_outside),
@@ -455,7 +519,7 @@ def apply_ca(
                 deduped.append((dx,dy,c))
 
         rule_map[key] = deduped
-        print(f"Rule #{idx}: key={key} -> outputs={deduped}")
+        #print(f"Rule #{idx}: key={key} -> outputs={deduped}")
 
     # 2) Prepare result grid
     result = [row.copy() for row in input_grid]
@@ -485,13 +549,13 @@ def apply_ca(
             block = extract(x, y)
             for key, updates in rule_map.items():
                 if matches(key, block):
-                    print(f"  Matched {key} at ({x},{y}), updates={updates}")
+                    #print(f"  Matched {key} at ({x},{y}), updates={updates}")
                     for dx, dy, new in updates:
                         tx, ty = x+dx, y+dy
                         if 0 <= tx < W and 0 <= ty < H:
                             old = result[ty][tx]
                             result[ty][tx] = new
-                            print(f"    ({tx},{ty}): {old}→{new}")
+                            #print(f"    ({tx},{ty}): {old}→{new}")
                         else:
                             print(f"    skip out‐of‐bounds update at ({tx},{ty})")
                     break
@@ -676,6 +740,196 @@ def detect_and_insert_ca_pipeline(
     conn: sqlite3.Connection,
     trains: List[Tuple[List[List[int]], List[List[int]]]],
     tests: List[List[List[int]]],
+    bg: int = 0,
+    tick: int = 0,
+    prev_post: Optional[List[Tuple[int,int,int,Tuple[int,...],Dict[str,Tuple],bool]]] = None
+) -> bool:
+    """
+    Pipeline with robust rotational alignment based on neighbor‐color positions.
+
+    Arguments:
+      conn            -- SQLite connection
+      trains          -- list of (input_grid, expected_output) pairs
+      tests           -- list of test grids
+      bg              -- background color ID
+      tick            -- recursion depth / rule version
+      prev_post       -- previously inserted/merged rules (to accumulate)
+
+    Returns:
+      True if at least one rule was inserted; False otherwise
+    """
+    # ── 1) Gather 3×3 facts from the current trains
+    facts_5_nbrs_ticked, facts_without_orphan, facts_without_border, facts_without_outside, final_facts, facts_by_train = gather_facts(trains, bg)
+
+    #print("5-Nbrs-Ticked Facts (nbr_in -> nbr_out):")
+    #for idx, fact in enumerate(facts_5_nbrs_ticked, start=1):
+    #    in_vals = fact['nbr_in']
+    #    out_vals = fact['nbr_out']
+    #    print(f" Fact #{idx:>3}:")
+    #    print(f"   nbr_in : {in_vals}")
+    #    print(f"   nbr_out: {out_vals}")
+
+    # ── 2) Compute color sets for duplication logic
+    color_sets = compute_color_sets(trains, tests, facts_by_train, bg)
+
+    # ── 3) Generate candidate rule‐sets
+    post_5_nbrs_ticked   = generate_rules_simple(bg, facts_5_nbrs_ticked, tick)
+    post_forced_rot  = generate_rules_to_insert(bg, facts_without_orphan, tick, 1)
+    post_wo_border   = generate_rules_to_insert(bg, facts_without_border, tick)
+    post_wo_outside  = generate_rules_to_insert(bg, facts_without_outside, tick)
+    post_final       = generate_rules_to_insert(bg, final_facts, tick)
+
+    # ── 4) Test each set on all trains
+    post_5_nbrs_ticked   = test_each_rule_one_by_one(post_5_nbrs_ticked,   trains, bg)
+    post_forced_rot  = test_each_rule_one_by_one(post_forced_rot,  trains, bg)
+    post_wo_border   = test_each_rule_one_by_one(post_wo_border,   trains, bg)
+    post_wo_outside  = test_each_rule_one_by_one(post_wo_outside,  trains, bg)
+    post_final       = test_each_rule_one_by_one(post_final,       trains, bg)
+
+    ## ── Nicely print the filtered 5-nbrs-ticked rules ─────────────────────
+    #print("\nPost 5-Nbrs-Ticked Rules to Insert:")
+    #for idx, (c0, c1, col, sk, fact, is_rot) in enumerate(post_5_nbrs_ticked, start=1):
+    #    tag = "rotational" if is_rot else "non-rotational"
+    #    print(f" Rule #{idx:>3}: Center {c0}→{c1} | neighbor {col} | {tag}")
+    #    print(f"    struct : {sk}")
+    #    print(f"    nbr_in : {fact['nbr_in']}")
+    #    print(f"    nbr_out: {fact['nbr_out']}")
+
+    # ── 5) Pick the best rule‐set via try_differents_set_of_rules
+    new_post, info = try_differents_set_of_rules(bg, post_wo_border,  trains, tick)
+    if not new_post:
+        new_post, info = try_differents_set_of_rules(bg, post_wo_outside, trains, tick)
+    if not new_post:
+        new_post, info = try_differents_set_of_rules(bg, post_forced_rot, trains, tick)
+    if not new_post:
+        new_post, info = try_differents_set_of_rules(bg, post_final,      trains, tick)
+
+    #tick = 1
+    #all = post_final + post_5_nbrs_ticked
+    #new_post, info = try_differents_set_of_rules(bg, post_final, trains, tick)
+
+    #exit(0)
+
+    #new_post, info = try_differents_set_of_rules(bg, post_forced_rot, trains, tick)
+
+    # use the found new_post or fall back to post_final
+    post = new_post or post_final
+
+    # ── 5a) Attach current tick to each rule entry
+    post = [
+        (c0, c1, col, sk, fact, is_rot, tick)
+        for (c0, c1, col, sk, fact, is_rot, ptick) in post
+    ]
+
+    # ── 6) Merge with any previous posts to accumulate
+    if prev_post:
+        merged = []
+        seen = set()
+        for entry in prev_post + post:
+            key = (
+                entry[0], entry[1], entry[2], entry[3],
+                entry[4]['nbr_in'], entry[4]['nbr_out'], entry[5], entry[6]
+            )
+            if key not in seen:
+                seen.add(key)
+                merged.append(entry)
+        post = merged
+
+    # ── 7) If no new rules but we got train_results, recurse with updated inputs
+    if not new_post and info.get('train_results') is not None and tick < 10 and len(info.get('colors_unexpected')) == 0:
+        new_inputs = info['train_results']
+        orig_inputs = [inp for inp, _ in trains]
+        if new_inputs == orig_inputs:
+            print("↻ No change in CA outputs; stopping recursion.")
+            return False
+
+        new_trains = [(new_inputs[i], trains[i][1]) for i in range(len(trains))]
+        print(f"↻ Recursing to tick {tick+1} with updated train inputs…")
+        return detect_and_insert_ca_pipeline(
+            conn,
+            new_trains,
+            tests,
+            bg,
+            tick + 1,
+            prev_post=post
+        )
+
+    # ── 8) If still no new_post, abort
+    if not new_post:
+        print("✗ No CA rule‐set perfectly covers all trains; aborting.")
+        return False
+
+    if tick > 0:
+        post_5_nbrs_ticked = [
+            (c0, c1, col, sk, fact, is_rot, tick+1)
+            for (c0, c1, col, sk, fact, is_rot, ptick) in post_5_nbrs_ticked
+        ]
+        post = post + post_5_nbrs_ticked
+
+    # ── 9) Duplicate rules for missing colors if needed
+    diff_cols = color_sets.get('differentColorsForAll', set())
+    newColorsByTest = color_sets.get('newColorsByTest', {})
+    sameByTrain = color_sets.get('centerFactColorsSameByTrain', False)
+    if newColorsByTest and not sameByTrain:
+        print("[ newColorsByTest and not sameByTrain ]")
+        present = {c0 for c0, *_ in post} | {c1 for _, c1, *_ in post}
+        missing = diff_cols - present
+        new_entries = []
+        for new_col in missing:
+            for c0, c1, col, sk, fact, is_rot, ptick in post:
+                if c0 in diff_cols or c1 in diff_cols:
+                    nc0 = new_col if c0 in diff_cols else c0
+                    nc1 = new_col if c1 in diff_cols else c1
+                    nin = tuple(new_col if v in diff_cols else v for v in fact['nbr_in'])
+                    nout = tuple(new_col if v in diff_cols else v for v in fact['nbr_out'])
+                    new_entries.append((nc0, nc1, col, sk, {'nbr_in': nin, 'nbr_out': nout}, is_rot, ptick))
+        print(f"Added {len(new_entries)} rules for missing colors")
+        post.extend(new_entries)
+#
+    # ── 10) Final deduplication
+    unique_post = []
+    seen_keys = set()
+    for e in post:
+        key = (e[0], e[1], e[2], e[3], tuple(e[4]['nbr_in']), tuple(e[4]['nbr_out']), e[5])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_post.append(e)
+    post = unique_post
+    print(f"After duplication/dedupe: {len(post)} rules remain")
+
+    # ── 11) Insert into DB
+    flatten_order = [(-1,-1),(0,-1),(1,-1),(-1,0),(0,0),(1,0),(-1,1),(0,1),(1,1)]
+    cur = conn.cursor()
+    for entry in post:
+        c0, c1, col, sk, fact, is_rot, ptick = entry
+        cur.execute(
+            """
+            INSERT INTO cellular_automaton
+              (input_color, output_color, neighbor_count, wildcard_colors, tick)
+            VALUES (?,?,?,?,?);
+            """,
+            (c0, c1, len(sk), json.dumps([]), ptick)
+        )
+        rid = cur.lastrowid
+        for idx, inp_col in enumerate(fact['nbr_in']):
+            dx, dy = flatten_order[idx]
+            out_col = fact['nbr_out'][idx]
+            cur.execute(
+                """
+                INSERT INTO cellular_automaton_cells
+                  (rule_id, posRelX, posRelY, color, output)
+                VALUES (?,?,?,?,?);
+                """,
+                (rid, dx, dy, inp_col, out_col)
+            )
+    conn.commit()
+    return bool(post)
+
+
+def detect_and_insert_ca_pipeline_old(
+    conn: sqlite3.Connection,
+    trains: List[Tuple[List[List[int]], List[List[int]]]],
+    tests: List[List[List[int]]],
     bg: int = 0
 ) -> bool:
     """
@@ -712,37 +966,43 @@ def detect_and_insert_ca_pipeline(
     print(color_sets)
 
     post_without_orphan = generate_rules_to_insert(bg, facts_without_orphan)
-
-    exit(0)
-
+    post_forced_rotation = generate_rules_to_insert(bg, facts_without_orphan,1)
     post_without_border = generate_rules_to_insert(bg, facts_without_border)
     post_without_outside = generate_rules_to_insert(bg, facts_without_outside)
     post = generate_rules_to_insert(bg, final_facts)
 
+    post_forced_rotation = test_each_rule_one_by_one(post_forced_rotation, trains, bg)
     post_without_border = test_each_rule_one_by_one(post_without_border, trains, bg)
     post_without_outside = test_each_rule_one_by_one(post_without_outside, trains, bg)
     post = test_each_rule_one_by_one(post, trains, bg)
 
     # ──────────────────────────────────────
-    new_post = try_differents_set_of_rules(bg, post_without_orphan, trains)
+    #new_post = try_differents_set_of_rules(bg, post_without_orphan, trains)
+    new_post, info = try_differents_set_of_rules(bg, post_without_border, trains)
     print("post_without_orphan done !")
     if not new_post:
         print("post_without_outside failed")
-        new_post = try_differents_set_of_rules(bg, post_without_border, trains)
+        new_post, info = try_differents_set_of_rules(bg, post_without_border, trains)
         print("post post_without_border !")
     if not new_post:
         print("post_without_orphan failed")
-        new_post = try_differents_set_of_rules(bg, post_without_outside, trains)
+        new_post, info = try_differents_set_of_rules(bg, post_without_outside, trains)
         print("post post_without_outside !")
     if not new_post:
-        print("post_without_border failed")
-        new_post = try_differents_set_of_rules(bg, post, trains)
+        print("post_without_outside failed")
+        new_post, info = try_differents_set_of_rules(bg, post_forced_rotation, trains)
+        print("post post_forced_rotation !")
+    if not new_post:
+        print("post_forced_rotation failed")
+        new_post, info = try_differents_set_of_rules(bg, post, trains)
         print("post done !")
     if not new_post:
         print("post failed")
         new_post = post
         print("go back to post")
     post = new_post
+
+    #exit(0)
 
     #new_post = try_differents_set_of_rules(bg, post_without_orphan, trains)
     #print("post_without_orphan done !")
@@ -814,10 +1074,10 @@ def detect_and_insert_ca_pipeline(
         cur.execute(
             """
             INSERT INTO cellular_automaton
-              (input_color, output_color, neighbor_count, wildcard_colors, centric)
+              (input_color, output_color, neighbor_count, wildcard_colors, tick)
             VALUES (?,?,?,?,?);
             """,
-            (c0, c1, len(sk), json.dumps([]), True)
+            (c0, c1, len(sk), json.dumps([]), 0)
         )
         rid = cur.lastrowid
 
@@ -837,7 +1097,7 @@ def detect_and_insert_ca_pipeline(
     conn.commit()
     return bool(post)
 
-def generate_rules_to_insert(bg, facts):
+def generate_rules_to_insert_old(bg, facts):
     print("[ generate_rules_to_insert ]")
     # ── 2) Group by center color transition
     center_groups = group_facts_by_center(facts)
@@ -1006,13 +1266,208 @@ def generate_rules_to_insert(bg, facts):
     post = unique
     return post
 
-def try_differents_set_of_rules(bg, post, trains):
+def generate_rules_to_insert(bg, facts, tick, rotation_threshold=3):
+    """
+    bg: background color
+    facts: list of {'nbr_in': tuple, 'nbr_out': tuple, ...}
+    rotation_threshold: minimum distinct facts needed to emit 4 rotations
+    """
+    print("[ generate_rules_to_insert ]")
+
+    # 1) Group by center color transition
+    center_groups = group_facts_by_center(facts)
+    center_groups.pop((bg, bg), None)
+
+    # 2) Build initial “pre” list by neighbor color & structure
+    pre = []
+    for (c0, c1), grp in center_groups.items():
+        neigh_cols = sorted({f['nbr_in'][i] for f in grp for i in range(9) if i != 4 and f['nbr_in'][i] is not None})
+        if len(neigh_cols) == 2 and bg in neigh_cols:
+            neigh_cols.remove(bg)
+        for col in neigh_cols:
+            struct_map = extract_structure_subgroups(grp, col)
+            for sk, flist in struct_map.items():
+                print(f"Pre Center {c0}->{c1} | neighbor {col} | struct {sk} | facts={len(flist)}")
+                pre.append((c0, c1, col, sk, flist))
+
+    # 3) Regroup into rotational families
+    grouped_pre = []
+    for c0, c1, col, sk, flist in pre:
+        placed = False
+        for rep_sk, entries in grouped_pre:
+            if sk in all_struct_rotations_sorted(rep_sk):
+                entries.append((c0, c1, col, sk, flist))
+                placed = True
+                break
+        if not placed:
+            grouped_pre.append((sk, [(c0, c1, col, sk, flist)]))
+
+    # 4) Deduplicate each subgroup’s flist
+    for rep_sk, entries in grouped_pre:
+        for idx, (c0, c1, col, sk, flist) in enumerate(entries):
+            seen = set()
+            unique = []
+            for f in flist:
+                key = (f['nbr_in'], f['nbr_out'])
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(f)
+            entries[idx] = (c0, c1, col, sk, unique)
+
+    # 5) Merge only truly-observed 3+ rotations
+    new_pre = []
+    for rep_sk, entries in grouped_pre:
+        if len(entries) < 3:
+            print(f"Skipping struct {rep_sk}: only {len(entries)} observed variants (need ≥3)")
+            continue
+        c0, c1, col = entries[0][0], entries[0][1], entries[0][2]
+        if col == bg or not rep_sk:
+            continue
+
+        merged = [f for *_, fl in entries for f in fl]
+        counts = [len(fl) for *_, fl in entries]
+        print(f"Merging struct {rep_sk}: {len(entries)} rotations → {len(merged)} facts ({'+'.join(map(str,counts))})")
+        new_pre.append((c0, c1, col, rep_sk, merged))
+
+    if new_pre:
+        pre.extend(new_pre)
+        print(f"  → Added {len(new_pre)} merged entries (pre now {len(pre)})")
+    else:
+        print("  → No 3-way rotational groups merged; pre unchanged")
+
+    # 6) Collapse & emit rules, using the single rotation_threshold
+    post = []
+    for c0, c1, col, struct_key, flist in pre:
+        # a) dedupe again for distinct facts
+        seen = set()
+        unique_facts = []
+        for f in flist:
+            key = (f['nbr_in'], f['nbr_out'])
+            if key not in seen:
+                seen.add(key)
+                unique_facts.append(f)
+        print(f"Center {c0}->{c1}, struct {struct_key}: {len(flist)} raw, {len(unique_facts)} unique")
+
+        # b) align & collapse
+        base = unique_facts[0]['nbr_in']
+        base_pos = [i for i in struct_key if base[i] == col]
+        aligned = []
+        for f in unique_facts:
+            ain, aout = align_fact_to_positions(f['nbr_in'], f['nbr_out'], col, base_pos)
+            aligned.append({'nbr_in': ain, 'nbr_out': aout})
+
+        out_i = [i for i in range(9) if len({f['nbr_out'][i] for f in aligned}) == 1]
+        in_i  = [i for i in range(9) if len({f['nbr_in'][i]  for f in aligned}) == 1]
+
+        rep = aligned[0]
+        in_vals  = list(rep['nbr_in'])
+        out_vals = list(rep['nbr_out'])
+
+        for i in range(9):
+            if i != 4:
+                if i not in in_i:
+                    in_vals[i] = None
+                if i not in out_i:
+                    out_vals[i] = None
+
+        # wildcard bg-only neighbors
+        neigh = {in_vals[i] for i in range(9) if i != 4}
+        if len(neigh) == 2 and bg in neigh:
+            for i in range(9):
+                if i != 4 and in_vals[i] == bg:
+                    in_vals[i] = None
+                    if out_vals[i] == bg:
+                        out_vals[i] = None
+
+        # wildcard no-change
+        for i in range(9):
+            if i != 4 and in_vals[i] is not None and in_vals[i] == out_vals[i]:
+                out_vals[i] = None
+
+        collapsed = {'nbr_in': tuple(in_vals), 'nbr_out': tuple(out_vals)}
+        print(f"Collapsed fact: nbr_in={collapsed['nbr_in']} nbr_out={collapsed['nbr_out']}")
+
+        # c) emit rotations or single rule based on rotation_threshold
+        if len(unique_facts) >= rotation_threshold:
+            print(f"Emitting 4 rotation variants for struct {struct_key}")
+            nin, nout = collapsed['nbr_in'], collapsed['nbr_out']
+            sk = tuple(sorted(out_i))
+            for _ in range(4):
+                post.append((c0, c1, col, sk, {'nbr_in': nin, 'nbr_out': nout}, True, tick))
+                nin  = rotate90(nin)
+                nout = rotate90(nout)
+                sk    = tuple(sorted(index_map[i] for i in sk))
+        else:
+            print(f"Emitting single non-rotational rule ({len(unique_facts)} < {rotation_threshold})")
+            post.append((c0, c1, col, struct_key, collapsed, False, tick))
+
+    # 7) Final dedupe of all generated rules
+    unique, seen = [], set()
+    for entry in post:
+        key = (
+            entry[0], entry[1], entry[2], entry[3],
+            entry[4]['nbr_in'], entry[4]['nbr_out'], entry[5]
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(entry)
+
+    return unique
+
+def generate_rules_simple(bg, facts, tick):
+    """
+    Generate one non-rotational rule per raw fact without modifying neighborhoods.
+
+    Args:
+        bg: background color
+        facts: list of dicts with 'nbr_in' and 'nbr_out' tuples
+
+    Returns:
+        List of rules (c0, c1, col, struct_key, fact, is_rot=False)
+    """
+    post = []
+    for fact in facts:
+        nin = fact['nbr_in']
+        nout = fact['nbr_out']
+        c0 = nin[4]
+        c1 = nout[4]
+        # skip trivial background transitions
+        if c0 == c1 == bg:
+            continue
+        # struct_key: all positions where nbr_in is not None (excluding center)
+        struct_key = tuple(i for i in range(9) if i != 4 and nin[i] is not None)
+        # emit rule for each neighbor color in struct_key
+        for col in sorted({nin[i] for i in struct_key}):
+            post.append((
+                c0,
+                c1,
+                col,
+                struct_key,
+                {'nbr_in': nin, 'nbr_out': nout},
+                False,  # non-rotational
+                tick
+            ))
+    return post
+
+def try_differents_set_of_rules(bg, post, trains, tick):
+    #ok, info = test_all_rules_on_all_trains(post, trains, bg, tick)
+    #if ok:
+    #    print(f"✅ post rules cover every train transformation—using them. {tick}")
+    #    return post, info
+    #else:
+    #    print(f"❌ post rules are not sufficient: {tick}")
+    #    print("  Missing transformations per train:", info['train_failures'])
+    #    print("  Colors missing overall:", info['colors_missing'])
+    #    print("  Colors unexpected overall:", info['colors_unexpected'])
+    #    print("  Count unicolor_extras:", len(post))
+    #return None, info
+
     # ── 1) Test “orthogonal-only” rules ────────────────────────────────────
     orthogonal_rules = []
     # diagonal indices in a 3×3 patch
     diagonals = (0, 2, 6, 8)
 
-    for (c0, c1, col, sk, fact, is_rot) in post:
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
         # copy the 3×3 neighborhood
         nin = list(fact['nbr_in'])
         nout = list(fact['nbr_out'])
@@ -1021,14 +1476,14 @@ def try_differents_set_of_rules(bg, post, trains):
             nin[idx] = None
             nout[idx] = None
         new_fact = {'nbr_in': tuple(nin), 'nbr_out': tuple(nout)}
-        orthogonal_rules.append((c0, c1, col, sk, new_fact, is_rot))
+        orthogonal_rules.append((c0, c1, col, sk, new_fact, is_rot, ptick))
 
-    ok, info = test_all_rules_on_all_trains(orthogonal_rules, trains, bg)
+    ok, info = test_all_rules_on_all_trains(orthogonal_rules, trains, bg, tick)
     if ok:
-        print("✅ Orthogonal-only rules cover every train transformation—using them.")
-        return orthogonal_rules
+        print(f"✅ Orthogonal-only rules cover every train transformation—using them. tick {tick}")
+        return orthogonal_rules, info
     else:
-        print("❌ Orthogonal-only rules are not sufficient:")
+        print(f"❌ Orthogonal-only rules are not sufficient: {tick}")
         print("  Missing transformations per train:", info['train_failures'])
         print("  Colors missing overall:", info['colors_missing'])
         print("  Colors unexpected overall:", info['colors_unexpected'])
@@ -1036,7 +1491,7 @@ def try_differents_set_of_rules(bg, post, trains):
 
     # ── 6a) Expand “unicolor” rules ────────────────────────────────────
     unicolor_extras = []
-    for (c0, c1, col, sk, fact, is_rot) in post:
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
         if c0 == c1:
             # build a wildcarded copy of the 3×3 fact
             nin = list(fact['nbr_in'])
@@ -1052,14 +1507,14 @@ def try_differents_set_of_rules(bg, post, trains):
             new_fact = {'nbr_in': tuple(nin), 'nbr_out': tuple(nout)}
             # duplicate the rule (keep same c0,c1,sk,is_rot)
             print("duplicate unicolor rule")
-            print((c0, c1, col, sk, new_fact, is_rot))
-            unicolor_extras.append((c0, c1, col, sk, new_fact, is_rot))
-    ok, info = test_all_rules_on_all_trains(unicolor_extras, trains, bg)
+            print((c0, c1, col, sk, new_fact, is_rot, ptick))
+            unicolor_extras.append((c0, c1, col, sk, new_fact, is_rot, ptick))
+    ok, info = test_all_rules_on_all_trains(unicolor_extras, trains, bg, tick)
     if ok:
-        print("✅ Unicolor rules alone cover every train transformation—using them.")
-        return unicolor_extras
+        print(f"✅ Unicolor rules alone cover every train transformation—using them. {tick}")
+        return unicolor_extras, info
     else:
-        print("❌ Unicolor rules are not sufficient:")
+        print(f"❌ Unicolor rules are not sufficient: {tick}")
         print("  Missing transformations per train:", info['train_failures'])
         print("  Colors missing overall:", info['colors_missing'])
         print("  Colors unexpected overall:", info['colors_unexpected'])
@@ -1067,15 +1522,15 @@ def try_differents_set_of_rules(bg, post, trains):
         print(unicolor_extras)
 
     fixed_center = []
-    for (c0, c1, col, sk, fact, is_rot) in post:
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
         if c0 == c1:
-            fixed_center.append((c0, c1, col, sk, fact, is_rot))
-    ok, info = test_all_rules_on_all_trains(fixed_center, trains, bg)
+            fixed_center.append((c0, c1, col, sk, fact, is_rot, ptick))
+    ok, info = test_all_rules_on_all_trains(fixed_center, trains, bg, tick)
     if ok:
-        print("✅ fixed_center rules alone cover every train transformation—using them.")
-        return fixed_center
+        print(f"✅ fixed_center rules alone cover every train transformation—using them. {tick}")
+        return fixed_center, info
     else:
-        print("❌ fixed_center rules are not sufficient:")
+        print(f"❌ fixed_center rules are not sufficient: {tick}")
         print("  Missing transformations per train:", info['train_failures'])
         print("  Colors missing overall:", info['colors_missing'])
         print("  Colors unexpected overall:", info['colors_unexpected'])
@@ -1083,19 +1538,29 @@ def try_differents_set_of_rules(bg, post, trains):
         print(fixed_center)
 
     all = post + unicolor_extras
-    ok, info = test_all_rules_on_all_trains(all, trains, bg)
+    ok, info = test_all_rules_on_all_trains(all, trains, bg, tick)
     if ok:
-        print("✅ all (post + unicolor_extras) rules cover every train transformation—using them.")
-        return all
+        print(f"✅ all (post + unicolor_extras) rules cover every train transformation—using them. {tick}")
+        return all, info
     else:
-        print("❌ fixed_center rules are not sufficient:")
+        print(f"❌ all (post + unicolor_extras) rules are not sufficient: {tick}")
         print("  Missing transformations per train:", info['train_failures'])
         print("  Colors missing overall:", info['colors_missing'])
         print("  Colors unexpected overall:", info['colors_unexpected'])
-        print("  Count unicolor_extras:", len(fixed_center))
-        print(fixed_center)
+        print("  Count unicolor_extras:", len(all))
 
-    return None
+    ok, info = test_all_rules_on_all_trains(post, trains, bg, tick)
+    if ok:
+        print(f"✅ post rules cover every train transformation—using them. {tick}")
+        return post, info
+    else:
+        print(f"❌ post rules are not sufficient: {tick}")
+        print("  Missing transformations per train:", info['train_failures'])
+        print("  Colors missing overall:", info['colors_missing'])
+        print("  Colors unexpected overall:", info['colors_unexpected'])
+        print("  Count unicolor_extras:", len(post))
+
+    return None, info
 
 def build_ca_rule(
         c0: int,
@@ -1129,26 +1594,55 @@ def build_ca_rule(
 
     return rule
 
-def test_all_rules_on_all_trains(post, trains, bg):
-    """
-    Apply the ENTIRE set of rules (post) to each train input and compare
-    to its train output. Return (True, {}) if perfect; otherwise (False, info).
-    """
 
-    # build all CA rules at once
-    ca_rules = [ build_ca_rule(c0, c1, fact)
-                 for (c0, c1, col, sk, fact, is_rot) in post ]
+def test_all_rules_on_all_trains(
+    post: List[Tuple[int,int,int,Tuple[int,...],Dict[str,Tuple],bool,int]],
+    trains: List[Tuple[List[List[int]], List[List[int]]]],
+    bg: int,
+    tick: int = 0
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Apply the ENTIRE set of rules (post) to each train input:
+      - if tick == 0: exactly one pass of apply_ca;
+      - if tick  > 0: keep applying until stable (no further change).
+    Compare final result to expected_out. Return (True, {}) if perfect;
+    otherwise (False, info) where info includes train_results, failures, etc.
+    """
+    # build CA-rule objects
+    ca_rules = [
+        build_ca_rule(c0, c1, fact)
+        for (c0, c1, col, sk, fact, is_rot, ptick) in post
+    ]
 
     failures = []
-    all_missing_colors = set()
-    all_unexpected_colors = set()
+    all_missing = set()
+    all_unexpected = set()
+    all_results = []
 
     for t_idx, (inp_grid, expected_out) in enumerate(trains):
-        result = apply_ca(inp_grid, ca_rules, bg)
-        H, W = len(inp_grid), len(inp_grid[0])
+        # decide how to iterate
+        if tick > 0:
+            prev = inp_grid
+            indice = 0
+            while True:
+                indice = indice + 1
+                curr = apply_ca(prev, ca_rules, bg)
+                if curr == prev:
+                    #print(ca_rules)
+                    print(f"curr = apply_ca(prev, ca_rules, bg) indice: {indice}, tick: {tick}")
+                    break
+                prev = curr
+            result = curr
+        else:
+            # single pass
+            result = apply_ca(inp_grid, ca_rules, bg)
 
+        all_results.append(result)
+
+        H, W = len(result), len(result[0])
         missing = []
         unexpected = []
+
         for y in range(H):
             for x in range(W):
                 orig = inp_grid[y][x]
@@ -1156,11 +1650,69 @@ def test_all_rules_on_all_trains(post, trains, bg):
                 exp  = expected_out[y][x]
                 if res != exp:
                     if res == orig:
-                        # we failed to change this pixel when we should have
+                        missing.append((x, y, exp))
+                        all_missing.add(exp)
+                    else:
+                        unexpected.append((x, y, res))
+                        all_unexpected.add(res)
+
+        if missing or unexpected:
+            failures.append({
+                'train_index': t_idx,
+                'missing':     missing,
+                'unexpected':  unexpected
+            })
+
+    if failures:
+        return False, {
+            'train_failures':    failures,
+            'colors_missing':    all_missing,
+            'colors_unexpected': all_unexpected,
+            'train_results':     all_results
+        }
+
+    return True, {}
+
+
+
+def test_all_rules_on_all_trains_old(post, trains, bg):
+    """
+    Apply the ENTIRE set of rules (post) to each train input and compare
+    to its train output. Return (True, {}) if perfect; otherwise (False, info),
+    where info also contains the CA result for each train.
+    """
+
+    # build all CA rules at once
+    ca_rules = [
+        build_ca_rule(c0, c1, fact)
+        for (c0, c1, col, sk, fact, is_rot) in post
+    ]
+
+    failures = []
+    all_missing_colors = set()
+    all_unexpected_colors = set()
+    all_results = []  # collect each train's CA result grid
+
+    for t_idx, (inp_grid, expected_out) in enumerate(trains):
+        result = apply_ca(inp_grid, ca_rules, bg)
+        all_results.append(result)
+
+        H, W = len(inp_grid), len(inp_grid[0])
+        missing = []
+        unexpected = []
+
+        for y in range(H):
+            for x in range(W):
+                orig = inp_grid[y][x]
+                res  = result[y][x]
+                exp  = expected_out[y][x]
+                if res != exp:
+                    if res == orig:
+                        # failed to change this pixel when we should have
                         missing.append((x, y, exp))
                         all_missing_colors.add(exp)
                     else:
-                        # we changed it to something unexpected
+                        # changed it to something unexpected
                         unexpected.append((x, y, res))
                         all_unexpected_colors.add(res)
 
@@ -1173,13 +1725,15 @@ def test_all_rules_on_all_trains(post, trains, bg):
 
     if failures:
         info = {
-            'train_failures': failures,
-            'colors_missing': all_missing_colors,
-            'colors_unexpected': all_unexpected_colors
+            'train_failures':    failures,
+            'colors_missing':    all_missing_colors,
+            'colors_unexpected': all_unexpected_colors,
+            'train_results':     all_results
         }
         return False, info
 
     return True, {}
+
 
 def test_each_rule_one_by_one(post, trains, bg):
     # ── X) Filter out any rule that, when applied alone, makes changes
@@ -1206,18 +1760,18 @@ def test_each_rule_one_by_one(post, trains, bg):
         return True
 
     filtered = []
-    for (c0, c1, col, sk, fact, is_rot) in post:
+    for (c0, c1, col, sk, fact, is_rot, ptick) in post:
         #if c0 != 4 :
         #    continue
         #if  c1 != 4:
         #    continue
         ca_rule = build_ca_rule(c0, c1, fact)
         print("--- (c0, c1, col, sk, fact, is_rot) ---")
-        print((c0, c1, col, sk, fact, is_rot))
+        print((c0, c1, col, sk, fact, is_rot, ptick))
         print("--- ca_rule 4->4 ---")
         print(ca_rule)
         if rule_preserves_ground_truth(ca_rule):
-            filtered.append((c0, c1, col, sk, fact, is_rot))
+            filtered.append((c0, c1, col, sk, fact, is_rot, ptick))
         else:
             print(f"  ❌ Dropping rule Center {c0}->{c1}, struct {sk}: "
                   "it makes unexpected changes on the trains.")
@@ -1225,6 +1779,153 @@ def test_each_rule_one_by_one(post, trains, bg):
     print(f"✅ {len(post)} rules remain after ground-truth filtering.\n")
     return post
 
+def evaluate_ca_on_tests(
+    ca_rules: List[Dict[str, Any]],
+    test_pairs: List[Tuple[List[List[int]], List[List[int]]]],
+    bg: int,
+    initial_tick: int = 0
+) -> None:
+    """
+    Runs CA on each (input, expected) pair by tick stages:
+      - Start at tick = initial_tick.
+      - At each tick, apply only rules whose 'tick' equals current tick,
+        repeatedly until no further changes or an oscillation is detected.
+      - Then increment tick and repeat until no rules remain or tick exceeds max.
+    Prints grids after each iteration and final match status.
+    """
+    # determine the available tick range
+    all_ticks = [rule['tick'] for rule in ca_rules]
+    max_tick = max(all_ticks) if all_ticks else initial_tick
+
+    # helper to convert grid to a hashable state
+    def to_state(grid):
+        return tuple(tuple(row) for row in grid)
+
+    for idx, (inp, exp) in enumerate(test_pairs):
+        print(f"--- Test #{idx} ---")
+        print("Initial Input:")
+        for row in inp:
+            print(row)
+
+        current = inp
+        current_tick = initial_tick
+
+        # iterate through ticks
+        while True:
+            # pick rules for this tick only
+            rules_this_tick = [r for r in ca_rules if r['tick'] == current_tick]
+            if not rules_this_tick:
+                print(f"No rules at tick {current_tick}; stopping.")
+                break
+
+            print(f"\n-- Applying tick {current_tick} rules --")
+            seen_states = set()
+            state = to_state(current)
+            iteration = 0
+
+            # apply until stable or oscillation
+            while True:
+                iteration += 1
+                next_grid = apply_ca(current, rules_this_tick, bg)
+                next_state = to_state(next_grid)
+
+                print(f"Tick {current_tick}, iteration {iteration}:")
+                for row in next_grid:
+                    print(row)
+
+                if current_tick == 0:
+                    print(f"No iteration for initial tick 0.")
+                    state = next_state
+                    current = next_grid
+                    break
+
+                if next_state == state:
+                    print(f"Stable at tick {current_tick} after {iteration} iterations.")
+                    break
+
+                if next_state in seen_states:
+                    print(f"Detected oscillation at tick {current_tick} after {iteration} iterations; stopping.")
+                    break
+
+                seen_states.add(state)
+                state = next_state
+                current = next_grid
+
+            # advance to next tick
+            current_tick += 1
+            if current_tick > max_tick:
+                print(f"Reached max tick {max_tick}; stopping.")
+                break
+
+        # final comparison
+        print("\nExpected Output:")
+        for row in exp:
+            print(row)
+        print("Final Prediction:")
+        for row in current:
+            print(row)
+        print("Match?", current == exp)
+
+def evaluate_ca_on_tests_old(
+    ca_rules: List[Dict[str, Any]],
+    test_pairs: List[Tuple[List[List[int]], List[List[int]]]],
+    bg: int,
+    initial_tick: int = 0
+) -> None:
+    """
+    Runs CA on each (input, expected) pair by tick stages:
+      - Start at tick = initial_tick.
+      - At each tick, apply only rules whose 'tick' equals current tick,
+        repeatedly until no further changes.
+      - Then increment tick and repeat until no rules remain or tick exceeds max.
+    Prints grids after each iteration and final match status.
+    """
+    # determine the range of ticks available
+    all_ticks = [rule['tick'] for rule in ca_rules]
+    max_tick = max(all_ticks) if all_ticks else initial_tick
+
+    for idx, (inp, exp) in enumerate(test_pairs):
+        print(f"--- Test #{idx} ---")
+        print("Initial Input:")
+        for row in inp:
+            print(row)
+
+        current = inp
+        current_tick = initial_tick
+
+        while True:
+            # select only the rules for this tick
+            rules_this_tick = [r for r in ca_rules if r['tick'] == current_tick]
+            if not rules_this_tick:
+                print(f"No rules at tick {current_tick}; stopping.")
+                break
+
+            print(f"-- Applying tick {current_tick} rules --")
+            iteration = 0
+            while True:
+                iteration += 1
+                next_grid = apply_ca(current, rules_this_tick, bg)
+                print(f"Tick {current_tick}, iteration {iteration}:")
+                for row in next_grid:
+                    print(row)
+                if next_grid == current:
+                    print(rules_this_tick)
+                    print(f"Stable at tick {current_tick} after {iteration} iterations.")
+                    break
+                current = next_grid
+
+            current_tick += 1
+            if current_tick > max_tick:
+                print(f"Reached max tick {max_tick}; stopping.")
+                break
+
+        print("Expected Output:")
+        for row in exp:
+            print(row)
+        print("Final Prediction:")
+        for row in current:
+            print(row)
+        print("Match?", current == exp)
 
 if __name__ == "__main__":
     # Real train/test from ARC-like JSON3
@@ -1475,27 +2176,325 @@ if __name__ == "__main__":
 
     data_13 = {"train": [{"input": [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 5, 5, 5, 5], [0, 0, 0, 0, 0, 0, 5, 5, 5, 5], [0, 0, 0, 0, 0, 0, 5, 5, 5, 5], [0, 0, 0, 0, 0, 0, 5, 5, 5, 5], [0, 0, 0, 0, 0, 0, 5, 5, 5, 5]], "output": [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 1, 4, 4, 1, 0, 0, 0, 0, 0], [0, 4, 2, 2, 4, 0, 0, 0, 0, 0], [0, 4, 2, 2, 4, 0, 0, 0, 0, 0], [0, 1, 4, 4, 1, 0, 1, 4, 4, 1], [0, 0, 0, 0, 0, 0, 4, 2, 2, 4], [0, 0, 0, 0, 0, 0, 4, 2, 2, 4], [0, 0, 0, 0, 0, 0, 4, 2, 2, 4], [0, 0, 0, 0, 0, 0, 1, 4, 4, 1]]}, {"input": [[5, 5, 5, 5, 5, 5, 0, 0, 0, 0], [5, 5, 5, 5, 5, 5, 0, 0, 0, 0], [5, 5, 5, 5, 5, 5, 0, 0, 0, 0], [5, 5, 5, 5, 5, 5, 0, 0, 0, 0], [5, 5, 5, 5, 5, 5, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5]], "output": [[1, 4, 4, 4, 4, 1, 0, 0, 0, 0], [4, 2, 2, 2, 2, 4, 0, 0, 0, 0], [4, 2, 2, 2, 2, 4, 0, 0, 0, 0], [4, 2, 2, 2, 2, 4, 0, 0, 0, 0], [1, 4, 4, 4, 4, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 1, 4, 4, 4, 4, 1], [0, 0, 0, 0, 4, 2, 2, 2, 2, 4], [0, 0, 0, 0, 4, 2, 2, 2, 2, 4], [0, 0, 0, 0, 1, 4, 4, 4, 4, 1]]}], "test": [{"input": [[0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 5, 5, 5, 5, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5], [0, 0, 0, 0, 5, 5, 5, 5, 5, 5]], "output": [[0, 1, 4, 4, 1, 0, 0, 0, 0, 0], [0, 4, 2, 2, 4, 0, 0, 0, 0, 0], [0, 4, 2, 2, 4, 0, 0, 0, 0, 0], [0, 4, 2, 2, 4, 0, 0, 0, 0, 0], [0, 4, 2, 2, 4, 0, 0, 0, 0, 0], [0, 1, 4, 4, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 1, 4, 4, 4, 4, 1], [0, 0, 0, 0, 4, 2, 2, 2, 2, 4], [0, 0, 0, 0, 1, 4, 4, 4, 4, 1]]}]}
 
-    data_14 = {"train": [{"input": [[0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [3, 3, 3, 8, 8, 3, 3, 3, 3, 3, 3, 3, 3], [3, 3, 3, 8, 8, 3, 3, 3, 3, 3, 3, 3, 3], [3, 3, 3, 8, 8, 3, 3, 3, 3, 3, 3, 3, 3], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0]], "output": [[0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3], [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3], [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0]]}, {"input": [[0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1, 1, 1, 1], [0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0]], "output": [[0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0], [1, 1, 6, 6, 1, 1, 1, 1, 1], [0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0], [0, 0, 6, 6, 0, 0, 0, 0, 0]]}, {"input": [[0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [7, 7, 7, 7, 7, 7, 7], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0]], "output": [[0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [7, 7, 1, 7, 7, 7, 7], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0]]}, {"input": [[0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [2, 3, 2, 2, 2, 2], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0]], "output": [[0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [2, 2, 2, 2, 2, 2], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0]]}], "test": [{"input": [[0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [5, 5, 4, 4, 5, 5], [5, 5, 4, 4, 5, 5], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0]], "output": [[0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [5, 5, 5, 5, 5, 5], [5, 5, 5, 5, 5, 5], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0], [0, 0, 4, 4, 0, 0]]}]}
+    data_14 = {"train": [
+  {"input": [
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [5, 5, 5, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5],
+    [5, 5, 5, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5],
+    [5, 5, 5, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0]
+  ], "output": [
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0]
+  ]}, {"input": [
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [4, 4, 4, 4, 4, 4, 4, 4, 4],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0]
+  ], "output": [
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [4, 4, 5, 5, 4, 4, 4, 4, 4],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0],
+    [0, 0, 5, 5, 0, 0, 0, 0, 0]
+  ]}, {"input": [
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [4, 4, 4, 4, 4, 4, 4],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0]
+  ], "output": [
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [4, 4, 5, 4, 4, 4, 4],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 5, 0, 0, 0, 0]
+  ]}, {"input": [
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [5, 4, 5, 5, 5, 5],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0]
+  ], "output": [
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [5, 5, 5, 5, 5, 5],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0],
+    [0, 4, 0, 0, 0, 0]
+  ]}],
+  "test": [
+    {"input": [
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [5, 5, 4, 4, 5, 5],
+      [5, 5, 4, 4, 5, 5],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0]
+    ], "output": [
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [5, 5, 5, 5, 5, 5],
+      [5, 5, 5, 5, 5, 5],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0],
+      [0, 0, 4, 4, 0, 0]
+    ]}
+  ]}
+    data_15 = {"train": [
+  {"input": [
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 5, 0, 0, 0, 5, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 5, 0, 0, 0, 5, 0, 0]
+  ], "output": [
+    [8, 0, 8, 0, 8, 0, 8, 0],
+    [0, 5, 0, 0, 0, 5, 0, 0],
+    [8, 0, 8, 0, 8, 0, 8, 0],
+    [0, 5, 0, 0, 0, 5, 0, 0]
+  ]}, {"input": [
+    [0, 0, 6, 0, 0, 0, 6, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 6, 0, 0, 0, 6, 0, 0],
+    [0, 0, 6, 0, 0, 0, 6, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 6, 0, 0, 0, 6, 0, 0]
+  ], "output": [
+    [0, 0, 6, 0, 0, 0, 6, 0],
+    [8, 8, 8, 8, 8, 8, 8, 8],
+    [0, 6, 0, 8, 0, 6, 0, 8],
+    [8, 0, 6, 0, 8, 0, 6, 0],
+    [8, 8, 8, 8, 8, 8, 8, 8],
+    [0, 6, 0, 0, 0, 6, 0, 0]
+  ]}, {"input": [
+    [0, 0, 0, 0, 0, 0],
+    [0, 4, 0, 0, 4, 0],
+    [0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0],
+    [4, 0, 0, 4, 0, 0],
+    [0, 0, 0, 0, 0, 0],
+    [0, 4, 0, 0, 4, 0],
+    [0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0],
+    [4, 0, 0, 4, 0, 0]
+  ], "output": [
+    [8, 0, 8, 8, 0, 8],
+    [0, 4, 0, 0, 4, 0],
+    [8, 0, 8, 8, 0, 8],
+    [0, 8, 8, 0, 8, 0],
+    [4, 0, 0, 4, 0, 0],
+    [8, 8, 8, 8, 8, 8],
+    [0, 4, 0, 0, 4, 0],
+    [8, 0, 8, 8, 0, 8],
+    [0, 8, 8, 0, 8, 0],
+    [4, 0, 0, 4, 0, 0]
+  ]}, {"input": [
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 2, 0, 0, 0, 2, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 2, 0, 0, 0, 2, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0]
+  ], "output": [
+    [8, 0, 8, 0, 8, 0, 8, 0],
+    [0, 2, 0, 0, 0, 2, 0, 0],
+    [8, 0, 8, 0, 8, 0, 8, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [8, 0, 8, 0, 8, 0, 8, 0],
+    [0, 2, 0, 0, 0, 2, 0, 0],
+    [8, 0, 8, 0, 8, 0, 8, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0]
+  ]}
+], "test": [
+  {"input": [
+    [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+    [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 3, 0, 0, 0, 0, 3, 0, 0, 0]
+  ], "output": [
+    [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+    [8, 0, 8, 0, 0, 8, 0, 8, 0, 0],
+    [0, 0, 8, 0, 8, 0, 0, 8, 0, 8],
+    [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+    [8, 0, 8, 0, 8, 8, 0, 8, 0, 8],
+    [8, 3, 8, 0, 0, 8, 3, 8, 0, 0],
+    [8, 3, 8, 0, 0, 8, 3, 8, 0, 0],
+    [8, 0, 8, 0, 0, 8, 0, 8, 0, 0],
+    [0, 0, 8, 0, 8, 0, 0, 8, 0, 8],
+    [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+    [8, 0, 8, 0, 8, 8, 0, 8, 0, 8],
+    [0, 3, 0, 0, 0, 0, 3, 0, 0, 0]
+  ]}
+]}
 
-    #data = data_0 # 17.2% : without outside
-    #data = data_1 # 16.0% : without orphan
-    #data = data_2 # 28.2% : without outside
-    #data = data_3 # 18.8% : without outside
-    #data = data_4 # 35.0% : without outside # with border
-    #data = data_5 # 37.9% : without outside
-    #data = data_6 # 17.6% : without outside
-    #data = data_7 # 33.8% : without orphan
-    #data = data_8 # 100.0% : without orphan
-    #data = data_9 # aedd82e4 # orthogonal only ?
-    data = data_10 # a699fb00 # no rotation
-    #data = data_11
-    #data = data_12
+    data_16 = {"train": [
+        {"input": [
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0]
+        ], "output": [
+            [8, 0, 8, 0, 8, 0, 8, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [8, 0, 8, 0, 8, 0, 8, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0]
+        ]}, {"input": [
+            [0, 0, 3, 0, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [0, 0, 3, 0, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0]
+        ], "output": [
+            [0, 0, 3, 0, 0, 0, 3, 0],
+            [8, 8, 8, 8, 8, 8, 8, 8],
+            [0, 3, 0, 8, 0, 3, 0, 8],
+            [8, 0, 3, 0, 8, 0, 3, 0],
+            [8, 8, 8, 8, 8, 8, 8, 8],
+            [0, 3, 0, 0, 0, 3, 0, 0]
+        ]}, {"input": [
+            [0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [3, 0, 0, 3, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [3, 0, 0, 3, 0, 0]
+        ], "output": [
+            [8, 0, 8, 8, 0, 8],
+            [0, 3, 0, 0, 3, 0],
+            [8, 0, 8, 8, 0, 8],
+            [0, 8, 8, 0, 8, 0],
+            [3, 0, 0, 3, 0, 0],
+            [8, 8, 8, 8, 8, 8],
+            [0, 3, 0, 0, 3, 0],
+            [8, 0, 8, 8, 0, 8],
+            [0, 8, 8, 0, 8, 0],
+            [3, 0, 0, 3, 0, 0]
+        ]}, {"input": [
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0]
+        ], "output": [
+            [8, 0, 8, 0, 8, 0, 8, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [8, 0, 8, 0, 8, 0, 8, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [8, 0, 8, 0, 8, 0, 8, 0],
+            [0, 3, 0, 0, 0, 3, 0, 0],
+            [8, 0, 8, 0, 8, 0, 8, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0]
+        ]}
+    ], "test": [
+        {"input": [
+            [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+            [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 3, 0, 0, 0, 0, 3, 0, 0, 0]
+        ], "output": [
+            [0, 3, 0, 0, 0, 0, 3, 0, 0, 0],
+            [8, 0, 8, 0, 0, 8, 0, 8, 0, 0],
+            [0, 0, 8, 0, 8, 0, 0, 8, 0, 8],
+            [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+            [8, 0, 8, 0, 8, 8, 0, 8, 0, 8],
+            [8, 3, 8, 0, 0, 8, 3, 8, 0, 0],
+            [8, 3, 8, 0, 0, 8, 3, 8, 0, 0],
+            [8, 0, 8, 0, 0, 8, 0, 8, 0, 0],
+            [0, 0, 8, 0, 8, 0, 0, 8, 0, 8],
+            [0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
+            [8, 0, 8, 0, 8, 8, 0, 8, 0, 8],
+            [0, 3, 0, 0, 0, 0, 3, 0, 0, 0]
+        ]}
+    ]}
 
-    #data = data_13 # 5 nbr + tick
-    #data = data_14 ?
-    #data = data_15 # DEFAULT_TASK_ID = "10fcaaa3" # 1) composition 2) cellular automation
-    #data = data_16
 
+    #data = data_0  # 17.2%
+    #data = data_1  # 16.0%
+    #data = data_2  # 28.2%
+    #data = data_3  # 18.8%
+    #data = data_4  # 35.0% # with border
+    #data = data_5  # b27ca6d3 # 37.9%
+    #data = data_6  # 17.6%
+    #data = data_7  # 33.8%
+    #data = data_8  # 100.0%
+    #data = data_9  # aedd82e4 # orthogonal only ?
+    #data = data_10 # a699fb00 # no rotation
+    #data = data_11 #
+    #data = data_12 # b60334d2 #
+    #data = data_13 # b6afb2da # 5 nbr + tick
+    #data = data_14 # ba97ae07_simple # same color everywhere
+     #data = data_15 # 10fcaaa3_simple # composition already done
+    data = data_16 # 10fcaaa3_simplest ! # same color everywhere
 
 
     train_pairs = [(item["input"], item["output"]) for item in data["train"]]
@@ -1518,10 +2517,10 @@ if __name__ == "__main__":
     # Fetch all CA rules and their neighbor cells
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, input_color, output_color FROM cellular_automaton"
+        "SELECT id, input_color, output_color, tick FROM cellular_automaton"
     )
     ca_rules = []
-    for rule_id, in_col, out_col in cursor.fetchall():
+    for rule_id, in_col, out_col, tick in cursor.fetchall():
         cursor.execute(
             "SELECT posRelX, posRelY, color, output FROM cellular_automaton_cells WHERE rule_id = ?",
             (rule_id,)
@@ -1532,21 +2531,12 @@ if __name__ == "__main__":
             "input_color": in_col,
             "output_color": out_col,
             "neighbors": [(dx, dy, col, out) for dx, dy, col, out in neighbors],
-            "centric": True
+            "tick": tick
         })
 
-    # Apply CA to each test input
-    for idx, (inp, exp) in enumerate(test_pairs):
-        print(f"--- Test  # {idx} ---")
-    print("Input:")
-    for row in inp:
-        print(row)
-    pred = apply_ca(inp, ca_rules, bg=0)
+    tick = max((rule["tick"] for rule in ca_rules), default=0)
 
-    print("Expected Output:")
-    for row in exp:
-        print(row)
-    print("Match? ", pred == exp)
+    evaluate_ca_on_tests(ca_rules, test_pairs, bg=0)
 
     conn.close()
 
