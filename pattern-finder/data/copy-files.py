@@ -4,37 +4,25 @@ from pathlib import Path
 
 # List of files to copy
 FILES = [
-    "2dc579da.json",
-    "28bf18c6.json",
-    "3af2c5a8.json",
-    "44f52bb0.json",
-    "62c24649.json",
-    "67e8384a.json",
-    "7468f01a.json",
-    "662c240a.json",
-    "42a50994.json",
-    "56ff96f3.json",
-    "50cb2852.json",
-    "4347f46a.json",
-    "46f33fce.json",
-    "a740d043.json",
-    "a79310a0.json",
-    "aabf363d.json",
-    "ae4f1146.json",
-    "b27ca6d3.json",
-    "ce22a75a.json",
-    "dc1df850.json",
-    "f25fbde4.json",
-    "44d8ac46.json",
-    "1e0a9b12.json",
-    "0d3d703e.json",
-    "3618c87e.json",
-    "1c786137.json",
+    "8efcae92.json",
+    "445eab21.json",
+    "6f8cd79b.json",
+    "2013d3e2.json",
+    "41e4d17e.json",
+    "9565186b.json",
+    "aedd82e4.json",
+    "bb43febb.json",
+    "e98196ab.json",
+    "f76d97a5.json",
+    "ce9e57f2.json",
+    "22eb0ac0.json",
+    "9f236235.json",
+    "a699fb00.json",
 ]
 
 def main():
     src_dir = Path("training")
-    dst_dir = Path("training-4")
+    dst_dir = Path("training-5")
     dst_dir.mkdir(exist_ok=True)
 
     for fname in FILES:

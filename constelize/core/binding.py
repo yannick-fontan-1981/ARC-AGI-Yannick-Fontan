@@ -1,7 +1,7 @@
 #constelize/core/binding.py
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable, Tuple
 from enum import Enum, auto
 
 class BindingStatus(Enum):
@@ -14,6 +14,7 @@ class BindingStatus(Enum):
     CONTEXT = auto()        # Externally provided metadata, e.g. trainId/testId.
     COMPOUND = auto()       # Structured binding for composite types.
     BUFFER = auto()         # Common buffer to produce the output.
+    PRODUCE = auto()        # Not yet bound.
 
 @dataclass
 class LinkCandidate:
@@ -28,7 +29,8 @@ class ArgumentBinding:
     type: str  # For example: "Integer", "Grid", "Coord", "Array<Coord>", etc.
     binding: BindingStatus = BindingStatus.UNRESOLVED
     value: Optional[Union[str, Any]] = None  # For scalar values.
-    source_procedure_id: Optional[str] = None  # Linked producer identifier.
+    source_procedure_id: Optional[str] = None  # Linked procedure identifier.
+    producer_id: Optional[str] = None  # Linked producer identifier.
     candidates: Optional[List[LinkCandidate]] = None  # For multiple candidate producers.
     # For compound types, store a nested structure.
     # Use a dict for composite types (e.g. Coord) or a list for arrays.
@@ -43,8 +45,44 @@ class ArgumentBinding:
     suggested_action: Optional[str] = None
     suggested_attribute: Optional[str] = None
     suggested_sprite_id: Optional[str] = None
+    suggested_sprite_ids: Optional[str] = None
     suggested_object_id: Optional[str] = None
     suggested_transform: Optional[Dict[str, Any]] = None
     suggested_default: Optional[Any] = None
 
     use_anonymized: Optional[bool] = True
+
+
+@dataclass(kw_only=True)
+class Producer:
+    key: Optional[str] = None
+    item: Optional[str] = None
+    attribute: Optional[str] = None
+    type: str
+    adapter: Optional[Callable[..., Any]] = None
+    suggested_by_train_function: Optional[str] = None
+    suggested_by_sprite_function: Optional[str] = None
+    suggested_attribute: Optional[str] = None
+    suggested_sprite_id: Optional[str] = None
+    suggested_object_id: Optional[str] = None
+    suggested_sprite_ids: Optional[list[int]] = None
+    maps: Dict[str, 'Producer'] = field(default_factory=dict)
+    useItemValue: Optional[bool] = False
+    resultByTrainId: Dict[int, Any] = field(default_factory=dict)
+    resultByTrainAndSpriteId: Dict[Tuple[int, int], Any] = field(default_factory=dict)
+    criteria: List[Tuple[str, Any, int]] = field(default_factory=list)
+
+@dataclass
+class ProduceValue(Producer):
+    type: str = "Integer"
+    row_key: Optional[str] = None
+
+@dataclass
+class ProduceDict(Producer):
+    type: str = "Dict"
+    entries: Dict[str, ProduceValue] = field(default_factory=dict)
+
+@dataclass
+class ProduceList(Producer):
+    type: str = "List"
+    items: List[Union[ProduceValue, ProduceDict, 'ProduceList']] = field(default_factory=list)

@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 from constelize.core.action import Action
-from constelize.core.binding import BindingStatus, ArgumentBinding
+from constelize.core.binding import BindingStatus, ArgumentBinding, Producer
 from constelize.dsl.grid_dsl import Grid
 
 
@@ -16,6 +16,7 @@ class ActionInstance:
     testId: Optional[int] = None
     isTrain: Optional[bool] = None
     bindings: Dict[str, Any] = field(default_factory=dict)
+    producers: Dict[str, Producer] = field(default_factory=dict)
     isFromInput: Optional[bool] = None
     isToOutput: Optional[bool] = None
     output_var: Optional[str] = None

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import copy
 import uuid
-from collections import defaultdict
-from typing import Dict, List, Tuple, Union, Set
+from collections import defaultdict, OrderedDict
+from typing import Dict, List, Tuple, Union, Set, Any
 
-from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate
+from constelize.core.binding import ArgumentBinding, BindingStatus, LinkCandidate, Producer
 from constelize.core.procedure import ActionInstance, Procedure
-from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING
+from constelize.tools.extract_common_attribute import extract_common_sprite_rows_criteria, \
+    extract_common_sprite_values_criteria
+from constelize.tools.fact_to_action_mapping import FACT_TO_ACTION_MAPPING, build_producer_action
 import constelize.tools.binding_train_map as btm
+from constelize.tools.registry_singleton import registry
+
 
 ###############################################################################
 # Utilities
@@ -496,7 +500,101 @@ def squeeze_with_unresolved(train_procs: List[Procedure], scenarioId: str, ruleI
 
     return generic_procs
 
+def fill_producer_criteria(
+    producer: Producer,
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    table_key: str = "sprite_analysis"
+) -> None:
+    """
+    Recursively walk this producer and any nested producers,
+    calling extract_common_sprite_rows_criteria on each one
+    that has a resultByTrainId + suggested_action.
+    """
+    # 1) If this node wants criteria, compute & attach them
+    if producer.suggested_by_train_function and producer.resultByTrainId:
+        producer.criteria = extract_common_sprite_rows_criteria(
+            producer.resultByTrainId,
+            tables,
+            table_key=table_key
+        )
+        print("  suggested_by_train_function:", producer.suggested_by_train_function)
+        print("  criteria:", producer.criteria)
+    if producer.suggested_by_sprite_function and producer.resultByTrainAndSpriteId:
+        producer.criteria = extract_common_sprite_values_criteria(
+            producer.resultByTrainAndSpriteId,
+            tables,
+            table_key=table_key
+        )
+        print("  suggested_by_sprite_function:", producer.suggested_by_sprite_function)
+        print("  criteria:", producer.criteria)
 
+
+    # 2) Recurse into any nested maps
+    for child in producer.maps.values():
+        fill_producer_criteria(child, tables, table_key)
+
+
+
+def collect_produced_names(producer: Producer) -> Set[str]:
+    """
+    Recursively collect all keys in producer.maps as the names of
+    elements this producer action will emit.
+    """
+    names: Set[str] = set(producer.maps.keys())
+    for child in producer.maps.values():
+        names |= collect_produced_names(child)
+    return names
+
+
+def generate_producers(
+    squeezed_procs: List[Procedure],
+    current_scenario,
+    current_rule
+) -> List[Procedure]:
+    """
+    For each Procedure, inject a single reusable producer-action blueprint
+    for every declared Producer. Update downstream bindings whose name is in
+    the set of produced element names (collected from producer_obj.maps).
+    """
+    print("\n🎨 generate_producers – starting")
+    new_procs: List[Procedure] = []
+
+    for proc in squeezed_procs:
+        new_steps: "OrderedDict[str, ActionInstance]" = OrderedDict()
+
+        for step in proc.steps.values():
+            # 1) For each declared producer in this step
+            for producer_key, producer_obj in step.producers.items():
+                print(f"proc.id={proc.id} step.id={step.id} producer_key={producer_key}")
+                # a) compute criteria
+                fill_producer_criteria(producer_obj, current_rule.tables)
+
+                # b) build the single blueprint action instance
+                producer_instance = build_producer_action(
+                    producer_key,
+                    producer_obj,
+                    current_rule.tables,
+                    scenarioId=step.scenarioId,
+                    ruleId=step.ruleId
+                )
+
+                # c) register this instance before the original step
+                new_steps[producer_instance.id] = producer_instance
+
+                # d) update original step bindings whose name is one of the produced elements
+                produced_names = collect_produced_names(producer_obj)
+                for bind_name, bind in step.bindings.items():
+                    if bind.binding == BindingStatus.PRODUCE and bind_name in produced_names:
+                        bind.source_procedure_id = producer_instance.id
+
+            # 2) now add the original step
+            new_steps[step.id] = step
+
+        # replace steps and collect
+        proc.steps = new_steps
+        new_procs.append(proc)
+
+    return new_procs
 
 
 def print_bindings_recursive(proc):

@@ -1587,8 +1587,8 @@ def compute_sprites_color_zone(grid, filename, trainId, testId, isInsideInput):
         w, h = maxX - minX, maxY - minY
         area = w * h
 
-        # size checks: area ≥ 9, both dims > 1
-        if area < 9 or w == 1 or h == 1:
+        # size checks: area ≥ 6, both dims > 1
+        if area < 6 or w == 1 or h == 1:
             continue
 
         # reject if bbox touches any grid border
@@ -1602,7 +1602,7 @@ def compute_sprites_color_zone(grid, filename, trainId, testId, isInsideInput):
             for v in row[minX:maxX]
             if v == color_value
         )
-        if count_in_box < 0.4 * area:
+        if count_in_box < 0.04 * area:
             continue
 
         # slice out subgrid

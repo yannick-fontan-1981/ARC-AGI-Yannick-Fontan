@@ -31,7 +31,7 @@ from constelize.tools.pattern_analysis import (
 from constelize.tools.sqlite_loader import build_values_by_input, \
     build_attributes_by_input_and_values, build_colors_by_input, build_attributes_by_input_and_colors, \
     load_all_tables_from_sqlite
-from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved
+from constelize.tools.squeeze import normalize_procedures_with_levels, squeeze_with_unresolved, generate_producers
 from scripts.verify_utils import filter_successful_procedures, SCRIPT_DIR, filter_successful_scenarios
 
 class TimeoutException(Exception):
@@ -128,10 +128,10 @@ def run_analysis_scripts(
     """
     scripts = {
         "first_sight"        : os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"),
-        "object"             : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
         "sprite"             : os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"),
-        "light_cycle"        : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
-        "cellular_automaton" : os.path.join(PROJECT_ROOT, "pattern-finder", "cellular_automaton_analysis.py"),
+        "object"             : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
+        #"light_cycle"        : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
+        #"cellular_automaton" : os.path.join(PROJECT_ROOT, "pattern-finder", "cellular_automaton_analysis.py"),
     }
 
     for which, script_path in scripts.items():
@@ -256,11 +256,6 @@ def test_file(
 
     valid_scenario = filter_successful_scenarios()
 
-    if not valid_scenario:
-        print("⚠️ No fully successful generic procedure found. Skipping test execution.")
-        print_total_time(results_path)
-        return False
-
     # At least one generic proc passed training; if there's a test set, compare now
     if valid_scenario:
         print("🎯 Running successful procedure(s) on test set...")
@@ -279,9 +274,13 @@ def test_file(
         print_total_time(results_path)
         return compare_result if has_output else valid_scenario
     else:
-        # no test outputs available → treat training success as overall success
+        print("🔴ℹ️🔴 No test outputs available; generating dummy submission from train outputs...")
+        dummy_results = {sc.id: [] for sc in valid_scenario}
+        generate_submission_file_from_scenarios(task_id, valid_scenario, data, submission_path, db_path, dummy_results)
+        # compare against ARC (will use default behavior on submission)
+        compare_result = compare_submission_to_arc_outputs(task_id, data, submission_path, comparison_path)
         print_total_time(results_path)
-        return True
+        return compare_result
 
 
 def print_total_time(results_path):
@@ -334,7 +333,13 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     #print(_attrs_color)
     print(f"\n📥 [generate_draft_procedure] Loading from DB: {db_path} and JSON: {json_path}")
     action_instances = generate_action_instances_from_db(db_path, scenarioId, current_rule)
+
+    #print("exit(0)")
+    #exit(0)
+
     compute_get_start_input(action_instances, data, ruleId, scenarioId)
+
+
     compute_buffer_and_repaint(action_instances, ruleId, scenarioId)
     rest_action_instances = split_action_instances_in_scenarios(action_instances, current_scenario)
     procedures = generate_draft_procedure(rest_action_instances, data, scenarioId, current_rule)
@@ -350,10 +355,8 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
             print(f"    • {step.id} ({step.action.id})")
 
     generic_with_unresolved = squeeze_with_unresolved(normalized_procs, scenarioId, ruleId)
-
-
-
-    generic_procs = split_contender_procs(generic_with_unresolved)
+    generic_with_producers = generate_producers(generic_with_unresolved, current_scenario, current_rule)
+    generic_procs = split_contender_procs(generic_with_producers)
 
     # If exactly one END‐marked instance exists among all candidate procs,
     # drop every other proc so only that lineage remains.
@@ -577,7 +580,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "32597951" # colorZone sprite + recolor + repaint
     #DEFAULT_TASK_ID = "25ff71a9" # move object 1 pixel lower
     #DEFAULT_TASK_ID = "0b148d64"
-    DEFAULT_TASK_ID = "1f85a75f" # crop
+    #DEFAULT_TASK_ID = "1f85a75f" # crop
     #DEFAULT_TASK_ID = "23b5c85d"
     #DEFAULT_TASK_ID = "9ecd008a" # find missing sprite in symmetry
     #DEFAULT_TASK_ID = "ac0a08a4" # zoom based on nb_pixel alone
@@ -601,42 +604,42 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
     #DEFAULT_TASK_ID = "662c240a" # select sprite not having diagonal symetry
     #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
-     #DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
+    DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
     #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
     #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
     #DEFAULT_TASK_ID = "46f33fce_simple" # cellular automation with no orientation_invariant
      #DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
-    #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
-    #DEFAULT_TASK_ID = "a79310a0" # move + recolor
-    #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!
-    #DEFAULT_TASK_ID = "ae4f1146" # select sprite with most blue ! Color#Order: 1#1 ? Or 9 cols: BlueOrder...
-     #DEFAULT_TASK_ID = "b27ca6d3" # cellular automation
-     #DEFAULT_TASK_ID = "ce22a75a" # cellular automation
-     #DEFAULT_TASK_ID = "dc1df850" # cellular automation
+     #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
+     #DEFAULT_TASK_ID = "a79310a0" # move + recolor
+     #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!
+     #DEFAULT_TASK_ID = "ae4f1146" # select sprite with most blue ! Color#Order: 1#1 ? Or 9 cols: BlueOrder...
+    #DEFAULT_TASK_ID = "b27ca6d3" # cellular automation
+    #DEFAULT_TASK_ID = "ce22a75a" # cellular automation
+    #DEFAULT_TASK_ID = "dc1df850" # cellular automation
     #DEFAULT_TASK_ID = "f25fbde4" # crop + zoom OR zoom + shrink-canvas
-    #DEFAULT_TASK_ID = "44d8ac46" # fill square with red !
-    #DEFAULT_TASK_ID = "1e0a9b12" # gravity down !
-    #DEFAULT_TASK_ID = "0d3d703e" # apply cumulated recolor !
+     #DEFAULT_TASK_ID = "44d8ac46" # fill with red only if square !
+     #DEFAULT_TASK_ID = "1e0a9b12" # gravity down !
+     #DEFAULT_TASK_ID = "0d3d703e" # apply cumulated recolor !
     #DEFAULT_TASK_ID = "3618c87e" # gravity down for blue only !
-    #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
+     #DEFAULT_TASK_ID = "1c786137" # sprite in hole of object (sizeOrder or color alone)
 
     # Training 5
-    #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
-    #DEFAULT_TASK_ID = "445eab21" # create 2x2 object with same color as greater rect
+     #DEFAULT_TASK_ID = "8efcae92" # get sprite with redOrder 1
+     #DEFAULT_TASK_ID = "445eab21" # create 2x2 object with same color as greater rect
     #DEFAULT_TASK_ID = "6f8cd79b" # color border, cellular automation or lightCycle ?
-    #DEFAULT_TASK_ID = "2013d3e2" # crop 3x3 with right-bottom at center of sprite
-    #DEFAULT_TASK_ID = "41e4d17e" # pink lightCycle, ground teal, cloud blue
-    #DEFAULT_TASK_ID = "9565186b" # repaint greater object with gray background
+     #DEFAULT_TASK_ID = "2013d3e2" # crop 3x3 with right-bottom at center of sprite
+     #DEFAULT_TASK_ID = "41e4d17e" # pink lightCycle, ground teal, cloud blue
+     #DEFAULT_TASK_ID = "9565186b" # repaint greater object with gray background
     #DEFAULT_TASK_ID = "aedd82e4" # cellular automation
-    #DEFAULT_TASK_ID = "bb43febb" # fill with red gray block but keep gray border
-    #DEFAULT_TASK_ID = "e98196ab" # gray split line + Superposition with black bg
-    #DEFAULT_TASK_ID = "f76d97a5" # recolor gray in black + invert color
-    #DEFAULT_TASK_ID = "ce9e57f2" # lightCycle step by step with red first
-    #DEFAULT_TASK_ID = "22eb0ac0" # lightCycle between same color
-    #DEFAULT_TASK_ID = "9f236235" # unzoom without split grid + flip horizontal
+    #DEFAULT_TASK_ID = "bb43febb" # cellular automation, fill with red gray block but keep gray border
+     #DEFAULT_TASK_ID = "e98196ab" # gray split line + Superposition with black bg
+     #DEFAULT_TASK_ID = "f76d97a5" # recolor gray in black + invert color
+     #DEFAULT_TASK_ID = "ce9e57f2" # lightCycle step by step with red first
+     #DEFAULT_TASK_ID = "22eb0ac0" # INFINITE LOOP ! lightCycle between same color
+     #DEFAULT_TASK_ID = "9f236235" # unzoom without split grid + flip horizontal
     #DEFAULT_TASK_ID = "a699fb00" # cellular automation
 
-    trainings_number = 3
+    trainings_number = 4
     TASK_ID = args.task_id if args.task_id else DEFAULT_TASK_ID
 
     PROJECT_ROOT     = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -729,25 +732,25 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "239be575" # Same Teal object touching 2 red square = teal pixel, else black pixel
     #DEFAULT_TASK_ID = "67a423a3" # Yellow 3x3 border at intersection of 2 lines
     #DEFAULT_TASK_ID = "5c0a986e" # diagonal LightCycle
-    #DEFAULT_TASK_ID = "6430c8c4" #
-    #DEFAULT_TASK_ID = "94f9d214" #
-    #DEFAULT_TASK_ID = "a1570a43" #
-    #DEFAULT_TASK_ID = "ce4f8723" #
-    #DEFAULT_TASK_ID = "d13f3404" #
-    #DEFAULT_TASK_ID = "dc433765" #
-    #DEFAULT_TASK_ID = "f2829549" #
-    #DEFAULT_TASK_ID = "fafffa47" #
-    #DEFAULT_TASK_ID = "fcb5c309" #
-    #DEFAULT_TASK_ID = "ff805c23" #
-    #DEFAULT_TASK_ID = "e76a88a6" #
-    #DEFAULT_TASK_ID = "7c008303" #
-    #DEFAULT_TASK_ID = "7f4411dc" #
-    #DEFAULT_TASK_ID = "b230c067" #
-    #DEFAULT_TASK_ID = "e8593010" #
-    #DEFAULT_TASK_ID = "6d75e8bb" #
-    #DEFAULT_TASK_ID = "3f7978a0" #
-    #DEFAULT_TASK_ID = "1190e5a7" #
-    #DEFAULT_TASK_ID = "6e02f1e3" #
-    #DEFAULT_TASK_ID = "a61f2674" #
+    #DEFAULT_TASK_ID = "6430c8c4" # superposition with split line + invert color
+    #DEFAULT_TASK_ID = "94f9d214" # superposition without split line + invert color
+    #DEFAULT_TASK_ID = "a1570a43" # move red sprite to maxX/maxY of top-left green pixel
+    #DEFAULT_TASK_ID = "ce4f8723" # superposition with split line
+    #DEFAULT_TASK_ID = "d13f3404" # resize + diagonal LightCycle
+    #DEFAULT_TASK_ID = "dc433765" # move 1 pixel green pixel toward yellow pixel
+    #DEFAULT_TASK_ID = "f2829549" # superposition with split line + invert color
+    #DEFAULT_TASK_ID = "fafffa47" # superposition with split line + invert color
+    #DEFAULT_TASK_ID = "fcb5c309" # select sprite with more colored holes and recolor border
+    #DEFAULT_TASK_ID = "ff805c23" # select new sprite of symetry reparation
+    #DEFAULT_TASK_ID = "e76a88a6" # repeat 2 colored sprite on gray block
+    #DEFAULT_TASK_ID = "7c008303" # recolor 4 zones based on 4 legend !
+    #DEFAULT_TASK_ID = "7f4411dc" # denoise
+    #DEFAULT_TASK_ID = "b230c067" # size-order/isUnique recolor, small/unique = red, big/repeated = blue
+    #DEFAULT_TASK_ID = "e8593010" # size-order block recolor, 1=green, 2=red, 3=blue
+    #DEFAULT_TASK_ID = "6d75e8bb" # sprite recolor bg->red
+    #DEFAULT_TASK_ID = "3f7978a0" # gray sprite zone with minY-1 / maxY+1
+    #DEFAULT_TASK_ID = "1190e5a7" # create bg object with width / height = nb bg object hor / ver
+    #DEFAULT_TASK_ID = "6e02f1e3" # output chosen by input nb colors, map {nbColor,outputGrid}
+    #DEFAULT_TASK_ID = "a61f2674" # size order : small=red, middle=bg, greater=blue, greater ?!
 
     # Training 9

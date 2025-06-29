@@ -317,6 +317,19 @@ def to_object(grid: Grid) -> frozenset:
 def to_shape(grid: Grid) -> frozenset:
     return frozenset((i, j) for i, row in enumerate(grid) for j, val in enumerate(row) if val != -1)
 
+def json_to_array(data: str) -> List[Any]:
+    try:
+        parsed = json.loads(data)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, list):
+        return parsed
+    return []
+
+def json_to_concrete_grid(data: str) -> Tuple[Tuple[int]]:
+    base = json.loads(data)
+    return to_concrete_grid(base)
+
 def to_concrete_grid(data) -> Tuple[Tuple[int]]:
     """
     Convertit un Object, Patch, Shape, Grid ou JSON string vers une grille concrète d'entiers :

@@ -886,6 +886,73 @@ def create_suggested_action_instances(
                                 other_bind.binding = BindingStatus.VARIABLE
                                 other_bind.source_procedure_id = sel.id
 
+            elif action == "selectSpritesAction":
+                # per_train[tid] == (inst, bind, test_id, sprite_id, transform)
+                # collect all sprite_ids that were suggested
+                group = tuple(info[3] for info in per_train.values())
+
+                # find minimal criteria on the sprite_analysis table
+                all_input_sids = [
+                    sid for sid, row in tables["sprite_analysis"].items()
+                    if row.get("isInsideInput") == 1
+                ]
+                criteria = find_minimal_selection_criteria_for_table(
+                    group=group,
+                    all_ids=all_input_sids,
+                    tables=tables,
+                    table_key="sprite_analysis"
+                )
+                # drop any metadata fields we don’t want to test on
+                exclude = {
+                    "trainId", "testId",
+                    "isInsideInput", "isInsideOutput",
+                    "isInsideTrain", "isInsideTest"
+                }
+                criteria = [(c, v, w) for c, v, w in criteria if c not in exclude]
+
+                if not criteria:
+                    print(f"    ⚠️ No sprite‐selection criteria for transform={transform_key} → skipping")
+                    continue
+
+                print(
+                    f"\n  • Generating selectSpritesAction (transform={transform_key}) with criteria={criteria} for trains {train_ids}")
+                # build one selection‐of‐sprites step per train
+                for tid in train_ids:
+                    inst, bind, test_id, sid, transform = per_train[tid]
+                    # call your library‐fn to get the actual list of sprite‐IDs
+                    selected_sids = _aa_mod.select_sprites_fn(
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        criteria=criteria,
+                        trainId=tid,
+                        testId=test_id
+                    )
+                    sel = build_select_sprites_instance(
+                        trainId=tid,
+                        testId=test_id,
+                        output_ids=selected_sids,
+                        criteria=criteria,
+                        scenarioId=scenarioId,
+                        ruleId=ruleId,
+                        transform=transform
+                    )
+                    # patch the original binding to point at this new sub‐procedure
+                    bind.binding = BindingStatus.VARIABLE
+                    bind.source_procedure_id = sel.id
+                    new_instances.append(sel)
+
+                    # now propagate that same source_procedure to any other binding
+                    for other_inst in action_instances:
+                        for _, other_bind in iter_bindings(other_inst):
+                            if (
+                                    other_bind.binding == BindingStatus.UNRESOLVED
+                                    and getattr(other_bind, "suggested_action", None) == action
+                                    and freeze(getattr(other_bind, "suggested_transform", {})) == transform_key
+                            ):
+                                other_bind.binding = BindingStatus.VARIABLE
+                                other_bind.source_procedure_id = sel.id
+
+
             elif action == "selectSpriteAndAttributeAction":
                 group = tuple(info[3] for info in per_train.values())
                 print("per_train")
@@ -1945,6 +2012,7 @@ def generate_submission_file_from_scenarios(
     """
     submission = {task_id: []}
     num_tests = len(arc_data.get("test", []))
+    trains = arc_data.get("train", [])
 
     if results_by_scenario is not None:
         # 1) gather ALL (grid, accuracy) per testId
@@ -1977,11 +2045,25 @@ def generate_submission_file_from_scenarios(
                 unique_grids = pick_the_2_most_similar_by_ratio_diff(unique_grids, db_path)
                 print(f"⏭ Collapsed to 2 candidates by ratio/diff similarity")
 
-            # pad or trim to exactly two attempts
+            unique_train_outputs = []
+            for tr in trains:
+                out = tr.get("output")
+                if not any(grids_equal(out, u) for u in unique_train_outputs):
+                    unique_train_outputs.append(out)
             if len(unique_grids) == 0:
-                unique_grids = [[[0]], [[0]]]
+                if len(unique_train_outputs) >= 2:
+                    unique_grids = unique_train_outputs[:2]
+                elif len(unique_train_outputs) == 1:
+                    unique_grids = [unique_train_outputs[0], unique_train_outputs[0]]
+                else:
+                    unique_grids = [[[0]], [[0]]]
             elif len(unique_grids) == 1:
-                unique_grids = [unique_grids[0], unique_grids[0]]
+                cand = unique_grids[0]
+                if any(grids_equal(cand, u) for u in unique_train_outputs) and len(unique_train_outputs) >= 2:
+                    other = next(u for u in unique_train_outputs if not grids_equal(u, cand))
+                    unique_grids = [cand, other]
+                else:
+                    unique_grids = [cand, cand]
             else:
                 unique_grids = unique_grids[:2]
 
@@ -2663,6 +2745,18 @@ def resolve_binding_recursive(binding, context, input_grid, step):
     #print(f"resolve_binding_recursive: input_grid={input_grid}")
 
     print(f"🧠 Resolving binding: name={binding.name}, status={binding.binding}, source={binding.source_procedure_id}") # value={binding.value},
+
+    if binding.binding == BindingStatus.PRODUCE:
+        src_id = binding.source_procedure_id
+        producer_output = context.get(src_id)
+        if not producer_output:
+            print(f"⚠️  Producer step '{src_id}' output not found for binding '{binding.name}' → None")
+            return None
+        if not producer_output.get(binding.name):
+            print(f"⚠️  Producer step '{src_id}' output not found for binding '{binding.name}' → None, but producer_output found:")
+            print(producer_output)
+            return None
+        return producer_output.get(binding.name)
 
     if binding.binding == BindingStatus.CONSTANT:
         if binding.type in ("Integer", "Color", "Grid"):

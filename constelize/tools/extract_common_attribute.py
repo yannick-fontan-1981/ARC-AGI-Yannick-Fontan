@@ -3,6 +3,160 @@ from collections import defaultdict
 from itertools import combinations, product
 from typing import Dict, Any, List, Tuple, Optional, Set
 
+
+def extract_common_sprite_values_criteria(
+    resultByTrainAndSpriteId: Dict[Tuple[int, int], Any],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    table_key: str = "sprite_analysis"
+) -> List[Tuple[str, Any, int]]:
+    """
+    Very-verbose extraction of the *column*-level criteria that are
+    true for every (trainId, spriteId) → target_value mapping.
+
+    Unlike before, we ignore the actual cell value when intersecting:
+      1) For each mapping, collect the set of column names where
+         row[col] == target_value (or in target_values if it’s a list).
+      2) Intersect those column‐name sets across *all* sprites.
+      3) Return one (col, None, weight) triple per common column.
+    """
+
+    #print("=== extract_common_sprite_values_criteria (column‐only) ===")
+    #print(f"Received {len(resultByTrainAndSpriteId)} mappings:")
+    #for (trainId, spriteId), val in resultByTrainAndSpriteId.items():
+    #    print(f"  • trainId={trainId}, spriteId={spriteId} → target_value={val!r}")
+    #print()
+
+    # 1) Load the whole table
+    tbl = tables.get(table_key, {})
+    if not tbl:
+        #print(f"[WARN] table_key '{table_key}' not found or empty.")
+        return []
+    #print(f"Loaded table '{table_key}' with {len(tbl)} rows.\n")
+
+    # 2) Columns to ignore
+    exclude_cols = {"id", "trainId", "testId", "data"}
+    #print(f"Excluding columns: {exclude_cols}\n")
+
+    # 3) For each (trainId, spriteId), find the set of matching column names
+    per_sprite_columns: List[Set[str]] = []
+    for idx, ((trainId, spriteId), raw_val) in enumerate(
+        resultByTrainAndSpriteId.items(), start=1
+    ):
+        #print(f"[{idx}] spriteId={spriteId} (trainId={trainId})")
+        row = tbl.get(spriteId)
+        if row is None:
+            #print(f"    [ERROR] No row for spriteId={spriteId} → aborting.\n")
+            return []
+        #print(f"    Row keys: {list(row.keys())}")
+
+        # normalize to list for membership tests
+        target_values = raw_val if isinstance(raw_val, (list, tuple, set)) else [raw_val]
+        #print(f"    target_values = {target_values}")
+
+        matching_cols: Set[str] = set()
+        for col, cell in row.items():
+            if col in exclude_cols:
+                continue
+            if cell in target_values:
+                matching_cols.add(col)
+                #print(f"      ✔ '{col}' matches (cell={cell!r})")
+            #else:
+            #    print(f"      ✗ '{col}' ({cell!r}) not in {target_values!r}")
+
+        if not matching_cols:
+            #print(f"    [ERROR] No matching columns for spriteId={spriteId}.\n")
+            return []
+        #print(f"    → matching columns: {matching_cols}\n")
+        per_sprite_columns.append(matching_cols)
+
+    # 4) Intersect across all sprites
+    #print("Intersecting column sets across all sprites...")
+    common_cols = per_sprite_columns[0].copy()
+    #print(f"  start with ({len(common_cols)}) from first sprite: {common_cols}")
+    for i, cols in enumerate(per_sprite_columns[1:], start=2):
+        before = len(common_cols)
+        common_cols &= cols
+        after = len(common_cols)
+        #print(f"  after intersecting with sprite #{i} ({len(cols)} cols): {before} → {after}")
+        #print(f"    remaining: {common_cols}")
+    #print()
+
+    if not common_cols:
+        #print("  [RESULT] No common columns found.\n")
+        return []
+
+    #print(f"[RESULT] common columns: {common_cols}\n")
+
+    # 5) Build criteria triples: (column, None, 1)
+    criteria = [(col, None, 1) for col in sorted(common_cols)]
+    #print(f"Returning criteria: {criteria}\n")
+    #print("=== end of verbose extraction ===\n")
+    return criteria
+
+
+
+
+def extract_common_sprite_rows_criteria(
+    resultByTrainId: Dict[int, List[int]],
+    tables: Dict[str, Dict[int, Dict[str, Any]]],
+    table_key: str = "sprite_analysis"
+) -> List[Tuple[str, Any, int]]:
+    """
+    Identify which columns in `tables[table_key]` discriminate exactly the
+    rows in `resultByTrainId` (and only those), across all training examples.
+
+    Returns a list of (column, value, weight) triples.
+    """
+
+    # 1) Deduplicate all target row IDs
+    target_ids: List[int] = []
+    for ids in resultByTrainId.values():
+        for rid in ids:
+            if rid not in target_ids:
+                target_ids.append(rid)
+    if not target_ids:
+        return []
+
+    # 2) Load the table and pull out the target rows
+    tbl = tables.get(table_key, {})
+    target_rows = []
+    for rid in target_ids:
+        row = tbl.get(rid)
+        if row is None:
+            # missing data → no criteria possible
+            return []
+        target_rows.append(row)
+
+    # 3) Choose candidate columns (drop metadata/raw fields)
+    exclude = {"id", "trainId", "testId", "data"}
+    candidate_cols = [c for c in target_rows[0].keys() if c not in exclude]
+
+    # 4) Find columns whose value is identical across all targets
+    common: List[Tuple[str, Any]] = []
+    for col in candidate_cols:
+        first = target_rows[0][col]
+        if all(r[col] == first for r in target_rows[1:]):
+            common.append((col, first))
+    if not common:
+        return []
+
+    # 5) Filter to keep only truly discriminative criteria:
+    #    for each (col,val), check that among *all* input rows
+    #    (isInsideInput==1, testId==-1) it matches exactly our targets.
+    discriminative: List[Tuple[str, Any, int]] = []
+    target_set = set(target_ids)
+    for col, val in common:
+        matching = {
+            rid for rid, row in tbl.items()
+            if row.get("isInsideInput") == 1
+               and row.get("testId") == -1
+               and row.get(col) == val
+        }
+        if matching == target_set:
+            discriminative.append((col, val, 1))
+
+    return discriminative
+
 def extract_common_object_grid_action(
     pairs: List[Tuple[int, int]],
     path: str,
@@ -616,34 +770,31 @@ def group_similar_sprites_by_attributes(
     tie_threshold: float = 0.1
 ) -> List[Tuple[int, ...]]:
     """
-    Pour N trains, renvoie des tuples (sid_ref, sid_train1, ..., sid_trainN)
-    appariés d'abord par index dans le train de référence, puis, pour les
-    restants, par plus petite distance L1, avec repli sur l'index si distance
-    trop proche (tie_threshold relatif).
+    For N trains, returns tuples (sid_ref, sid_train1, ..., sid_trainN)
+    matched first by index in the reference train, then for the
+    remaining by smallest L1 distance, with fallback to index if
+tie is within threshold.
     """
-    # 1) repérer le train de référence (le plus long)
     train_keys = sorted(sprite_ids_by_train.keys())
     if not train_keys:
         return []
-    # référence = clé dont la liste est la plus longue
+    # reference = key with the longest list
     ref_key = max(train_keys, key=lambda k: len(sprite_ids_by_train[k]))
     other_keys = [k for k in train_keys if k != ref_key]
 
     lists = {k: sprite_ids_by_train[k] for k in train_keys}
 
-    # 2) colonnes communes valides
+    # valid common columns in sprite_analysis
     sprite_tbl = tables.get("sprite_analysis", {})
     if not sprite_tbl:
-        #print("⚠️ sprite_analysis vide")
         return []
     sample = next(iter(sprite_tbl.values()))
     valid_cols = [c for c in common_columns if c in sample]
     if not valid_cols:
-        #print("⚠️ Pas de colonne commune:", common_columns)
         return []
 
-    # 3) vecteurs de features pour chaque train
-    feats = {}
+    # build feature vectors
+    feats: Dict[str, Dict[int, List[Any]]] = {}
     for k, lst in lists.items():
         feats[k] = {}
         for sid in lst:
@@ -658,8 +809,7 @@ def group_similar_sprites_by_attributes(
     used = {k: set() for k in train_keys}
     groups: List[Tuple[int, ...]] = []
 
-    # 4) appariement direct par index
-    ref_list = lists[ref_key]
+    # direct index matching
     min_len = min(len(lists[k]) for k in train_keys)
     for i in range(min_len):
         tup = tuple(lists[k][i] for k in train_keys)
@@ -667,46 +817,43 @@ def group_similar_sprites_by_attributes(
         for k, sid in zip(train_keys, tup):
             used[k].add(sid)
 
-    # 5) pour chaque sid_ref restant, chercher son meilleur match dans chaque autre train
+    ref_list = lists[ref_key]
+    # match remaining by feature distance
     for sid_ref in ref_list:
         if sid_ref in used[ref_key]:
+            continue
+        # skip if no feature vector available for reference
+        if sid_ref not in feats[ref_key]:
             continue
         used[ref_key].add(sid_ref)
         vec_ref = feats[ref_key][sid_ref]
         grp = [sid_ref]
 
         for k in other_keys:
-            # candidats non encore utilisés
             cands = [sid for sid in lists[k] if sid not in used[k] and sid in feats[k]]
             if not cands:
                 grp.append(None)
                 continue
-
-            # calcul des distances
-            dists = [(sid, sum(abs(a-b) for a,b in zip(vec_ref, feats[k][sid])))
-                     for sid in cands]
+            # compute L1 distances
+            dists = [(sid, sum(abs(a - b) for a, b in zip(vec_ref, feats[k][sid]))) for sid in cands]
             dists.sort(key=lambda x: x[1])
             best_sid, best_d = dists[0]
-            # si tie proche, retomber sur appariement par index
+            # tie? fallback to same index
             if len(dists) > 1:
                 second_d = dists[1][1]
-                # check relatif
                 if second_d - best_d <= tie_threshold * max(best_d, 1):
-                    # on choisit le candidat à même index que sid_ref
                     idx = ref_list.index(sid_ref)
                     if idx < len(cands):
                         best_sid = cands[idx]
             grp.append(best_sid)
             used[k].add(best_sid)
 
-        # reconstitue tuple dans l'ordre train_keys
-        # grp = [sid_ref] + [match pour chaque other_keys]
+        # construct full tuple in train_keys order
         full_tup = []
         for k in train_keys:
             if k == ref_key:
                 full_tup.append(sid_ref)
             else:
-                # les valeurs dans grp sont dans l'ordre other_keys
                 full_tup.append(grp[1 + other_keys.index(k)])
         groups.append(tuple(full_tup))
 

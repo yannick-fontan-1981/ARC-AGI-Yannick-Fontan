@@ -327,6 +327,13 @@ def detect_and_insert_ca_pipeline(
     Returns:
       True if at least one rule was inserted; False otherwise
     """
+    # --- simple guard: skip all if any input/output size mismatches ---
+    for inp, out in trains:
+        if len(inp) != len(out) or any(len(r_in) != len(r_out) for r_in, r_out in zip(inp, out)):
+            print(f"⚠️ Skipping CA fact gathering: input/output size mismatch "
+                  f"{len(inp)}x{len(inp[0])} vs {len(out)}x{len(out[0])}")
+            return False
+
     # ── 1) Gather 3×3 facts from the current trains
     facts_5_nbrs_ticked, facts_without_orphan, facts_without_border, facts_without_outside, final_facts, facts_by_train = gather_facts(trains, bg)
 
@@ -950,15 +957,16 @@ def test_all_rules_on_all_trains(
         # decide how to iterate
         if tick > 0:
             prev = inp_grid
-            indice = 0
-            while True:
-                indice = indice + 1
+            # cap iterations to avoid infinite loops if CA never converges
+            max_iters = len(prev) * len(prev[0])
+            for i in range(1, max_iters + 1):
                 curr = apply_ca(prev, ca_rules, bg)
                 if curr == prev:
-                    #print(ca_rules)
-                    print(f"curr = apply_ca(prev, ca_rules, bg) indice: {indice}, tick: {tick}")
+                    print(f"↻ Converged after {i} iterations at tick {tick}")
                     break
                 prev = curr
+            else:
+                print(f"⚠️ CA did not converge after {max_iters} iterations at tick {tick}; using last result")
             result = curr
         else:
             # single pass
