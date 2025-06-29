@@ -1363,7 +1363,9 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             so.minX         AS produce_minX,
             so.minY         AS produce_minY,
             sa.minX         AS origin_minX,
-            sa.minY         AS origin_minY
+            sa.minY         AS origin_minY,
+            sa.width        AS width,
+            sa.height       AS height
         FROM sprite_transformation AS st
         JOIN sprite_occurrence    AS so  ON so.sprite_transformation_id = st.id
         JOIN sprite_unique        AS su  ON su.id = st.sprite_unique_id
@@ -1393,18 +1395,54 @@ class RecolorSpriteFactToAction(FactToActionMapping):
         if all_train_ids - train_ids_with_recolor:
             return []
 
-        from collections import defaultdict
+        # --- NEW: drop any row fully enclosed by a bigger sibling ---
+        filtered_rows = []
+        for r1 in rows:
+            enclosed = False
+            for r2 in rows:
+                # same example?
+                if r1['trainId'] != r2['trainId'] or r1['testId'] != r2['testId']:
+                    continue
+                # check containment of r1's produce‐box inside r2's produce‐box
+                if (
+                    r2['produce_minX'] <= r1['produce_minX']
+                    and r2['produce_minY'] <= r1['produce_minY']
+                    and (r2['produce_minX'] + r2['width'])  >= (r1['produce_minX'] + r1['width'])
+                    and (r2['produce_minY'] + r2['height']) >= (r1['produce_minY'] + r1['height'])
+                    # require at least one strict boundary
+                    and (
+                        r2['produce_minX']  < r1['produce_minX']
+                        or r2['produce_minY']  < r1['produce_minY']
+                        or (r2['produce_minX'] + r2['width'])  > (r1['produce_minX'] + r1['width'])
+                        or (r2['produce_minY'] + r2['height']) > (r1['produce_minY'] + r1['height'])
+                    )
+                ):
+                    enclosed = True
+                    break
+            if not enclosed:
+                filtered_rows.append(r1)
+
+        rows = filtered_rows
+        # ----------------------------------------------------------
 
         spriteIdsByTrainId = defaultdict(list)
         recolorByTrainAndSpriteId = {}
+        cumulValueMap = defaultdict(list)
 
         for r in rows:
             tid = r['trainId']
             sid = r['origin_sprite_id']
             spriteIdsByTrainId[tid].append(sid)
+
             pairs = json.loads(r['recolored'])
             recolorByTrainAndSpriteId[(tid, sid)] = [to for (_from, to) in pairs]
+            for _from, to in pairs:
+                cumulValueMap[_from].append(to)
 
+        # dedupe
+        cumulValueMap = {k: list(set(vs)) for k, vs in cumulValueMap.items()}
+
+        # group by example
         grouped = defaultdict(list)
         for r in rows:
             grouped[(r['trainId'], r['testId'])].append(r)
@@ -1416,16 +1454,19 @@ class RecolorSpriteFactToAction(FactToActionMapping):
                 'testId': testId,
                 'members': members,
                 'resultByTrainId': dict(spriteIdsByTrainId),
-                'resultByTrainAndSpriteId': recolorByTrainAndSpriteId
+                'resultByTrainAndSpriteId': recolorByTrainAndSpriteId,
+                'cumulValueMap': cumulValueMap
             })
 
         return result
+
 
     def _build_function(self, row):
         trainId = row['trainId']
         members = row['members']
         resultByTrainId = row['resultByTrainId']
         resultByTrainAndSpriteId = row['resultByTrainAndSpriteId']
+        cumulValueMap = row['cumulValueMap']
 
         # Extract parallel data
         sprites: List[List[List[int]]] = []
@@ -1533,7 +1574,8 @@ class RecolorSpriteFactToAction(FactToActionMapping):
                                 'From': ProduceValue(useItemValue=True),
                                 'To': ProduceValue(
                                     suggested_by_sprite_function='SelectRecolorFunction',
-                                    resultByTrainAndSpriteId=resultByTrainAndSpriteId
+                                    resultByTrainAndSpriteId=resultByTrainAndSpriteId,
+                                    cumulValueMap=cumulValueMap
                                 ),
                             }
                         )
@@ -3402,27 +3444,27 @@ class ConditionalObjectFactToAction(FactToActionMapping):
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
 FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
-    #FactToActionMapping("rotated_90", "rotate_90"),
-    #FactToActionMapping("rotated_180", "rotate_180"),
-    #FactToActionMapping("rotated_270", "rotate_270"),
-    #FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
-    #FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
-    #FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
-    #FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
-    #ZoomFactToAction(),
-    #RepeatedSpriteFactToAction(),
-    #CanvasByRatioFactToAction(),
-    #CanvasByObjectSizeFactToAction(),
+    FactToActionMapping("rotated_90", "rotate_90"),
+    FactToActionMapping("rotated_180", "rotate_180"),
+    FactToActionMapping("rotated_270", "rotate_270"),
+    FactToActionMapping("flipped_horizontal", "mirror_vertical", "flipped_horiz"),
+    FactToActionMapping("flipped_vertical", "mirror_horizontal", "flipped_vert"),
+    FactToActionMapping("flipped_horiz_90", "flipped_horiz_90"),
+    FactToActionMapping("flipped_vert_90", "flipped_vert_90"),
+    ZoomFactToAction(),
+    RepeatedSpriteFactToAction(),
+    CanvasByRatioFactToAction(),
+    CanvasByObjectSizeFactToAction(),
     RecolorSpriteFactToAction(),
-    #SpriteComputationFactToAction(),
-    #DenoiseFactToAction(),
-    #ZoomOutFactToAction(),
-    #CreateObjectFactToAction(),
-    #MoveObjectFactToAction(),
-    #MoveSpriteFactToAction(),
-    #CropSpriteFactToAction(),
-    #FixSymmetryFactToAction(),
-    #LightCycleFactToAction(),
-    #CellularAutomatonFactToAction(),
-    #ConditionalObjectFactToAction(),
+    SpriteComputationFactToAction(),
+    DenoiseFactToAction(),
+    ZoomOutFactToAction(),
+    CreateObjectFactToAction(),
+    MoveObjectFactToAction(),
+    MoveSpriteFactToAction(),
+    CropSpriteFactToAction(),
+    FixSymmetryFactToAction(),
+    LightCycleFactToAction(),
+    CellularAutomatonFactToAction(),
+    ConditionalObjectFactToAction(),
 ]

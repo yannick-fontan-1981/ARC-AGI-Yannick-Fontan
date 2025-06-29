@@ -70,6 +70,7 @@ class Producer:
     useItemValue: Optional[bool] = False
     resultByTrainId: Dict[int, Any] = field(default_factory=dict)
     resultByTrainAndSpriteId: Dict[Tuple[int, int], Any] = field(default_factory=dict)
+    cumulValueMap: Dict[int, List[int]] = field(default_factory=dict)
     criteria: List[Tuple[str, Any, int]] = field(default_factory=list)
 
 @dataclass

@@ -130,8 +130,8 @@ def run_analysis_scripts(
         "first_sight"        : os.path.join(PROJECT_ROOT, "pattern-finder", "first_sight_analysis.py"),
         "sprite"             : os.path.join(PROJECT_ROOT, "pattern-finder", "sprite_analysis.py"),
         "object"             : os.path.join(PROJECT_ROOT, "pattern-finder", "object_analysis.py"),
-        #"light_cycle"        : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
-        #"cellular_automaton" : os.path.join(PROJECT_ROOT, "pattern-finder", "cellular_automaton_analysis.py"),
+        "light_cycle"        : os.path.join(PROJECT_ROOT, "pattern-finder", "light_cycle_analysis.py"),
+        "cellular_automaton" : os.path.join(PROJECT_ROOT, "pattern-finder", "cellular_automaton_analysis.py"),
     }
 
     for which, script_path in scripts.items():
@@ -555,7 +555,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "9172f3a0"
     #DEFAULT_TASK_ID = "a416b8f3"
     #DEFAULT_TASK_ID = "b1948b0a"
-    #DEFAULT_TASK_ID = "c8f0f002"
+    #DEFAULT_TASK_ID = "c8f0f002" # recolor
     #DEFAULT_TASK_ID = "c59eb873"
     #DEFAULT_TASK_ID = "d10ecb37"
     #DEFAULT_TASK_ID = "d10ecb37_crop"
@@ -604,11 +604,11 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "7468f01a" # move sprite + flip horizontal
     #DEFAULT_TASK_ID = "662c240a" # select sprite not having diagonal symetry
     #DEFAULT_TASK_ID = "42a50994" # cellular automation, delete pixel surround by black
-    DEFAULT_TASK_ID = "56ff96f3" # draw rect from minXY pixel to maxXY pixel !
+    #DEFAULT_TASK_ID = "56ff96f3" # Producer ! recolor, from minXY pixel to maxXY pixel !
     #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
     #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
     #DEFAULT_TASK_ID = "46f33fce_simple" # cellular automation with no orientation_invariant
-     #DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
+    DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
      #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
      #DEFAULT_TASK_ID = "a79310a0" # move + recolor
      #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!

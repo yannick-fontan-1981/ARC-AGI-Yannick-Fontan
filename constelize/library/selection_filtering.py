@@ -44,8 +44,16 @@ def produce_dict(
         return out
 
     # Concrete recolor selection function
-    def select_recolor(trainId: int, spriteId: int, criteria: List[tuple], tbl: Dict[int, Dict[str, Any]]) -> List[Any]:
+    def select_recolor(
+            trainId: int,
+            spriteId: int,
+            criteria: List[tuple],
+            tbl: Dict[int, Dict[str, Any]],
+            raw_arr: List[int],
+            cumulValueMap: Dict[int, List[int]] = None) -> List[Any]:
         print(f"🔎 SelectRecolorFunction → trainId={trainId}, spriteId={spriteId}, criteria={criteria}")
+        if cumulValueMap is not None:
+            print(f"    cumulValueMap for this producer → {cumulValueMap!r}")
         result: List[Any] = []
         row = tbl.get(spriteId)
         if row is None or row.get('trainId') != trainId:
@@ -55,6 +63,15 @@ def produce_dict(
             v = row.get(col)
             print(f"    {col} → {v!r}")
             result.append(v)
+        if not result and cumulValueMap:
+            fallback: List[Any] = []
+            for fr in raw_arr:
+                if fr in cumulValueMap:
+                    vals = cumulValueMap[fr]
+                    print(f"⚠️ fallback add cumulValueMap[{fr}] → {vals}")
+                    fallback.extend(vals)
+            if fallback:
+                return fallback
         print(f"🔍 Recolor values: {result}")
         return result
 
@@ -69,10 +86,30 @@ def produce_dict(
             print(f"{indent}  [LIST] attribute '{prod.attribute}' → {raw_arr}")
             # compute all 'To' values via select_recolor once
             sprite_id = row_context.get('id') or row_context.get('origin_sprite_id') or row_context.get('sprite_id')
-            to_list = select_recolor(trainId, sprite_id, prod.maps['To'].criteria, tables[table_key])
+            to_list = select_recolor(
+                trainId,
+                sprite_id,
+                prod.maps['To'].criteria,
+                tables[table_key],
+                raw_arr=raw_arr,
+                cumulValueMap=prod.maps['To'].cumulValueMap
+            )
+            print(f"{indent}  [LIST] raw Arr → {raw_arr}, To List → {to_list}")
+
+            # 3) if fallback happened, align raw_arr to only those keys that exist in cumulValueMap
+            if len(to_list) != len(raw_arr):
+                valid_keys = set(prod.maps['To'].cumulValueMap.keys())
+                raw_arr = [v for v in raw_arr if v in valid_keys]
+                print(f"{indent}  [LIST] fallback trim raw_arr → {raw_arr}")
+
             print(f"{indent}  [LIST] zipped From/To pairs → {list(zip(raw_arr, to_list))}")
+
+            # 4) build the output, skipping identity or missing
             out = []
             for v, to_val in zip(raw_arr, to_list):
+                if v is None or to_val is None or v == to_val:
+                    print(f"{indent}    skip pair {{'From':{v}, 'To':{to_val}}}")
+                    continue
                 elem = {'From': v, 'To': to_val}
                 print(f"{indent}    pair {{'From':{v}, 'To':{to_val}}}")
                 out.append(elem)
