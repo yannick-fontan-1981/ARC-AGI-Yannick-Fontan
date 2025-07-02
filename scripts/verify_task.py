@@ -8,7 +8,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict
-from typing import Set, Tuple, List, Iterable, Mapping
+from typing import Set, Tuple, List, Iterable, Mapping, Dict
 
 from joblib._multiprocessing_helpers import mp
 
@@ -24,7 +24,7 @@ from constelize.tools.pattern_analysis import (
     generate_draft_procedure,
     evaluate_generic_procedures,
     load_arc_json, generate_submission_file, compare_submission_to_arc_outputs, print_test_results,
-    generate_action_instances_from_db, evaluate_generic_procedures_on_scenarios, print_test_results_by_scenario,
+    generate_action_instances_from_db, evaluate_generic_scenarios_on_tests, print_test_results_by_scenario,
     generate_submission_file_from_scenarios, preprocess_arc_with_action, compute_get_start_input,
     compute_buffer_and_repaint,
 )
@@ -94,11 +94,16 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 start_time = time.time()
 
-_unique_scenario_id = 0
-def getUniqueScenarioId() -> str:
-    global _unique_scenario_id
-    _unique_scenario_id += 1
-    return str(_unique_scenario_id)
+_unique_scenario_ids: Dict[str, int] = {}
+
+def getUniqueScenarioId(action_id: str) -> str:
+    """
+    Return a unique incremental ID (as string) for the given action_id.
+    Each action_id has its own counter starting from 1.
+    """
+    count = _unique_scenario_ids.get(action_id, 0) + 1
+    _unique_scenario_ids[action_id] = count
+    return str(count)
 
 _unique_rule_id = 0
 def getUniqueRuleId() -> str:
@@ -148,65 +153,130 @@ def run_analysis_scripts(
         except subprocess.CalledProcessError as e:
             print(f"⚠️ Analysis script {which} exited with code {e.returncode}; continuing.")
 
-def split_action_instances_in_scenarios(action_instances, current_scenario):
-    # 1) Collect all trainIds
+
+def split_action_instances_in_scenarios(data: dict, action_instances: List, current_scenario) -> List:
+    """
+    For each action.id flagged IN_SEPARATE_RULE across all trains:
+      1) Draft procedures with constant bindings resolved
+      2) Normalize drafts topologically to respect binding order
+      3) Squeeze into a single generic procedure
+      4) Assign each raw instance its scenarioId and pre-ruleId
+      5) Attach the generic proc under the pre-rule and link to the main rule
+      6) Build and attach a post-procedure invoking any revert_action
+    Return the remainder.
+    """
+    # 1) gather all trainIds
     train_ids = {inst.trainId for inst in action_instances if inst.isTrain}
 
-    # 2) Bucket the flagged instances by action.id
-    by_in_separate_rule_action = defaultdict(list)
+    # 2) group by action.id
+    groups = defaultdict(list)
     for inst in action_instances:
-        if inst.IN_SEPARATE_RULE:
-            by_in_separate_rule_action[inst.action.id].append(inst)
+        if getattr(inst, 'IN_SEPARATE_RULE', False):
+            groups[inst.action.id].append(inst)
 
-    # 3) Only keep those whose bucket covers *every* train
-    pre_groups = {
-        aid: insts
-        for aid, insts in by_in_separate_rule_action.items()
-        if {i.trainId for i in insts} == train_ids
-    }
+    # 3) keep only full groups
+    valid_groups = {aid: insts for aid, insts in groups.items() if {i.trainId for i in insts} == train_ids}
 
-    # 4) Everything else stays in the “rest”
-    rest = [inst for inst in action_instances
-            if inst.action.id not in pre_groups]
+    # 4) instances not in valid_groups remain
+    rest = [inst for inst in action_instances if inst.action.id not in valid_groups]
 
-    for action_id, instances in pre_groups.items():
-        rule_by_separate_action = Rule(id=f"rule_pre_{action_id}_{getUniqueRuleId()}")
-        rulePreId = rule_by_separate_action.id
-        scenario_by_separate_action = Scenario(
-            id=f"scenario_{action_id}_{getUniqueScenarioId()}",
-            rules={rule_by_separate_action.id: rule_by_separate_action}
+    # 5) process each valid group
+    for action_id, insts in valid_groups.items():
+        # a) create pre, main, and post rules
+        rule_pre_id  = f"rule_pre_{action_id}_{getUniqueScenarioId(action_id)}"
+        rule_main_id = f"rule_main_{getUniqueScenarioId(action_id)}"
+        rule_post_id = f"rule_post_{action_id}_{getUniqueScenarioId(action_id)}"
+
+        rule_pre  = Rule(id=rule_pre_id)
+        rule_main = Rule(id=rule_main_id)
+        rule_post = Rule(id=rule_post_id)
+
+        # b) new scenario with all rules
+        scen_id = f"scenario_{action_id}_{getUniqueScenarioId(action_id)}"
+        scenario = Scenario(
+            id=scen_id,
+            rules={rule_pre_id: rule_pre, rule_main_id: rule_main, rule_post_id: rule_post}
         )
-        scenarioId = scenario_by_separate_action.id
-        all_proc_train = []
-        for inst in instances:
-            steps = {inst.id: inst}
-            proc_train = Procedure(id=f"proc_pre_{action_id}_train_{inst.trainId}", steps=steps, scenarioId=scenarioId, ruleId=rulePreId)
-            all_proc_train.append(proc_train)
-        generic_procs = squeeze_with_unresolved(all_proc_train, scenarioId, rulePreId)
-        if not generic_procs:
-            print(f"⚠️ split_action_instances: pas de procédures générées pour '{action_id}', on skip")
+        if scen_id.endswith("_3"):
+            print(f"scenario aborted: {scen_id}")
             continue
+
+        # c) assign raw instances to pre-rule
+        for inst in insts:
+            inst.scenarioId = scen_id
+            inst.ruleId     = rule_pre_id
+
+        # d) generate drafts
+        draft = generate_draft_procedure(insts, data, scen_id, rule_pre)
+        if isinstance(draft, Procedure):
+            draft_list = [draft]
+        elif isinstance(draft, dict):
+            draft_list = [p for p in draft.values() if isinstance(p, Procedure)]
+        else:
+            print(f"⚠️ split: unexpected draft type for '{action_id}'")
+            continue
+
+        if not draft_list:
+            print(f"⚠️ split: no draft procedures for '{action_id}'")
+            continue
+
+        # e) normalize and squeeze
+        normalized_procs = normalize_procedures_with_levels(draft_list, scen_id, rule_pre_id)
+        generic_procs    = squeeze_with_unresolved(normalized_procs, scen_id, rule_pre_id)
+        if not generic_procs:
+            print(f"⚠️ split: squeeze yielded none for '{action_id}'")
+            continue
+
+        # f) attach generic proc under pre-rule
         generic_proc = generic_procs[0]
         if not generic_proc.steps:
-            print(f"⚠️ split_action_instances: generic_proc sans steps pour '{action_id}', on skip")
+            print(f"⚠️ split: generic_proc has no steps for '{action_id}'")
             continue
-        generic_action = next(iter(generic_proc.steps.values()))
-        generic_proc.action_producing_output = generic_action
-        rule_by_separate_action.procedures = generic_procs
-        rule_by_separate_action.generic_procs = generic_procs
-        rule_by_separate_action.proc_producing_output = generic_proc
-        rule_main = Rule(id=f"rule_main_{getUniqueRuleId()}")
-        ruleMainId = rule_main.id
-        rule_main.rule_producing_input = rule_by_separate_action
-        scenario_by_separate_action.rules = {
-            rulePreId: rule_by_separate_action,
-            ruleMainId: rule_main
-        }
-        scenario_by_separate_action.rule_to_launch_before = rule_by_separate_action
-        scenario_by_separate_action.rule_to_analyse = rule_main
-        current_scenario.to_launch_next.append(scenario_by_separate_action)
-        GLOBAL.all_scenarios.append(scenario_by_separate_action)
+        rule_pre.procedures             = generic_procs
+        rule_pre.proc_producing_output = generic_proc
+        generic_proc.action_producing_output = next(iter(generic_proc.steps.values()))
+
+        # g) build post-procedure invoking revert_action
+        post_steps: Dict[str, ActionInstance] = {}
+        revert_action: ActionInstance = None
+        for step in generic_proc.steps.values():
+            if hasattr(step, 'revert_action') and step.revert_action:
+                revert_action = ActionInstance(
+                    id=f"{step.id}_revert",
+                    action=step.revert_action,
+                    bindings=step.revert_bindings,
+                    output_var=step.output_var,
+                    output_type=step.output_type,
+                    trainId=step.trainId,
+                    testId=step.testId,
+                    isTrain=step.isTrain,
+                    isToOutput=False
+                )
+                post_steps[revert_action.id] = revert_action
+        if post_steps and revert_action:
+            post_proc = Procedure(
+                id=f"proc_post_{action_id}",
+                steps=post_steps,
+                scenarioId=scen_id,
+                ruleId=rule_post_id,
+                action_producing_output=revert_action
+            )
+
+            rule_post.procedures = [post_proc]
+            rule_post.proc_producing_output = post_proc
+
+        # h) link scenario execution order
+        scenario.rule_to_launch_before = rule_pre
+        scenario.rule_to_analyse       = rule_main
+        scenario.rule_to_launch_after  = rule_post
+
+        # i) enqueue scenario
+        current_scenario.to_launch_next.append(scenario)
+        GLOBAL.all_scenarios.append(scenario)
+
     return rest
+
+
 
 # --------------------------------------------------
 # Main test_file logic without internal timeout
@@ -222,7 +292,7 @@ def test_file(
 ):
     first_rule = Rule(id=f"rule_{getUniqueRuleId()}")
     first_scenario = Scenario(
-        id=f"scenario_{getUniqueScenarioId()}",
+        id=f"scenario_{getUniqueScenarioId('first')}",
         rules={first_rule.id: first_rule},
     )
     GLOBAL.all_scenarios.append(first_scenario)
@@ -259,7 +329,7 @@ def test_file(
     # At least one generic proc passed training; if there's a test set, compare now
     if valid_scenario:
         print("🎯 Running successful procedure(s) on test set...")
-        results_by_scenario = evaluate_generic_procedures_on_scenarios("test", data, valid_scenario)
+        results_by_scenario = evaluate_generic_scenarios_on_tests(data, valid_scenario)
         print_test_results_by_scenario(results_by_scenario, results_path, data)
         generate_submission_file_from_scenarios(task_id, valid_scenario, data, submission_path, db_path, results_by_scenario)
         # our updated compare now returns True if any attempt succeeded
@@ -309,6 +379,9 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     # 4) re‐dump to a single JSON string
     raw_with_sprites = json.dumps(payload)
 
+    print("raw_with_sprites")
+    print(raw_with_sprites)
+
     run_analysis_scripts(raw_with_sprites, inline=True, name=json_path)
 
     # 2) inject the sqlite‐derived attributes
@@ -332,7 +405,7 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
     #print("_attrs_color")
     #print(_attrs_color)
     print(f"\n📥 [generate_draft_procedure] Loading from DB: {db_path} and JSON: {json_path}")
-    action_instances = generate_action_instances_from_db(db_path, scenarioId, current_rule)
+    action_instances = generate_action_instances_from_db(data, db_path, scenarioId, current_rule)
 
     #print("exit(0)")
     #exit(0)
@@ -341,7 +414,7 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
 
 
     compute_buffer_and_repaint(action_instances, ruleId, scenarioId)
-    rest_action_instances = split_action_instances_in_scenarios(action_instances, current_scenario)
+    rest_action_instances = split_action_instances_in_scenarios(data, action_instances, current_scenario)
     procedures = generate_draft_procedure(rest_action_instances, data, scenarioId, current_rule)
     # debug: list initial steps
 
@@ -409,6 +482,10 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
 
     current_rule.generic_procs = pruned
 
+    #if current_scenario.id == "scenario_unzoom_1":
+    #    print("exit")
+    #    exit(0)
+
     if not successful:
         print("❌ No successful procedures found.")
 
@@ -418,8 +495,14 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
             if scenario.id == "scenario_denoise_3":
                 print(f"scenario aborted: {scenario.id}")
                 continue
+            if scenario.id == "scenario_unzoom_3":
+                print(f"scenario aborted: {scenario.id}")
+                continue
             pre_rule = scenario.rule_to_launch_before
             generic_proc = pre_rule.proc_producing_output
+
+            print( "1 !!! generic_proc.action_producing_output" )
+
             action_inst = generic_proc.action_producing_output
             new_arc_data = preprocess_arc_with_action(data, action_inst)
             new_raw_json = json.dumps(new_arc_data)
@@ -608,7 +691,7 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
     #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
     #DEFAULT_TASK_ID = "46f33fce_simple" # cellular automation with no orientation_invariant
-    DEFAULT_TASK_ID = "46f33fce" # cellular automation + zoom ?
+    DEFAULT_TASK_ID = "46f33fce" # unzoom train output + cellular automation ?
      #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
      #DEFAULT_TASK_ID = "a79310a0" # move + recolor
      #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!
@@ -754,3 +837,4 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "a61f2674" # size order : small=red, middle=bg, greater=blue, greater ?!
 
     # Training 9
+

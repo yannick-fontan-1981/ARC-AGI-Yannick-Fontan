@@ -15,6 +15,7 @@ class Scenario:
     comment: Optional[str] = None
     rule_to_launch_before: Rule = None
     rule_to_analyse: Rule = None
+    rule_to_launch_after: Rule = None
     to_launch_next: List["Scenario"] = field(default_factory=list)
     from_fallback: Optional[bool] = False
     new_sprites: Dict[str, List[Tuple[Tuple[int, ...], ...]]] = field(default_factory=dict)

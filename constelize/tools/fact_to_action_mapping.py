@@ -3440,6 +3440,104 @@ class ConditionalObjectFactToAction(FactToActionMapping):
             END=False
         )
 
+class ZoomOutTrainFactToAction(FactToActionMapping):
+    def __init__(self):
+        # assume you have an 'unzoom' action registered
+        super().__init__("zoom_out_train", "unzoom")
+        self.test_function  = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn: sqlite3.Connection) -> list[dict]:
+        """
+        For each trainId, check that output is an integer zoom of input:
+         - input strictly smaller in both dims
+         - output_dim % input_dim == 0
+         - every block of size (zoom_y × zoom_x) in output is uniform
+        Returns one row per train with zoom_x, zoom_y and the JSON-encoded unzoomed grid.
+        """
+        rows = []
+        for trainId, inp in TRAIN_INPUT_GRIDS.items():
+            out = TRAIN_OUTPUT_GRIDS.get(trainId)
+            if out is None:
+                # missing output → abort
+                return []
+            h_in = len(inp);            w_in = len(inp[0]) if h_in else 0
+            h_out = len(out);           w_out = len(out[0]) if h_out else 0
+            # strictly smaller
+            if h_in >= h_out or w_in >= w_out:
+                return []
+            # integer factors?
+            if h_out % h_in != 0 or w_out % w_in != 0:
+                return []
+            zy = h_out // h_in
+            zx = w_out // w_in
+            # verify each block is uniform
+            for i in range(h_in):
+                for j in range(w_in):
+                    base = out[i*zy][j*zx]
+                    for di in range(zy):
+                        for dj in range(zx):
+                            if out[i*zy + di][j*zx + dj] != base:
+                                return []
+            # build the “unzoomed” grid by sampling top-left of each block
+            unzoomed = [[ out[i*zy][j*zx] for j in range(w_in) ] for i in range(h_in)]
+            # this action is not needed if a zoom of the input is enough
+            if unzoomed == inp:
+                continue
+            rows.append({
+                "trainId":      trainId,
+                "zoom_x":       zx,
+                "zoom_y":       zy,
+                "unzoom_grid":  json.dumps(unzoomed),
+            })
+        return rows
+
+    def _build_function(self, row: dict) -> ActionInstance:
+        """
+        Bind:
+          - grid    := the zoomed (output) grid
+          - zoom_x
+          - zoom_y
+        Produce:
+          unzoomed_grid (should match original input)
+        """
+        trainId = row["trainId"]
+        zx      = int(row["zoom_x"])
+        zy      = int(row["zoom_y"])
+        # the action expects the zoomed grid as its “grid” input
+        output_grid    = TRAIN_OUTPUT_GRIDS[trainId]
+        unzoomed = json.loads(row["unzoom_grid"])
+        action = registry.get_by_id(self.action_id)
+        revert_action = registry.get_by_id("zoom")
+
+        print("grid_to_pretty_string(unzoomed)")
+        print(grid_to_pretty_string(unzoomed))
+
+        return ActionInstance(
+            id=f"zoom_out_train_{trainId}#{getUniqueId()}",
+            action=action,
+            bindings={
+                "grid":   ArgumentBinding(name="grid",   type="Grid",    binding=BindingStatus.OUTPUT_GRID, value=output_grid),
+                "zoom_x": ArgumentBinding(name="zoom_x", type="Integer", binding=BindingStatus.UNRESOLVED,  value=zx),
+                "zoom_y": ArgumentBinding(name="zoom_y", type="Integer", binding=BindingStatus.UNRESOLVED,  value=zy),
+            },
+            revert_action=revert_action,
+            revert_bindings={
+                "grid":   ArgumentBinding(name="grid",   type="Grid",    binding=BindingStatus.END_GRID,    value=unzoomed),
+                "zoom_x": ArgumentBinding(name="zoom_x", type="Integer", binding=BindingStatus.CONTEXT,     value=zx),
+                "zoom_y": ArgumentBinding(name="zoom_y", type="Integer", binding=BindingStatus.CONTEXT,     value=zy)
+            },
+            output_var="unzoomed_grid",
+            output_value=unzoomed,
+            output_type="Grid",
+            trainId=trainId,
+            testId=-1,
+            isTrain=True,
+            isToOutput=True,
+            IN_SEPARATE_RULE=True,
+            MODIFY_TRAIN_OUTPUT=True,
+        )
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -3467,4 +3565,5 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     LightCycleFactToAction(),
     CellularAutomatonFactToAction(),
     ConditionalObjectFactToAction(),
+    ZoomOutTrainFactToAction(),
 ]

@@ -12,6 +12,7 @@ from scripts.verify_task import test_file as vt_test_file, run_with_timeout, Tim
 # Paths configuration
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 DONE_DIR = os.path.join(PROJECT_ROOT, "pattern-finder", "data", "done")
+#DONE_DIR = os.path.join(PROJECT_ROOT, "pattern-finder", "data", "evaluation")
 DB_PATH = os.path.join(PROJECT_ROOT, "db", "database.db")
 ORIG_DB = DB_PATH + ".orig"
 

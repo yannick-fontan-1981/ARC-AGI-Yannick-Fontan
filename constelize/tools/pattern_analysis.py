@@ -58,11 +58,15 @@ def extract_bg_colors_from_template(
                 colors.add(actual[i][j])
     return colors
 
-def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rule: Rule) -> List:
+def generate_action_instances_from_db(data, db_path: str, scenarioId: str, current_rule: Rule) -> List:
     ruleId = current_rule.id
     conn = sqlite3.connect(db_path)
 
     action_instances = []
+
+    train_output_grids: Dict[int, any] = {}
+    for trainId, item in enumerate(data.get("train", [])):
+        train_output_grids[trainId] = item["output"]
 
     for mapping in FACT_TO_ACTION_MAPPING:
         mapping.current_rule = current_rule
@@ -78,9 +82,9 @@ def generate_action_instances_from_db(db_path: str, scenarioId: str, current_rul
                     row["ruleId"] = ruleId
                     instance = mapping.build_function(row)
                     action_instances.append(instance)
-                    if concrete_grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
+                    if concrete_grids_equal(instance.output_value, train_output_grids[instance.trainId]):
                         instance.END = True
-                    if instance.action and instance.action.id == "move_object" and grids_equal(instance.output_value, TRAIN_OUTPUT_GRIDS[instance.trainId]):
+                    if instance.action and instance.action.id == "move_object" and grids_equal(instance.output_value, train_output_grids[instance.trainId]):
                         if instance.action.id == "move_object":
                             print("extract_bg_colors_from_template")
                         # 1) look up all the real colors under the “-1” or “-8” holes in our template
@@ -1491,15 +1495,18 @@ def preprocess_arc_with_action(arc_data: dict, action_inst) -> dict:
     # Transform the train set
     new_train = []
     for train_idx, ex in enumerate(arc_data["train"]):
-        inp = ex["input"]
+        input = ex["input"]
+        output = ex["output"]
         # Build kwargs from bindings:
         # - INPUT_GRID → the example’s grid
         # - CONTEXT trainId/testId → override based on this loop
         # - other constants/INSTANCE → use binding.value
         kwargs = {}
         for name, binding in action_inst.bindings.items():
-            if binding.binding == BindingStatus.INPUT_GRID:
-                kwargs[name] = inp
+            if binding.binding == BindingStatus.OUTPUT_GRID:
+                kwargs[name] = output
+            elif binding.binding == BindingStatus.INPUT_GRID:
+                kwargs[name] = input
             elif binding.binding == BindingStatus.CONTEXT:
                 if name == "trainId":
                     kwargs[name] = train_idx
@@ -1512,45 +1519,82 @@ def preprocess_arc_with_action(arc_data: dict, action_inst) -> dict:
 
         # Call the action function with full kwargs (fall back to single-arg)
         try:
-            out = fn(**kwargs)
+            result = fn(**kwargs)
         except TypeError:
-            out = fn(inp)
+            if action_inst.MODIFY_TRAIN_OUTPUT:
+                result = fn(output)
+            else:
+                result = fn(input)
 
-        new_train.append({
-            "input": out,
-            "output": ex["output"]
-        })
+        if action_inst.MODIFY_TRAIN_OUTPUT:
+            new_train.append({
+                "input": input,
+                "output": result
+            })
+        else:
+            new_train.append({
+                "input": result,
+                "output": output
+            })
 
-    # Transform the test set (if any)
-    new_test = []
-    for test_idx, ex in enumerate(arc_data.get("test", [])):
-        inp = ex["input"]
-        kwargs = {}
-        for name, binding in action_inst.bindings.items():
-            if binding.binding == BindingStatus.INPUT_GRID:
-                kwargs[name] = inp
-            elif binding.binding == BindingStatus.CONTEXT:
-                if name == "trainId":
-                    kwargs[name] = -1
-                elif name == "testId":
-                    kwargs[name] = test_idx
+    if action_inst.MODIFY_TRAIN_OUTPUT:
+        new_test = arc_data.get("test", [])
+    else:
+        # Transform the test set (if any)
+        new_test = []
+        for test_idx, ex in enumerate(arc_data.get("test", [])):
+            input = ex["input"]
+            kwargs = {}
+            for name, binding in action_inst.bindings.items():
+                if binding.binding == BindingStatus.INPUT_GRID:
+                    kwargs[name] = input
+                elif binding.binding == BindingStatus.CONTEXT:
+                    if name == "trainId":
+                        kwargs[name] = -1
+                    elif name == "testId":
+                        kwargs[name] = test_idx
+                    else:
+                        kwargs[name] = binding.value
                 else:
                     kwargs[name] = binding.value
-            else:
-                kwargs[name] = binding.value
 
-        try:
-            out = fn(**kwargs)
-        except TypeError:
-            out = fn(inp)
+            try:
+                result = fn(**kwargs)
+            except TypeError:
+                result = fn(input)
 
-        new_test.append({"input": out})
+            new_test.append({"input": result})
+
+    print("new_train")
+    print(new_train)
+
+    print("new_test")
+    print(new_test)
 
     return {"train": new_train, "test": new_test}
 
+def execute_action_instance(inst: ActionInstance, grid):
+    """
+    Execute a single ActionInstance on the given grid and return the resulting output grid.
 
+    Steps:
+      1. Deep-copy the instance to avoid mutating shared state.
+      2. Override its 'grid' binding with the provided grid.
+      3. Extract binding values as kwargs for action.function.
+      4. Call the action's function and return its result.
+    """
+    from copy import deepcopy
+    # Clone to avoid side-effects
+    inst_copy = deepcopy(inst)
+    # Override grid binding
+    if 'grid' in inst_copy.bindings:
+        inst_copy.bindings['grid'].value = grid
+    # Build kwargs for the action call
+    kwargs = {name: binding.value for name, binding in inst_copy.bindings.items()}
+    # Call the action and return its output (assumed to be a grid)
+    return inst_copy.action.function(**kwargs)
 
-def evaluate_generic_procedures_on_scenarios(mode: str, data: dict, scenarios: list):
+def evaluate_generic_scenarios_on_tests(data: dict, scenarios: list):
     """
     Évalue un lot de procédures génériques par scénario.
 
@@ -1562,6 +1606,7 @@ def evaluate_generic_procedures_on_scenarios(mode: str, data: dict, scenarios: l
     Returns:
         Dict[scenario_id] → liste des résultats d’évaluation
     """
+    mode = "test"
     results_by_scenario = {}
 
     for scenario in scenarios:
@@ -1570,22 +1615,52 @@ def evaluate_generic_procedures_on_scenarios(mode: str, data: dict, scenarios: l
         if hasattr(scenario, "rule_to_launch_before") and scenario.rule_to_launch_before:
             pre_rule = scenario.rule_to_launch_before
             generic_proc = pre_rule.proc_producing_output
+
+            print( "2 !!! generic_proc.action_producing_output" )
             action_inst = generic_proc.action_producing_output
 
-            print(f"⚙️ Preprocessing scenario with action from rule '{pre_rule.id}'...")
-            new_arc_data = preprocess_arc_with_action(data, action_inst)
-
             main_rule = scenario.rule_to_analyse
-            print(f"➡️  Evaluating main rule '{main_rule.id}' with {len(main_rule.generic_procs)} procs")
 
-            results = evaluate_generic_procedures(
-                mode=mode,
-                procedures=main_rule.generic_procs,
-                data=new_arc_data,
-                scenarioId=scenario.id,
-                ruleId="*",
-            )
-            results_by_scenario[scenario.id] = results
+            if scenario.rule_to_launch_after and scenario.rule_to_launch_after.proc_producing_output :
+
+                results = evaluate_generic_procedures(
+                    mode=mode,
+                    procedures=main_rule.generic_procs,
+                    data=data,
+                    scenarioId=scenario.id,
+                    ruleId="*",
+                )
+                results_by_scenario[scenario.id] = results
+
+                # 2) now inject the revert step
+                post_proc = scenario.rule_to_launch_after.proc_producing_output
+                print("3 !!! post_proc.action_producing_output")
+                action_post = post_proc.action_producing_output
+
+                for r in results:
+                    # only do this for the *non-revert* steps
+                    if r["procedure_id"] == post_proc.id:
+                        continue
+                    # grab the grid produced by the main proc
+                    original_grid = r["evaluated_output"]
+                    # (re-)execute that one step
+                    new_grid = execute_action_instance(action_post, original_grid)
+                    # overwrite
+                    r["evaluated_output"] = new_grid
+                    print("new_grid after post")
+                    print(grid_to_pretty_string(new_grid))
+            else:
+                print(f"⚙️ Preprocessing scenario with action from rule '{pre_rule.id}'...")
+                new_arc_data = preprocess_arc_with_action(data, action_inst)
+                print(f"➡️  Evaluating main rule '{main_rule.id}' with {len(main_rule.generic_procs)} procs")
+                results = evaluate_generic_procedures(
+                    mode=mode,
+                    procedures=main_rule.generic_procs,
+                    data=new_arc_data,
+                    scenarioId=scenario.id,
+                    ruleId="*",
+                )
+                results_by_scenario[scenario.id] = results
 
             # 🔁 Répartition dans le rule cible uniquement
             proc_result_map = defaultdict(list)
@@ -2132,6 +2207,7 @@ def count_blocks(grid):
     try:
         return len(blocks(grid))
     except Exception as e:
+        traceback.print_exc()
         raise RuntimeError(f"[count_blocks] failed on grid {grid}: {e}")
 
 def count_zones(grid):
@@ -2147,6 +2223,7 @@ def count_colors(grid):
         return len({cell for row in grid for cell in row})
     except Exception as e:
         # re-raise with more context
+        traceback.print_exc()
         raise RuntimeError(f"[count_colors] failed on grid of size "
                            f"{len(grid)}×{(len(grid[0]) if grid else 0)}: {e}")
 def count_unique_block_shapes(grid):
@@ -2547,6 +2624,8 @@ def pick_the_2_most_similar_by_ratio_diff(
 
     # 4) Pick top two
     if not scored:
+        print("No candidates to score (unique_grids was empty)")
+        traceback.print_exc()
         raise ValueError("No candidates to score (unique_grids was empty)")
     scored.sort(key=lambda x: x[0])
     top_two = [grid for _, grid in scored[:2]]
@@ -2589,6 +2668,8 @@ def generate_submission_file(task_id: str, generic_procs: List[Procedure], arc_d
         elif isinstance(test_data, dict):
             test_iter = ((int(k), v) for k, v in test_data.items())
         else:
+            print("Unsupported test format: must be list or dict")
+            traceback.print_exc()
             raise ValueError("Unsupported test format: must be list or dict")
 
         for testId, test_entry in test_iter:
@@ -2826,6 +2907,8 @@ def resolve_binding_recursive(binding, context, input_grid, step):
                 for sub_binding in binding.sub_bindings
             ]
         else:
+            print("Unexpected sub_bindings type encountered.")
+            traceback.print_exc()
             raise ValueError("Unexpected sub_bindings type encountered.")
 
 

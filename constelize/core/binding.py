@@ -11,6 +11,8 @@ class BindingStatus(Enum):
     INSTANCE = auto()       # attribute of the action instance
     MULTIPLE = auto()       # Requires candidate expansion.
     INPUT_GRID = auto()     # To be injected from JSON input.
+    OUTPUT_GRID = auto()    # To be injected from JSON input.
+    END_GRID = auto()       # successful Grid for post rule
     CONTEXT = auto()        # Externally provided metadata, e.g. trainId/testId.
     COMPOUND = auto()       # Structured binding for composite types.
     BUFFER = auto()         # Common buffer to produce the output.

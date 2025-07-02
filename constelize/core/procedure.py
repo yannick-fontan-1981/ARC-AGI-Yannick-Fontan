@@ -10,12 +10,14 @@ from constelize.dsl.grid_dsl import Grid
 class ActionInstance:
     id: str
     action: Action
+    revert_action: Optional[Action] = None
     scenarioId: Optional[str] = None
     ruleId: Optional[str] = None
     trainId: Optional[int] = None
     testId: Optional[int] = None
     isTrain: Optional[bool] = None
     bindings: Dict[str, Any] = field(default_factory=dict)
+    revert_bindings: Dict[str, Any] = field(default_factory=dict)
     producers: Dict[str, Producer] = field(default_factory=dict)
     isFromInput: Optional[bool] = None
     isToOutput: Optional[bool] = None
@@ -32,6 +34,7 @@ class ActionInstance:
     bufferInstance: "ActionInstance" = None
     END: bool = False
     IN_SEPARATE_RULE: bool = False
+    MODIFY_TRAIN_OUTPUT: bool = False
 
     def get_unresolved_bindings(self) -> set[str]:
         return {
