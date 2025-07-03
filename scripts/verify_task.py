@@ -498,6 +498,9 @@ def generate_scenarios_and_rules(current_scenario, current_rule, data, db_path, 
             if scenario.id == "scenario_unzoom_3":
                 print(f"scenario aborted: {scenario.id}")
                 continue
+            if scenario.id == "scenario_shrink_input_3":
+                print(f"scenario aborted: {scenario.id}")
+                continue
             pre_rule = scenario.rule_to_launch_before
             generic_proc = pre_rule.proc_producing_output
 
@@ -691,9 +694,10 @@ if __name__ == "__main__":
     #DEFAULT_TASK_ID = "50cb2852" # for each rect draw rect: posX+1, posY+1, width-2, height-2 !
     #DEFAULT_TASK_ID = "4347f46a" # for each rect draw rect: posX+1, posY+1, width-2, height-2
     #DEFAULT_TASK_ID = "46f33fce_simple" # cellular automation with no orientation_invariant
-    DEFAULT_TASK_ID = "46f33fce" # unzoom train output + cellular automation ?
-     #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
-     #DEFAULT_TASK_ID = "a79310a0" # move + recolor
+    #DEFAULT_TASK_ID = "46f33fce" # unzoom train output + cellular automation ?
+    #DEFAULT_TASK_ID = "a740d043_simple" # fill blue with black + shrink-canvas !
+    #DEFAULT_TASK_ID = "a740d043" # fill blue with black + shrink-canvas !
+    DEFAULT_TASK_ID = "a79310a0" # move + recolor
      #DEFAULT_TASK_ID = "aabf363d" # recolor with pixel alone + remove pixel alone, legend ?!
      #DEFAULT_TASK_ID = "ae4f1146" # select sprite with most blue ! Color#Order: 1#1 ? Or 9 cols: BlueOrder...
     #DEFAULT_TASK_ID = "b27ca6d3" # cellular automation

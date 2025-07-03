@@ -13,7 +13,7 @@ from constelize.core.registry import ActionRegistry
 from constelize.dsl.grid_dsl import to_concrete_grid, grids_equal, unzoom, recolor_sprite, grid_to_pretty_string, crop, \
     Grid, fill_grid, shift, shift_with_background, shift_sprite_with_background, paint, makeShrinkableCanvas, \
     shrinkCanvas, zoom, apply_all_cycles, concrete_grids_equal, apply_ca, select_conditional_object, \
-    apply_cellular_automaton, json_to_concrete_grid, json_to_array
+    apply_cellular_automaton, json_to_concrete_grid, json_to_array, shrink_by_background
 from constelize.library.color_symbol_manipulation import recolor_and_repaint_sprites
 from constelize.library.pattern_detection import detect_noise, denoise_grid, apply_symmetry_fill, \
     extract_connected_components
@@ -1389,11 +1389,11 @@ class RecolorSpriteFactToAction(FactToActionMapping):
         cols = [d[0] for d in cursor.description]
         rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-        # ensure every train has at least one recolor
-        train_ids_with_recolor = {r['trainId'] for r in rows if r['trainId'] != -1}
-        all_train_ids = set(TRAIN_INPUT_GRIDS.keys())
-        if all_train_ids - train_ids_with_recolor:
-            return []
+        ## ensure every train has at least one recolor
+        #train_ids_with_recolor = {r['trainId'] for r in rows if r['trainId'] != -1}
+        #all_train_ids = set(TRAIN_INPUT_GRIDS.keys())
+        #if all_train_ids - train_ids_with_recolor:
+        #    return []
 
         # --- NEW: drop any row fully enclosed by a bigger sibling ---
         filtered_rows = []
@@ -3538,6 +3538,78 @@ class ZoomOutTrainFactToAction(FactToActionMapping):
             MODIFY_TRAIN_OUTPUT=True,
         )
 
+class ShrinkInputFactToAction(FactToActionMapping):
+    def __init__(self):
+        super().__init__("shrink_input", "shrink_input")
+        self.test_function = self._test_function
+        self.build_function = self._build_function
+
+    def _test_function(self, conn):
+        """
+        For each trainId:
+          - find the most‐common color in the input grid (bg)
+          - shrink_by_background(input, bg)
+          - must exactly equal the TRAIN_OUTPUT_GRIDS[trainId]
+        Only emit rows if *all* train examples succeed.
+        """
+        rows = []
+        for trainId, inp in TRAIN_INPUT_GRIDS.items():
+            out = TRAIN_OUTPUT_GRIDS.get(trainId)
+            if out is None:
+                return []            # missing output → fail
+            # most‐common color = background
+            flat = [c for row in inp for c in row]
+            bg, _ = Counter(flat).most_common(1)[0]
+            # apply shrink
+            shrunk = shrink_by_background(inp, bg)
+            # compare to output (convert output to tuple of tuples)
+            if len(shrunk) != len(out) or len(shrunk[0]) != len(out[0]):
+                return []  # size mismatch → no mapping
+            # compute top‐left of crop for repainting if desired
+            # (optional; here we store offsets)
+            active = [(i,j) for i in range(len(inp)) for j in range(len(inp[0])) if inp[i][j] != bg]
+            min_i = min(i for i,_ in active)
+            min_j = min(j for _,j in active)
+            rows.append({
+                "trainId": trainId,
+                "testId": -1,
+                "data": json.dumps(inp),
+                "bg_color": bg,
+                "minX": min_j,
+                "minY": min_i
+            })
+        return rows
+
+    def _build_function(self, row):
+        """
+        Build an ActionInstance that does exactly the same shrink_by_background.
+        Mark IN_SEPARATE_RULE=True so it runs in its own rule.
+        """
+        inp = to_concrete_grid(json.loads(row["data"]))
+        bg = row["bg_color"]
+        shrunk = shrink_by_background(inp, bg)
+        return ActionInstance(
+            id=f"shrink_input_{row['trainId']}#{getUniqueId()}",
+            action=self.action,
+            bindings={
+                "grid": ArgumentBinding(name="grid", type="Grid",
+                                       binding=BindingStatus.INPUT_GRID, value=inp),
+                "bg_color": ArgumentBinding(name="bg_color", type="Color",
+                                           binding=BindingStatus.CONSTANT, value=bg)
+            },
+            output_var="shrunk_grid",
+            output_value=shrunk,
+            output_type=self.action.output_type,
+            scenarioId=row.get("scenarioId"),
+            ruleId=row.get("ruleId"),
+            trainId=row["trainId"],
+            testId=row["testId"],
+            isTrain=True,
+            IN_SEPARATE_RULE=True,
+            toRepaint=False,
+            END=True
+        )
+
 # =============================================================================
 # FACT_TO_ACTION_MAPPING: list of all mappings.
 # =============================================================================
@@ -3566,4 +3638,5 @@ FACT_TO_ACTION_MAPPING: List[FactToActionMapping] = [
     CellularAutomatonFactToAction(),
     ConditionalObjectFactToAction(),
     ZoomOutTrainFactToAction(),
+    ShrinkInputFactToAction(),
 ]

@@ -6,7 +6,7 @@ from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus
 from constelize.dsl.grid_dsl import rot90, rot180, rot270, hmirror, vmirror, rot90_then_hmirror, rot90_then_vmirror, \
     zoom, paint, Grid, crop, unzoom, shift_with_background, shift_sprite_with_background, makeShrinkableCanvas, \
-    shrinkCanvas
+    shrinkCanvas, shrink_by_background
 from typing import Tuple, Any, List, Dict, Optional
 
 
@@ -378,5 +378,20 @@ ACTIONS = [
         function=shift_sprite_with_background,
         deterministic=True,
         pure=True
-    )
+    ),
+    Action(
+        id="shrink_input",
+        name="Shrink Input",
+        description=(
+            "Crop away any outer rows or columns composed entirely of the given "
+            "background color (the most-common color in the original grid)."
+        ),
+        category=ActionCategory.SPATIAL_TRANSFORMATION,
+        input_arguments=[
+            ArgumentBinding(name="grid",     type="Grid",  binding=BindingStatus.INPUT_GRID),
+            ArgumentBinding(name="bg_color", type="Color", binding=BindingStatus.CONSTANT),
+        ],
+        output_type="Grid",
+        function=shrink_by_background
+    ),
 ]

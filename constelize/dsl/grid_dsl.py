@@ -253,6 +253,26 @@ def makeShrinkableCanvas(size: int = 30) -> Grid:
     """
     return tuple(tuple(-1 for _ in range(size)) for _ in range(size))
 
+def shrink_by_background(grid: Grid, bg_color: int) -> Grid:
+    """
+    Crop away any rows/cols at the top, bottom, left or right
+    that are entirely filled with bg_color.
+    """
+    H, W = len(grid), len(grid[0]) if grid else 0
+    # find all non-bg pixels
+    active = [(i,j) for i in range(H) for j in range(W) if grid[i][j] != bg_color]
+    if not active:
+        # nothing but background → collapse to 1×1 with bg_color
+        return ((bg_color,),)
+    rows = [i for i,_ in active]
+    cols = [j for _,j in active]
+    min_i, max_i = min(rows), max(rows)
+    min_j, max_j = min(cols), max(cols)
+    # slice out the bounding box
+    return tuple(
+        tuple(grid[i][min_j:max_j+1])
+        for i in range(min_i, max_i+1)
+    )
 
 def shrinkCanvas(canvas: Grid) -> Grid:
     """

@@ -57,7 +57,7 @@ def recolor_and_repaint_sprites(
       - recolor_maps is a list of lists of dicts [{'From':f,'To':t}, …].
     """
     # copy the canvas so we don't stomp the original
-    painted = [row[:] for row in canvas]
+    painted = [list(row) for row in canvas]
     height = len(painted)
     width  = len(painted[0]) if height > 0 else 0
 
