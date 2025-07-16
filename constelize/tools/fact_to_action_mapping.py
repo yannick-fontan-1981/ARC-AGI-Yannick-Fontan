@@ -1444,8 +1444,28 @@ class RecolorSpriteFactToAction(FactToActionMapping):
 
         # group by example
         grouped = defaultdict(list)
+
         for r in rows:
             grouped[(r['trainId'], r['testId'])].append(r)
+
+            # build four maps: origin‐ and produce‐coords by (trainId, spriteId)
+            originMinXByTrainAndSpriteId = defaultdict(list)
+            originMinYByTrainAndSpriteId = defaultdict(list)
+            produceMinXByTrainAndSpriteId = defaultdict(list)
+            produceMinYByTrainAndSpriteId = defaultdict(list)
+
+            for r in rows:
+                key = (r['trainId'], r['origin_sprite_id'])
+                originMinXByTrainAndSpriteId[key].append(int(r['origin_minX']))
+                originMinYByTrainAndSpriteId[key].append(int(r['origin_minY']))
+                produceMinXByTrainAndSpriteId[key].append(int(r['produce_minX']))
+                produceMinYByTrainAndSpriteId[key].append(int(r['produce_minY']))
+
+            # dedupe each list
+            originMinXByTrainAndSpriteId = {k: list(set(v)) for k, v in originMinXByTrainAndSpriteId.items()}
+            originMinYByTrainAndSpriteId = {k: list(set(v)) for k, v in originMinYByTrainAndSpriteId.items()}
+            produceMinXByTrainAndSpriteId = {k: list(set(v)) for k, v in produceMinXByTrainAndSpriteId.items()}
+            produceMinYByTrainAndSpriteId = {k: list(set(v)) for k, v in produceMinYByTrainAndSpriteId.items()}
 
         result = []
         for (trainId, testId), members in grouped.items():
@@ -1455,11 +1475,13 @@ class RecolorSpriteFactToAction(FactToActionMapping):
                 'members': members,
                 'resultByTrainId': dict(spriteIdsByTrainId),
                 'resultByTrainAndSpriteId': recolorByTrainAndSpriteId,
-                'cumulValueMap': cumulValueMap
+                'cumulValueMap': cumulValueMap,
+                'originMinXByTrainAndSpriteId': originMinXByTrainAndSpriteId,
+                'originMinYByTrainAndSpriteId': originMinYByTrainAndSpriteId,
+                'produceMinXByTrainAndSpriteId': produceMinXByTrainAndSpriteId,
+                'produceMinYByTrainAndSpriteId': produceMinYByTrainAndSpriteId,
             })
-
         return result
-
 
     def _build_function(self, row):
         trainId = row['trainId']
@@ -1467,11 +1489,16 @@ class RecolorSpriteFactToAction(FactToActionMapping):
         resultByTrainId = row['resultByTrainId']
         resultByTrainAndSpriteId = row['resultByTrainAndSpriteId']
         cumulValueMap = row['cumulValueMap']
+        originMinXByTrainAndSpriteId = row['originMinXByTrainAndSpriteId']
+        originMinYByTrainAndSpriteId = row['originMinYByTrainAndSpriteId']
+        produceMinXByTrainAndSpriteId = row['produceMinXByTrainAndSpriteId']
+        produceMinYByTrainAndSpriteId = row['produceMinYByTrainAndSpriteId']
 
         # Extract parallel data
         sprites: List[List[List[int]]] = []
         raw_recolor_maps: List[List[Dict[str, int]]] = []
         raw_repaint_coords: List[Dict[str, int]] = []
+        raw_origin_coords: List[Dict[str, int]] = []
         same_place_flags: List[bool] = []
         sprite_ids: List[int] = []
 
@@ -1489,9 +1516,14 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             ])
 
             # Repaint coords: dict {'minX':x,'minY':y}
-            x0 = int(m['origin_minX'])
-            y0 = int(m['origin_minY'])
+            x0 = int(m['produce_minX'])
+            y0 = int(m['produce_minY'])
             raw_repaint_coords.append({'minX': x0, 'minY': y0})
+
+            # Origin coords ← NEW
+            ox = int(m['origin_minX'])
+            oy = int(m['origin_minY'])
+            raw_origin_coords.append({'minX': ox, 'minY': oy})
 
             # same place flag
             same = (
@@ -1533,6 +1565,13 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             value=raw_repaint_coords,
             producer_id='repaint_coords'
         )
+        origin_binding = ArgumentBinding(
+            name='origin_coords',
+            type='List<Dict<String,Integer>>',
+            binding=BindingStatus.PRODUCE,
+            value=raw_origin_coords,
+            producer_id='origin_coords'
+        )
         canvas_binding = ArgumentBinding(
             name='canvas',
             type='Grid',
@@ -1543,6 +1582,7 @@ class RecolorSpriteFactToAction(FactToActionMapping):
         output_value = recolor_and_repaint_sprites(
             sprites,
             raw_repaint_coords,
+            raw_origin_coords,
             raw_recolor_maps,
             anon_canvas
         )
@@ -1562,8 +1602,28 @@ class RecolorSpriteFactToAction(FactToActionMapping):
                         ),
                         'repaint_coords': ProduceDict(
                             maps={
-                                'minX': ProduceValue(attribute='minX'),
-                                'minY': ProduceValue(attribute='minY'),
+                                'minX': ProduceValue(
+                                    attribute="minX",
+                                    suggested_by_train_function="SelectCoordAction",
+                                    produceByTrainAndSpriteId=produceMinXByTrainAndSpriteId,
+                                    originByTrainAndSpriteId=originMinXByTrainAndSpriteId
+                                ),
+                                'minY': ProduceValue(
+                                    attribute="minY",
+                                    suggested_by_train_function="SelectCoordAction",
+                                    produceByTrainAndSpriteId=produceMinYByTrainAndSpriteId,
+                                    originByTrainAndSpriteId=originMinYByTrainAndSpriteId
+                                ),
+                            }
+                        ),
+                        'origin_coords': ProduceDict(
+                            maps={
+                                'minX': ProduceValue(
+                                    attribute="minX",
+                                ),
+                                'minY': ProduceValue(
+                                    attribute="minY",
+                                ),
                             }
                         ),
                         'recolor_maps': ProduceList(
@@ -1574,7 +1634,7 @@ class RecolorSpriteFactToAction(FactToActionMapping):
                                 'From': ProduceValue(useItemValue=True),
                                 'To': ProduceValue(
                                     suggested_by_sprite_function='SelectRecolorFunction',
-                                    resultByTrainAndSpriteId=resultByTrainAndSpriteId,
+                                    produceByTrainAndSpriteId=resultByTrainAndSpriteId,
                                     cumulValueMap=cumulValueMap
                                 ),
                             }
@@ -1586,6 +1646,7 @@ class RecolorSpriteFactToAction(FactToActionMapping):
                 'sprites': sprites_binding,
                 'recolor_maps': maps_binding,
                 'repaint_coords': coords_binding,
+                'origin_coords': origin_binding,
                 'canvas': canvas_binding
             },
             output_var='recolored_canvas',
@@ -1599,299 +1660,6 @@ class RecolorSpriteFactToAction(FactToActionMapping):
             toRepaint=True,
             END=grids_equal(output_value, END_OUTPUTS_BY_TRAINID.get(trainId))
         )
-
-class RecolorSpriteFactToAction_old(FactToActionMapping):
-    def __init__(self):
-        super().__init__('recolor_sprite', 'recolor_sprite')
-
-    def _test_function(self, conn) -> list[dict]:
-        query = """
-        SELECT DISTINCT
-            su.sprite_id    AS origin_sprite_id,
-            sp.sprite_id    AS produce_sprite_id,
-            st.sprite_unique_id,
-            so.trainId,
-            so.testId,
-            su.data,
-            st.recolored,
-            so.minX         AS produce_minX,
-            so.minY         AS produce_minY,
-            sa.minX         AS origin_minX,
-            sa.minY         AS origin_minY
-        FROM sprite_transformation AS st
-        JOIN sprite_occurrence    AS so  ON so.sprite_transformation_id = st.id
-        JOIN sprite_unique        AS su  ON su.id = st.sprite_unique_id
-        JOIN sprite_unique        AS sp  ON sp.id = st.sprite_produce_id
-        JOIN sprite_analysis      AS sa  ON sa.id = su.sprite_id
-        WHERE so.isInsideOutput = 1
-          AND st.recolored        IS NOT NULL
-          AND st.recolored   != '[]'
-          AND COALESCE(st.zoom_x,         1) = 1
-          AND COALESCE(st.zoom_y,         1) = 1
-          AND COALESCE(st.rotated_90,     0) = 0
-          AND COALESCE(st.rotated_180,    0) = 0
-          AND COALESCE(st.rotated_270,    0) = 0
-          AND COALESCE(st.flipped_vert,   0) = 0
-          AND COALESCE(st.flipped_horiz,  0) = 0
-          AND COALESCE(st.flipped_vert_90,0) = 0
-          AND COALESCE(st.flipped_horiz_90,0) = 0
-          AND so.sprite_id IS NOT NULL
-        """
-        cursor = conn.execute(query)
-        cols = [d[0] for d in cursor.description]
-        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
-
-        # make sure every train has at least one recolor
-        train_ids_with_recolor = {r['trainId'] for r in rows if r['trainId'] != -1}
-        all_train_ids = set(TRAIN_INPUT_GRIDS.keys())
-        if all_train_ids - train_ids_with_recolor:
-            return []
-
-        # group rows by (trainId, testId)
-        from collections import defaultdict
-        grouped = defaultdict(list)
-        for r in rows:
-            grouped[(r['trainId'], r['testId'])].append(r)
-
-        result = []
-        for (trainId, testId), members in grouped.items():
-            # 1️⃣ collect all the sprite IDs in this train/test
-            sprite_ids = [m['origin_sprite_id'] for m in members]
-
-            # 2️⃣ build a map: (trainId, spriteId) -> recolor list
-            recolor_by_sprite = {}
-            for m in members:
-                sid = m['origin_sprite_id']
-                # parse the JSON list of [from,to] pairs
-                pairs = json.loads(m['recolored'])
-                # extract only the 'to' entries (or keep full pairs if you prefer)
-                recolor_by_sprite[(trainId, sid)] = [to for (_from, to) in pairs]
-
-            result.append({
-                'trainId': trainId,
-                'testId': testId,
-                'sprites': members,
-                'resultByTrainId': sprite_ids,
-                'resultByTrainAndSpriteId': recolor_by_sprite
-            })
-
-        return result
-
-    def _build_function(self, row):
-        trainId = row['trainId']
-        members = row['sprites']
-        resultByTrainId = row['resultByTrainId']
-        resultByTrainAndSpriteId = row['resultByTrainAndSpriteId']
-
-        # Extract parallel data
-        sprites = []
-        recolor_maps = []
-        repaint_coords = []
-        same_place_flags = []
-        sprite_ids = []
-        for m in members:
-            base = json.loads(m['data'])
-            grid = to_concrete_grid(base)
-            sprites.append(grid)
-
-            pairs = json.loads(m['recolored'])
-            recolor_maps.append(pairs)
-
-            # always record original origin position
-            x = int(m['origin_minX'])
-            y = int(m['origin_minY'])
-            repaint_coords.append((x, y))
-
-            # record whether sprite stays in same place
-            same = (m['produce_minX'] == m['origin_minX'] and m['produce_minY'] == m['origin_minY'])
-            same_place_flags.append(same)
-
-            sprite_ids.append(int(m['origin_sprite_id']))
-
-            end_output = END_OUTPUTS_BY_TRAINID.get(trainId)
-            anon_canvas = [[-8 for _ in r] for r in end_output] if end_output else []
-
-        sprites_binding = ArgumentBinding(
-            name='sprites',
-            type='List<Sprite>',
-            value=sprites,
-            binding=BindingStatus.PRODUCE,
-            producer_id="sprites"
-            # suggested_action='selectSpritesAction',
-            # suggested_sprite_ids=sprite_ids
-        )
-
-        # Build recolor_maps binding with per-pair suggestions
-        maps_binding = ArgumentBinding(
-            name='recolor_maps',
-            type='List<List<Pair>>',
-            binding=BindingStatus.PRODUCE,
-            producer_id="recolor_maps"
-        )
-        for idx, pairs in enumerate(recolor_maps):
-            map_binding = ArgumentBinding(
-                name=f'map_{idx}',
-                type='List<Pair>',
-                binding=BindingStatus.COMPOUND,
-                sub_bindings=[],
-                sub_bindings_length_status=BindingStatus.UNRESOLVED
-            )
-            sid = sprite_ids[idx]
-            sprite = sprites[idx]
-            # flatten sprite colors
-            sprite_colors = {c for row in sprite for c in row}
-            for jdx, (frm, to) in enumerate(pairs):
-                # From binding always suggested
-                from_bind = ArgumentBinding(
-                    name='from',
-                    type='Integer',
-                    binding=BindingStatus.UNRESOLVED,
-                    value=frm,
-                    suggested_action='selectSpriteAndAttributeAction',
-                    suggested_sprite_id=sid
-                )
-                # To binding only if 'to' in sprite
-                to_kwargs = {}
-                if to in sprite_colors:
-                    to_kwargs = dict(
-                        suggested_action='selectSpriteAndAttributeAction',
-                        suggested_sprite_id=sid
-                    )
-                to_bind = ArgumentBinding(
-                    name='to',
-                    type='Integer',
-                    binding=BindingStatus.UNRESOLVED,
-                    value=to,
-                    **to_kwargs
-                )
-                pair_bind = ArgumentBinding(
-                    name=f'pair_{jdx}',
-                    type='Pair<Integer,Integer>',
-                    binding=BindingStatus.COMPOUND,
-                    sub_bindings={'from': from_bind, 'to': to_bind},
-                    sub_bindings_length_status=BindingStatus.CONSTANT,
-                    sub_bindings_length_value=2
-                )
-                map_binding.sub_bindings.append(pair_bind)
-            maps_binding.sub_bindings.append(map_binding)
-
-        # Build repaint_coords binding with suggestions only when sprite stays in place
-        coords_binding = ArgumentBinding(
-            name='repaint_coords',
-            type='List<Pair<Integer,Integer>>',
-            binding=BindingStatus.PRODUCE,
-            producer_id="repaint_coords"
-        )
-        for idx, (x, y) in enumerate(repaint_coords):
-            sid = sprite_ids[idx]
-            minx_kwargs = {}
-            miny_kwargs = {}
-            if same_place_flags[idx]:
-                minx_kwargs = dict(
-                    suggested_action='selectSpriteAndAttributeAction',
-                    suggested_sprite_id=sid,
-                    suggested_attribute='minX'
-                )
-                miny_kwargs = dict(
-                    suggested_action='selectSpriteAndAttributeAction',
-                    suggested_sprite_id=sid,
-                    suggested_attribute='minY'
-                )
-            minx_bind = ArgumentBinding(
-                name='minX',
-                type='Integer',
-                binding=BindingStatus.UNRESOLVED,
-                value=x,
-                **minx_kwargs
-            )
-            miny_bind = ArgumentBinding(
-                name='minY',
-                type='Integer',
-                binding=BindingStatus.UNRESOLVED,
-                value=y,
-                **miny_kwargs
-            )
-            coord_bind = ArgumentBinding(
-                name=f'coord_{idx}',
-                type='Pair<Integer,Integer>',
-                binding=BindingStatus.COMPOUND,
-                sub_bindings={'minX': minx_bind, 'minY': miny_bind},
-                sub_bindings_length_status=BindingStatus.CONSTANT,
-                sub_bindings_length_value=2
-            )
-            coords_binding.sub_bindings.append(coord_bind)
-
-        # Canvas binding
-        canvas_binding = ArgumentBinding(
-            name='canvas',
-            type='Grid',
-            binding=BindingStatus.CONSTANT,
-            value=anon_canvas
-        )
-
-        output_value = recolor_and_repaint_sprites(
-            sprites, recolor_maps, repaint_coords, anon_canvas
-        )
-
-        return ActionInstance(
-            id=f'recolor_{getUniqueId()}',
-            action=registry.get_by_id(self.action_id),
-            producers={
-                'sprite_rows': ProduceList(
-                    trainId=trainId, testId=-1,
-                    item="row",
-                    suggested_by_train_function="SelectSpriteRowsAction",
-                    resultByTrainId=resultByTrainId,
-                    maps={
-                        'sprites': ProduceValue(
-                            attribute="data",
-                            adapter=json_to_concrete_grid
-                        ),
-                        'repaint_coords': ProduceDict(
-                            maps={
-                                'minX': ProduceValue(
-                                    attribute="minX",
-                                ),
-                                'minY': ProduceValue(
-                                    attribute="minY",
-                                ),
-                            }
-                        ),
-                        'recolor_maps': ProduceList(
-                            attribute="colorPresent",
-                            adapter=json_to_array,
-                            item="color",
-                            maps={
-                                'From': ProduceValue(
-                                    useItemValue=True,
-                                ),
-                                'To': ProduceValue(
-                                    suggested_by_train_function="SelectRecolorAction",
-                                    resultByTrainAndSpriteId=resultByTrainAndSpriteId
-                                ),
-                            }
-                        )
-                    }
-                )
-            },
-            bindings={
-                'sprites': sprites_binding,
-                'recolor_maps': maps_binding,
-                'repaint_coords': coords_binding,
-                'canvas': canvas_binding
-            },
-            output_var='recolored_canvas',
-            output_value=output_value,
-            output_type=self.action.output_type,
-            scenarioId=row.get('scenarioId'),
-            ruleId=row.get('ruleId'),
-            trainId=trainId,
-            testId=row.get('testId'),
-            isTrain=(trainId != -1),
-            toRepaint=True,
-            END=grids_equal(output_value, END_OUTPUTS_BY_TRAINID.get(trainId))
-        )
-
 
 class CropSpriteFactToAction(FactToActionMapping):
     def __init__(self):

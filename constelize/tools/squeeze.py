@@ -519,9 +519,9 @@ def fill_producer_criteria(
         )
         print("  suggested_by_train_function:", producer.suggested_by_train_function)
         print("  criteria:", producer.criteria)
-    if producer.suggested_by_sprite_function and producer.resultByTrainAndSpriteId:
+    if producer.suggested_by_sprite_function and producer.produceByTrainAndSpriteId:
         producer.criteria = extract_common_sprite_values_criteria(
-            producer.resultByTrainAndSpriteId,
+            producer.produceByTrainAndSpriteId,
             tables,
             table_key=table_key
         )

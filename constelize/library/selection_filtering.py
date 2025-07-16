@@ -1,7 +1,7 @@
 from constelize.core.action import Action
 from constelize.core.categories import ActionCategory
 from constelize.core.binding import ArgumentBinding, BindingStatus, Producer, ProduceValue, ProduceDict, ProduceList
-from typing import Callable, FrozenSet, Any, Dict, List, Optional
+from typing import Callable, FrozenSet, Any, Dict, List, Optional, Tuple
 
 
 def sfilter(container: Any, condition: Callable) -> Any:
@@ -19,8 +19,6 @@ def sizefilter(container: Any, n: int) -> FrozenSet:
 def colorfilter(objs: FrozenSet, value: int) -> FrozenSet:
     return frozenset(obj for obj in objs if next(iter(obj))[0] == value)
 
-
-
 def produce_dict(
     trainId: int,
     testId: int,
@@ -29,28 +27,87 @@ def produce_dict(
 ) -> Any:
     """
     Recursively walk the Producer tree, applying only SelectSpriteRowsFunction
-    at the root, and handling nested ProduceList with attribute for recolor_maps.
+    at the root, handling nested ProduceList with recolor logic, ProduceDict
+    for repaint_coords, and ProduceValue for both simple attributes and
+    coordinate lookup via select_coord().
     """
     table_key = "sprite_analysis"
     print(f"\n=== produce_dict START for trainId={trainId}, testId={testId} ===")
-    # Root SelectSpriteRowsFunction
-    def select_sprite_rows(trainId: int, testId: int, criteria: List[tuple], tbl: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
-        print(f"🔎 SelectSpriteRowsFunction → trainId={trainId}, testId={testId}, criteria={criteria}")
-        out=[]
-        for rid,row in tbl.items():
-            if row.get('trainId')!=trainId or row.get('testId')!=testId: continue
-            if all(row.get(col)==val for col,val,_ in criteria): out.append(row)
-        print(f"🔍 Selected rows: {out}")
-        return out
 
-    # Concrete recolor selection function
-    def select_recolor(
+    if trainId == -1:
+        print("for test (trainId == -1)")
+
+    # ─── Helpers ─────────────────────────────────────────────────────────
+    def select_sprite_rows(
             trainId: int,
-            spriteId: int,
-            criteria: List[tuple],
+            testId: int,
+            criteria: List[Tuple[str, Any, int]],  # (column, expected_value, strict_weight)
             tbl: Dict[int, Dict[str, Any]],
-            raw_arr: List[int],
-            cumulValueMap: Dict[int, List[int]] = None) -> List[Any]:
+            top_k: int | None = None,  # if set, returns up to top_k rows
+            require_inside_input: bool = True  # if True, only rows with isInsideOutput==True
+    ) -> List[Dict[str, Any]]:
+        def weight(attr: str) -> int:
+            # tweak these as you like
+            if attr in ("isFromSplit", "isFromGlued", "isGrid", "hasBorder"):
+                return 20
+            if attr in ("nbColors", "colorUniqueOrder"):
+                return 10
+            if attr in ("sizeOrder", "isColorUnique"):
+                return 5
+            if attr.startswith("isTouching"):
+                return 2
+            return 1
+
+        scored: List[Tuple[int, Dict[str, Any]]] = []
+        total_possible = sum(weight(col) * w for col, _, w in criteria)
+
+        for rid, row in tbl.items():
+            # mandatory filtering by train/test
+            if row.get("trainId") != trainId or row.get("testId") != testId:
+                continue
+            if require_inside_input and not row.get("isInsideInput", False):
+                continue
+
+            # compute this row’s score
+            score = 0
+            for col, expected, strict_w in criteria:
+                if row.get(col) == expected:
+                    score += weight(col) * strict_w
+
+            if score > 0:
+                scored.append((score, row))
+
+        if not scored:
+            print("🔍 No rows matched any criterion.")
+            return []
+
+        # sort by descending score
+        scored.sort(key=lambda x: x[0], reverse=True)
+        max_score = scored[0][0]
+
+        # pick either top_k or all at max_score
+        if top_k is not None:
+            selected = scored[:top_k]
+        else:
+            selected = [(s, r) for s, r in scored if s == max_score]
+
+        # debug output
+        print(f"🔎 select_sprite_rows → trainId={trainId}, testId={testId}")
+        print(f"    criteria={criteria}")
+        print(f"    total_possible={total_possible}")
+        for s, r in selected:
+            print(f"    [score={s}] row id={r.get('id', '?')} → {r}")
+
+        return [r for s, r in selected]
+
+    def select_recolor(
+        trainId: int,
+        spriteId: int,
+        criteria: List[tuple],
+        tbl: Dict[int, Dict[str, Any]],
+        raw_arr: List[int],
+        cumulValueMap: Dict[int, List[int]] = None
+    ) -> List[Any]:
         print(f"🔎 SelectRecolorFunction → trainId={trainId}, spriteId={spriteId}, criteria={criteria}")
         if cumulValueMap is not None:
             print(f"    cumulValueMap for this producer → {cumulValueMap!r}")
@@ -75,17 +132,109 @@ def produce_dict(
         print(f"🔍 Recolor values: {result}")
         return result
 
-    def eval_producer(prod: Producer, row_context: Optional[Dict[str,Any]]=None, depth: int=0) -> Any:
-        indent = '  '*depth
+    def select_coord(
+            trainId: int,
+            spriteId: int,
+            produceMap: Dict[tuple[int, int], List[int]],
+            originMap: Dict[tuple[int, int], List[int]],
+            criteriaColumn: str,
+            row: Dict[str, Any],
+    ) -> int | None:
+
+        # ─── Special case: test example ───────────────────────────────
+        if trainId == -1:
+            base = row.get(criteriaColumn)
+            print(f"🔎 select_coord (test) → origin from row[{criteriaColumn}] = {base!r}")
+
+            # collect all train‐side coords for this sprite
+            train_keys = [k for k in produceMap.keys()]
+            p_lists = [produceMap[k] for k in train_keys]
+            o_lists = [originMap.get(k, []) for k in train_keys]
+
+            #print("train_keys")
+            #print(train_keys)
+            #print("o_lists")
+            #print(o_lists)
+            #print("p_lists")
+            #print(p_lists)
+
+            # 1) exact match across *all* trains?
+            if p_lists and o_lists and all(p == o for p, o in zip(p_lists, o_lists)):
+                print("    → all trains produce==origin → returning base origin")
+                return base
+
+            # 2) constant delta across *all* trains?
+            #    (we only look at the first coord of each list here)
+            deltas = []
+            for p, o in zip(p_lists, o_lists):
+                if p and o:
+                    deltas.append(p[0] - o[0])
+            if deltas and len(set(deltas)) == 1:
+                delta = deltas[0]
+                new_val = base + delta if base is not None else None
+                print(f"    → constant train‐delta {delta}, base={base!r} → {new_val!r}")
+                return new_val
+
+            # 3) fallback to raw origin
+            print("    → no uniform train pattern → returning base origin")
+            return base
+
+        # ─── Otherwise: the original train‐side logic ────────────────
+        key = (trainId, spriteId)
+        p_coords = produceMap.get(key, [])
+        o_coords = originMap.get(key, [])
+
+        print(f"🔎 select_coord → trainId={trainId}, spriteId={spriteId}")
+        print(f"    produceMap[{key}] = {p_coords!r}")
+        print(f"    originMap[{key}]  = {o_coords!r}")
+
+        # 1) exact match → raw column value
+        if p_coords and o_coords and p_coords == o_coords:
+            base = row.get(criteriaColumn)
+            print(f"    → produce==origin → using row[{criteriaColumn}] = {base!r}")
+            return base
+
+        # 2) constant delta → base + Δ
+        if p_coords and o_coords:
+            deltas = [p - o for p, o in zip(p_coords, o_coords)]
+            if len(set(deltas)) == 1:
+                delta = deltas[0]
+                base = row.get(criteriaColumn)
+                new_val = base + delta if base is not None else None
+                print(f"    → constant delta {delta}, {criteriaColumn}={base!r} → {new_val!r}")
+                return new_val
+
+        # 3) fallback to produce coords
+        if p_coords:
+            val = p_coords[0]
+            print(f"    → fallback produce coords[0] = {val!r}")
+            return val
+
+        # 4) fallback to origin coords
+        if o_coords:
+            val = o_coords[0]
+            print(f"    → fallback origin coords[0] = {val!r}")
+            return val
+
+        # 5) nothing found
+        print(f"    → no coords found → None")
+        return None
+
+    # ─── Core evaluator ─────────────────────────────────────────────────
+
+    def eval_producer(prod: Producer, row_context: Optional[Dict[str, Any]] = None, depth: int = 0) -> Any:
+        indent = '  ' * depth
         print(f"{indent}-- eval_producer: {type(prod).__name__} --")
 
-                # Nested ProduceList with attribute (e.g. recolor_maps)
+        # 1) nested ProduceList (e.g. recolor_maps)
         if isinstance(prod, ProduceList) and row_context is not None and prod.attribute:
-            # get the raw list of 'From' values
             raw_arr = prod.adapter(row_context.get(prod.attribute)) if prod.adapter else row_context.get(prod.attribute)
             print(f"{indent}  [LIST] attribute '{prod.attribute}' → {raw_arr}")
-            # compute all 'To' values via select_recolor once
-            sprite_id = row_context.get('id') or row_context.get('origin_sprite_id') or row_context.get('sprite_id')
+            sprite_id = (
+                row_context.get('id')
+                or row_context.get('origin_sprite_id')
+                or row_context.get('sprite_id')
+            )
             to_list = select_recolor(
                 trainId,
                 sprite_id,
@@ -96,139 +245,94 @@ def produce_dict(
             )
             print(f"{indent}  [LIST] raw Arr → {raw_arr}, To List → {to_list}")
 
-            # 3) if fallback happened, align raw_arr to only those keys that exist in cumulValueMap
             if len(to_list) != len(raw_arr):
                 valid_keys = set(prod.maps['To'].cumulValueMap.keys())
                 raw_arr = [v for v in raw_arr if v in valid_keys]
                 print(f"{indent}  [LIST] fallback trim raw_arr → {raw_arr}")
 
             print(f"{indent}  [LIST] zipped From/To pairs → {list(zip(raw_arr, to_list))}")
-
-            # 4) build the output, skipping identity or missing
-            out = []
+            out: List[Dict[str, int]] = []
             for v, to_val in zip(raw_arr, to_list):
                 if v is None or to_val is None or v == to_val:
-                    print(f"{indent}    skip pair {{'From':{v}, 'To':{to_val}}}")
+                    print(f"{indent}    skip pair {{'From': {v}, 'To': {to_val}}}")
                     continue
                 elem = {'From': v, 'To': to_val}
-                print(f"{indent}    pair {{'From':{v}, 'To':{to_val}}}")
+                print(f"{indent}    pair {elem}")
                 out.append(elem)
             return out
 
-        # Leaf ProduceDict from row_context (repaint_coords)
+        # 2) nested ProduceDict (e.g. repaint_coords)
         if isinstance(prod, ProduceDict) and row_context is not None:
             print(f"{indent}  [DICT] building dict from row_context keys {list(prod.maps.keys())}")
-            return {k: eval_producer(child,row_context,depth+1) for k,child in prod.maps.items()}
+            return {
+                k: eval_producer(child, row_context, depth + 1)
+                for k, child in prod.maps.items()
+            }
 
-        # Leaf ProduceValue from row_context
+        # 3) coordinate lookup (only when tagged SelectCoordAction)
+        if isinstance(prod, ProduceValue) and getattr(prod, 'suggested_by_train_function', None) == 'SelectCoordAction':
+            sprite_id = (
+                    row_context.get('id')
+                    or row_context.get('origin_sprite_id')
+                    or row_context.get('sprite_id')
+            )
+            return select_coord(
+                trainId,
+                sprite_id,
+                prod.produceByTrainAndSpriteId,
+                prod.originByTrainAndSpriteId,
+                prod.attribute,  # e.g. "minX" or "minY"
+                row_context
+            )
+
+        # 4) simple ProduceValue leaf
         if isinstance(prod, ProduceValue) and row_context is not None and prod.attribute:
-            raw=row_context.get(prod.attribute)
-            out=prod.adapter(raw) if prod.adapter else raw
+            raw = row_context.get(prod.attribute)
+            out = prod.adapter(raw) if prod.adapter else raw
             print(f"{indent}  [LEAF] attr '{prod.attribute}': {raw!r} → {out!r}")
             return out
 
-        # Fallback: no match
+        # 5) fallback
         print(f"{indent}  [FALLBACK] None")
         return None
 
-    # Root handling: produceObj should be ProduceList
-    if isinstance(produceObj, ProduceList) and produceObj.criteria and getattr(produceObj,'suggested_by_train_function',None)=='SelectSpriteRowsFunction':
-        tbl=tables.get(table_key,{})
-        rows=select_sprite_rows(trainId,testId,produceObj.criteria,tbl)
-        output={key:[] for key in produceObj.maps.keys()}
-        for i,r in enumerate(rows):
+    # ─── Root‐level: only for ProduceList suggested by SelectSpriteRowsFunction ──
+    if (
+        isinstance(produceObj, ProduceList)
+        and produceObj.criteria
+        and getattr(produceObj, 'suggested_by_train_function', None) == 'SelectSpriteRowsFunction'
+    ):
+        tbl = tables.get(table_key, {})
+        rows = select_sprite_rows(trainId, testId, produceObj.criteria, tbl)
+        output: Dict[str, List[Any]] = {key: [] for key in produceObj.maps.keys()}
+        for i, r in enumerate(rows):
             print(f"[ROOT] element #{i}, row {r}")
-            for key,child in produceObj.maps.items():
-                val=eval_producer(child,r,1)
+            for key, child in produceObj.maps.items():
+                val = eval_producer(child, r, depth=1)
                 output[key].append(val)
         print(f"\n=== produce_dict END → {output!r} ===\n")
         return output
 
-    # Otherwise generic
-    result = eval_producer(produceObj,None,0)
+    # ─── Generic single‐producer path ────────────────────────────────────
+    result = eval_producer(produceObj, None, depth=0)
     print(f"\n=== produce_dict END → {result!r} ===\n")
     return result
 
-
-
-
-
 ACTIONS = [
     Action(
-        id="sfilter",
-        name="Simple Filter",
-        category=ActionCategory.SELECTION_FILTERING,
-        function=sfilter,
-        input_arguments=[
-            ArgumentBinding(name="container", type="Container"),
-            ArgumentBinding(name="condition", type="Callable")
-        ],
-        output_type="Container",
-        description="Filter elements in container based on condition."
-    ),
-    Action(
-        id="mfilter",
-        name="Merge Filter",
-        category=ActionCategory.SELECTION_FILTERING,
-        function=mfilter,
-        input_arguments=[
-            ArgumentBinding(name="container", type="Container"),
-            ArgumentBinding(name="condition", type="Callable")
-        ],
-        output_type="FrozenSet",
-        description="Filter elements and return merged set."
-    ),
-    Action(
-        id="extract_first_match",
-        name="Extract First Match",
-        category=ActionCategory.SELECTION_FILTERING,
-        function=extract,
-        input_arguments=[
-            ArgumentBinding(name="container", type="Container"),
-            ArgumentBinding(name="condition", type="Callable")
-        ],
-        output_type="Any",
-        description="Extract first element that satisfies condition."
-    ),
-    Action(
-        id="size_filter",
-        name="Size Filter",
-        category=ActionCategory.SELECTION_FILTERING,
-        function=sizefilter,
-        input_arguments=[
-            ArgumentBinding(name="container", type="Container"),
-            ArgumentBinding(name="n", type="Integer")
-        ],
-        output_type="FrozenSet",
-        description="Filter container items by size."
-    ),
-    Action(
-        id="color_filter",
-        name="Color Filter",
-        category=ActionCategory.SELECTION_FILTERING,
-        function=colorfilter,
-        input_arguments=[
-            ArgumentBinding(name="objs", type="Objects"),
-            ArgumentBinding(name="value", type="Integer")
-        ],
-        output_type="FrozenSet",
-        description="Filter objects by color value."
-    ),
-    Action(
         id="producer_action",
-        name="producer_action",
-        description="based on a produce object, produce values to be bind by others",
+        name="producer action",
+        description=(
+            "Produce"
+        ),
         category=ActionCategory.SELECTION_FILTERING,
         input_arguments=[
-            ArgumentBinding(name="trainId",    type="Integer", binding=BindingStatus.CONTEXT),
-            ArgumentBinding(name="testId",     type="Integer", binding=BindingStatus.CONTEXT),
-            ArgumentBinding(name="produceObj", type="Integer", binding=BindingStatus.CONSTANT),
-            ArgumentBinding(name="tables",     type="Tables",  binding=BindingStatus.CONSTANT)
+            ArgumentBinding(name="trainId", type="Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding(name="testId", type="Integer", binding=BindingStatus.CONTEXT),
+            ArgumentBinding(name="produceObj",   type="Producer",    binding=BindingStatus.CONSTANT),
+            ArgumentBinding(name="tables",  type="Tables",    binding=BindingStatus.CONSTANT),
         ],
-        output_type="Dict",
-        function=produce_dict,
-        deterministic=True,
-        pure=True,
-        reversible=False
-    )
+        output_type="Grid",
+        function=produce_dict
+    ),
 ]

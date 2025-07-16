@@ -46,47 +46,73 @@ def set_output_bg_color_fn(grid: Grid, bg_color: int) -> Grid:
 def recolor_and_repaint_sprites(
     sprites: List[List[List[int]]],
     repaint_coords: List[Dict[str, int]],
+    origin_coords: List[Dict[str, int]],
     recolor_maps: List[List[Dict[str, int]]],
     canvas: List[List[int]]
 ) -> List[List[int]]:
     """
     Applies recoloring and repainting for multiple sprites onto an anonymized canvas,
-    where:
-      - sprites is a list of grids,
-      - repaint_coords is a list of dicts {'minX': x0, 'minY': y0},
-      - recolor_maps is a list of lists of dicts [{'From':f,'To':t}, …].
+    erasing each sprite's last origin position (if it moved) by filling with the
+    most frequent color in the original canvas:
+      - sprites: list of sprite‐grids
+      - repaint_coords: list of {'minX': x_new, 'minY': y_new}
+      - origin_coords: list of {'minX': x_old, 'minY': y_old}
+      - recolor_maps: list of lists of {'From':f,'To':t}
+      - canvas: the anonymized background grid
     """
-    # copy the canvas so we don't stomp the original
-    painted = [list(row) for row in canvas]
+    from collections import Counter
+
+    # make a mutable copy of the canvas
+    painted = [row[:] for row in canvas]
     height = len(painted)
-    width  = len(painted[0]) if height > 0 else 0
+    width  = len(painted[0]) if height else 0
 
-    for idx, (sprite, coords, maps) in enumerate(zip(sprites, repaint_coords, recolor_maps)):
-        x0 = coords.get('minX', 0)
-        y0 = coords.get('minY', 0)
-        print(f"[#{idx}] placing sprite at (x0={x0}, y0={y0})")
+    # determine the background color as the most frequent value in the canvas
+    flat_pixels = [pix for row in canvas for pix in row]
+    bg_color = Counter(flat_pixels).most_common(1)[0][0] if flat_pixels else 0
+    print(f"🖌️ detected bg_color = {bg_color}")
 
-        # build the simple list of (from_color, to_color) pairs
+    for idx, (sprite, rp, orig, maps) in enumerate(zip(
+        sprites, repaint_coords, origin_coords, recolor_maps
+    )):
+        x_new = rp.get('minX', 0)
+        y_new = rp.get('minY', 0)
+        x_old = orig.get('minX', 0)
+        y_old = orig.get('minY', 0)
+        print(f"[#{idx}] sprite moved from ({x_old},{y_old}) to ({x_new},{y_new})")
+
+        # 1) erase old origin if it moved
+        if (x_old, y_old) != (x_new, y_new):
+            print(f"    erasing old origin at ({x_old},{y_old}) with bg_color")
+            for ry, row in enumerate(sprite):
+                for rx, _ in enumerate(row):
+                    yy = y_old + ry
+                    xx = x_old + rx
+                    if 0 <= yy < height and 0 <= xx < width:
+                        painted[yy][xx] = bg_color
+
+        # 2) build recolor mapping list
         mapping_list = []
         for m in maps:
             f = m.get('From')
             t = m.get('To')
             print(f"    recolor pair: {f} → {t}")
-            mapping_list.append((f, t))
+            if t != -1:
+                mapping_list.append((f, t))
 
-        # do the recolor
+        # 3) recolor the sprite
         recolored = recolor_sprite(sprite, mapping_list)
 
-        # paint into the canvas
+        # 4) paint recolored sprite at new coords
+        print(f"    placing recolored sprite at ({x_new},{y_new})")
         for ry, row in enumerate(recolored):
             for rx, val in enumerate(row):
-                y = y0 + ry
-                x = x0 + rx
-                if 0 <= y < height and 0 <= x < width:
-                    painted[y][x] = val
+                yy = y_new + ry
+                xx = x_new + rx
+                if 0 <= yy < height and 0 <= xx < width and val != -1:
+                    painted[yy][xx] = val
 
     return painted
-
 
 ACTIONS = [
     Action(
@@ -166,10 +192,11 @@ ACTIONS = [
         description="Recolor and repaint multiple sprites onto a canvas grid.",
         category=ActionCategory.COLOR_SYMBOL_MANIPULATION,
         input_arguments=[
-            ArgumentBinding(name="sprites", type="List<Sprite>", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding(name="recolor_maps", type="List<List<Pair>>", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding(name="repaint_coords", type="List<Pair<Integer,Integer>>", binding=BindingStatus.UNRESOLVED),
-            ArgumentBinding(name="canvas", type="Grid", binding=BindingStatus.UNRESOLVED)
+            ArgumentBinding(name="sprites", type="List<Sprite>", binding=BindingStatus.PRODUCE),
+            ArgumentBinding(name="repaint_coords", type="List<Dict<String,Integer>>", binding=BindingStatus.PRODUCE),
+            ArgumentBinding(name="origin_coords", type="List<Dict<String,Integer>>", binding=BindingStatus.PRODUCE),
+            ArgumentBinding(name="recolor_maps", type="List<List<Dict<String,Integer>>>", binding=BindingStatus.PRODUCE),
+            ArgumentBinding(name="canvas", type="Grid", binding=BindingStatus.INPUT_GRID)
         ],
         output_type="Grid",
         function=recolor_and_repaint_sprites
