@@ -63,7 +63,7 @@ def recolor_and_repaint_sprites(
     from collections import Counter
 
     # make a mutable copy of the canvas
-    painted = [row[:] for row in canvas]
+    painted = [ list(row) for row in canvas ]
     height = len(painted)
     width  = len(painted[0]) if height else 0
 

@@ -172,32 +172,43 @@ function loadTaskFromFile(e) {
     };
     reader.readAsText(file);
 }
-
+var TASK_DATASET = null;
+var TASK_IDS = [];
+var CURRENT_TASK_INDEX = 0;
 function randomTask() {
-    var subset = "training";
-    $.getJSON("https://api.github.com/repos/fchollet/ARC/contents/data/" + subset, function(tasks) {
-        var task_index = Math.floor(Math.random() * tasks.length)
-        var task = tasks[task_index];
-        $.getJSON(task["download_url"], function(json) {
-            try {
-                train = json['train'];
-                test = json['test'];
-            } catch (e) {
-                errorMsg('Bad file format');
-                return;
-            }
-            loadJSONTask(train, test);
-            //$('#load_task_file_input')[0].value = "";
-            infoMsg("Loaded task training/" + task["name"]);
-            display_task_name(task['name'], task_index, tasks.length);
-        })
-        .error(function(){
-          errorMsg('Error loading task');
-        });
-    })
-    .error(function(){
-      errorMsg('Error loading task list');
-    });
+    // Charger le dataset une seule fois
+    if (TASK_DATASET === null) {
+        fetch("arc-agi_evaluation_challenges.json")
+            .then(response => response.json())
+            .then(dataset => {
+                TASK_DATASET = dataset;
+                TASK_IDS = Object.keys(dataset).sort();  // tri pour avoir un ordre stable
+                CURRENT_TASK_INDEX = 0;
+                loadNextTask();
+            })
+            .catch(error => {
+                errorMsg("Failed to load arc-agi_evaluation_challenges.json");
+                console.error(error);
+            });
+    } else {
+        loadNextTask();
+    }
+}
+
+function loadNextTask() {
+    if (CURRENT_TASK_INDEX >= TASK_IDS.length) {
+        infoMsg("No more tasks.");
+        return;
+    }
+
+    const task_id = TASK_IDS[CURRENT_TASK_INDEX];
+    const task = TASK_DATASET[task_id];
+
+    loadJSONTask(task.train, task.test);
+    infoMsg("Loaded task " + task_id);
+    display_task_name(task_id, CURRENT_TASK_INDEX + 1, TASK_IDS.length);
+
+    CURRENT_TASK_INDEX += 1;  // ← incrément ici
 }
 
 function nextTestInput() {

@@ -954,6 +954,62 @@ CREATE TABLE IF NOT EXISTS first_sight_analysis (
         """)
     conn.commit()
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS angel (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sprite_id INTEGER,
+            block_id INTEGER,
+            shape_id INTEGER,
+            one_pixel BOOLEAN,
+            bicolor BOOLEAN,            
+            color_used BOOLEAN,
+            position_x_used BOOLEAN,
+            position_y_used BOOLEAN,
+            height_used BOOLEAN,
+            width_used BOOLEAN,            
+            color_match BOOLEAN,
+            position_x_match BOOLEAN,
+            position_y_match BOOLEAN,
+            height_match BOOLEAN,
+            width_match BOOLEAN,            
+            multiple_selection BOOLEAN,
+            disappear BOOLEAN,
+            createObject BOOLEAN,    
+            createSprite BOOLEAN,            
+            input_target INTEGER,
+            output_target INTEGER,            
+            target_touching_top BOOLEAN,
+            target_touching_right BOOLEAN,
+            target_touching_bottom BOOLEAN,
+            target_touching_left BOOLEAN,            
+            x_angel_origin INTEGER,
+            x_angel_position INTEGER,
+            x_target_origin INTEGER,
+            x_target_position INTEGER,
+            x_target_multiplier INTEGER,
+            x_target_zone_width INTEGER,
+            x_target_zone_height INTEGER,            
+            y_angel_position INTEGER,
+            y_target_origin INTEGER,
+            y_target_position INTEGER,
+            y_target_multiplier INTEGER,
+            y_target_zone_width INTEGER,
+            y_target_zone_height INTEGER,            
+            angel_criteria TEXT,
+            angel_match_attribute TEXT,
+            angel_match_type TEXT,
+            angel_match_value TEXT,
+            angel_used_attribute TEXT,
+            angel_used_type TEXT,
+            angel_used_value TEXT,            
+            target_criteria TEXT,
+            target_attribute TEXT,
+            target_type TEXT,
+            target_value TEXT
+        );
+        """)
+    conn.commit()
+
     # Fetch and print data
     cursor.execute("SELECT * FROM first_sight_analysis LIMIT 1")
     print("first_sight_analysis in database:", cursor.fetchall())
